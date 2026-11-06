@@ -52,6 +52,12 @@ cargo run -p backend --release      # migrates, seeds a demo estate on first sta
 
 Open **http://localhost:8737**. Use the dark bar at the top to switch between the **Estate Owner**, **Office Admin** and **Site Monitor** views.
 
+On Windows you can also start the database and the app in the background with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scriptsstart-windows.ps1
+```
+
 To reset the demo data at any time:
 
 ```bash
