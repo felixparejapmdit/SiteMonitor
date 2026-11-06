@@ -1,0 +1,14 @@
+{
+  "name": "sitemonitor-frontend-tooling",
+  "private": true,
+  "description": "Build tooling only (Tailwind CSS + Inter font). The app itself is Rust/Dioxus.",
+  "scripts": {
+    "css": "tailwindcss -c tailwind.config.js -i styles/input.css -o assets/tailwind.css --minify",
+    "css:watch": "tailwindcss -c tailwind.config.js -i styles/input.css -o assets/tailwind.css --watch",
+    "fonts": "node -e \"require('fs').mkdirSync('public/fonts',{recursive:true});require('fs').copyFileSync(require.resolve('@fontsource-variable/inter/files/inter-latin-wght-normal.woff2'),'public/fonts/inter-variable.woff2')\""
+  },
+  "devDependencies": {
+    "@fontsource-variable/inter": "^5.1.0",
+    "tailwindcss": "^3.4.17"
+  }
+}

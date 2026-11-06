@@ -1,0 +1,18 @@
+# Rust
+/target/
+
+# Node tooling
+node_modules/
+frontend/assets/tailwind.css
+
+# Runtime data (uploaded photos & base maps)
+/data/
+
+# Local configuration
+.env
+
+# Test output
+e2e/test-results/
+e2e/playwright-report/
+.playwright-mcp/
+*.png.tmp

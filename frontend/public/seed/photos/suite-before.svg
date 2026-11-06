@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900"><rect width="1600" height="900" fill="#e9e3d8"/>
+  <polygon points="0,0 1600,0 1300,180 300,180" fill="#f2eee6"/><polygon points="300,720 1300,720 1600,900 0,900" fill="#b8a48a"/>
+  <polygon points="0,0 300,180 300,720 0,900" fill="#ddd5c7"/><polygon points="1600,0 1300,180 1300,720 1600,900" fill="#d6cdbd"/>
+  <rect x="300" y="180" width="1000" height="540" fill="#e4ddcf"/>
+  <rect x="560" y="280" width="480" height="260" fill="#cfe2ec" stroke="#cfc6b6" stroke-width="16"/><line x1="800" y1="280" x2="800" y2="540" stroke="#cfc6b6" stroke-width="10"/>
+  <rect x="380" y="560" width="160" height="160" fill="#c9bba4"/><rect x="1100" y="520" width="120" height="200" fill="#bfae94"/></svg>

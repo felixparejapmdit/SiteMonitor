@@ -1,0 +1,21 @@
+[application]
+name = "frontend"
+default_platform = "web"
+
+[web.app]
+title = "SiteMonitor — Estate Operations"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src", "public", "assets", "index.html"]
+
+[web.resource]
+style = []
+script = []
+
+[web.resource.dev]
+style = []
+script = []
+
+[[web.proxy]]
+backend = "http://localhost:8737/api/"
