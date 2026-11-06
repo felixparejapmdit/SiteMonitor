@@ -55,7 +55,7 @@ Open **http://localhost:8737**. Use the dark bar at the top to switch between th
 On Windows you can also start the database and the app in the background with:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scriptsstart-windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-windows.ps1
 ```
 
 To reset the demo data at any time:
