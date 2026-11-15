@@ -14,7 +14,7 @@ chrono = { workspace = true }
 
 axum = { version = "0.8", features = ["ws", "macros"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["fs", "cors", "trace", "compression-gzip", "set-header"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip", "set-header"] }
 sea-orm = { version = "1.1", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono", "with-uuid", "with-json"] }
 sea-orm-migration = { version = "1.1", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 tokio-cron-scheduler = "0.15"

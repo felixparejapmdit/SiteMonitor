@@ -24,7 +24,6 @@ use axum::Router;
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_migration::MigratorTrait;
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
@@ -92,7 +91,6 @@ async fn main() -> anyhow::Result<()> {
         )
         .fallback_service(spa)
         .layer(CompressionLayer::new())
-        .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
