@@ -179,6 +179,27 @@
 /* Full-screen map: fill the screen edge to edge. */
 :fullscreen { border-radius: 0 !important; }
 
+/* ------------------------------------------------------------- printing
+   Service 5's print rules: only the page content prints (no sidebar, menus or
+   toasts); job orders come out 4 to a folio page (8.5" x 13", 2 x 2); paper
+   size and orientation are set per print by `print_with`. */
+.print-only { display: none; }
+@media print {
+  body * { visibility: hidden; }
+  main, main * { visibility: visible; }
+  main { position: absolute; inset: 0 auto auto 0; width: 100%; padding: 0 !important; margin: 0 !important; }
+  .no-print, .no-print * { display: none !important; }
+  .print-only { display: block; }
+  html, body { background: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .card { box-shadow: none !important; border: 1px solid #bbb !important; overflow: visible !important; }
+  .job-orders { display: grid !important; grid-template-columns: 1fr 1fr; grid-auto-rows: 6.05in; gap: 0.2in; }
+  .job-order { break-inside: avoid; page-break-inside: avoid; height: 100%; }
+  .print-grid-ids { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
+  .id-card { break-inside: avoid; page-break-inside: avoid; min-height: 54mm; }
+  .print-sheet table { font-size: 7pt; }
+  .print-sheet .sticky { position: static; }
+}
+
 /* ---------- live feel ---------- */
 .live-dot { position: relative; display: inline-block; width: 8px; height: 8px; border-radius: 9999px; background: #10b981; flex-shrink: 0; }
 .live-dot::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: #10b981; animation: livePing 1.8s cubic-bezier(0, 0, .2, 1) infinite; }

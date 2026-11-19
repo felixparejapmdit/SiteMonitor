@@ -113,6 +113,105 @@ pub struct LogDelayRequest {
     pub note: String,
 }
 
+// ---------------------------------------------------------------- workforce
+
+/// `POST /api/workers`, `PUT /api/workers/{id}`
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SaveWorkerRequest {
+    pub a_number: String,
+    pub name: String,
+    pub phone: String,
+    pub trade: String,
+    pub department: String,
+    pub area: String,
+    pub project_group: String,
+    pub group_role: String,
+    pub status: WorkerStatus,
+    pub archived: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ImportMode {
+    /// Add new records and update matching ones; nothing is ever deleted.
+    #[default]
+    Merge,
+    /// Make the workforce data exactly match the file (a snapshot is taken first).
+    Replace,
+}
+
+/// `POST /api/workforce/import?file_name=…&mode=…` — the file itself is the raw
+/// request body (a Service 5 backup of any version, an `.agwcz` encrypted
+/// backup, a `service5.db`, or a SiteMonitor workforce backup). An encrypted
+/// backup's passphrase goes in the `x-backup-passphrase` header as hex of its UTF-8 bytes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImportOptions {
+    #[serde(default)]
+    pub file_name: String,
+    #[serde(default)]
+    pub mode: ImportMode,
+    /// Lets a file with no workforce data through (anti-wipe override).
+    #[serde(default)]
+    pub allow_empty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct WorkforceImportReport {
+    /// e.g. "Service 5 backup (v4)", "Service 5 database", "Encrypted Service 5 backup (v11)".
+    pub detected: String,
+    pub workers: usize,
+    /// (collection, rows) for everything else that was imported.
+    pub collections: Vec<(String, usize)>,
+    /// Collections that were empty in the file and so left untouched (anti-wipe).
+    pub kept_existing: Vec<String>,
+    /// The snapshot taken just before the import (restore it to undo).
+    pub snapshot_id: Option<Uuid>,
+}
+
+/// `PUT /api/workers/{id}/status` — today's attendance (logged like Service 5).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkerStatusRequest {
+    pub status: WorkerStatus,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// `PUT /api/workers/{id}/reassign` (Shift+R) — each changed field is logged.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ReassignRequest {
+    pub project_group: String,
+    pub area: String,
+    pub department: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// A Service 5 project group, its people today, and the job it works on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkGroup {
+    pub name: String,
+    pub total: u32,
+    pub present: u32,
+    pub absent: u32,
+    pub on_pass: u32,
+    pub work_item_id: Option<Uuid>,
+}
+
+/// `PUT /api/workforce/groups` — links a project group to a job (or unlinks it).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GroupLinkRequest {
+    pub group: String,
+    pub work_item_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkforceSnapshotInfo {
+    pub id: Uuid,
+    pub taken_at: DateTime<Utc>,
+    /// "daily", "before import", "before restore" or "manual".
+    pub reason: String,
+    pub workers: i32,
+}
+
 /// Result of completing a phase (so the UI can celebrate the 99% lock).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProgressUpdate {

@@ -58,6 +58,20 @@ pub fn CrewView() -> Element {
         })
         .unwrap_or_default();
     let flat = app.flat_areas();
+    // Merged Service 5 workforce: today's attendance and project groups linked to jobs.
+    let workers = crate::views::workforce_ops::use_workers();
+    let groups = use_resource(|| async {
+        let _ = crate::views::personnel::REFRESH();
+        crate::api::get::<Vec<shared::api::WorkGroup>>("/workforce/groups").await.unwrap_or_default()
+    });
+    let people: Vec<Worker> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).collect();
+    let count = |s: WorkerStatus| people.iter().filter(|w| w.status == s).count();
+    let (present_n, absent_n, pass_n) = (count(WorkerStatus::Present), count(WorkerStatus::Absent), count(WorkerStatus::OnPass));
+    let linked = groups.read().clone().unwrap_or_default();
+    let roster_for = move |job: Uuid| -> Option<u32> {
+        let g: Vec<_> = linked.iter().filter(|g| g.work_item_id == Some(job)).collect();
+        (!g.is_empty()).then(|| g.iter().map(|g| g.present).sum())
+    };
     let roster_prompt = app.notifications.read().iter().find(|n| n.kind == NotificationKind::MorningRosterPrompt).cloned();
     let saved: HashMap<Uuid, u32> = items.iter().map(|w| (w.id, w.active_worker_count)).collect();
     let current = |id: Uuid| -> u32 { draft.read().get(&id).copied().unwrap_or_else(|| saved.get(&id).copied().unwrap_or(0)) };
@@ -110,6 +124,15 @@ pub fn CrewView() -> Element {
                 }
             }
 
+            if !people.is_empty() {
+                div { class: "card px-4 py-3 flex flex-wrap gap-x-8 gap-y-2 text-sm", "data-testid": "workforce-today",
+                    span { class: "text-muted", "Workforce today" }
+                    for (label, n) in [("Total active", people.len()), ("Present", present_n), ("Absent", absent_n), ("On pass", pass_n)] {
+                        span { key: "{label}", b { class: "tabular", "{n}" } " {label}" }
+                    }
+                }
+            }
+
             if restored && change_count > 0 {
                 div { class: "rounded-xl bg-tag-blue-bg px-5 py-3 text-sm text-tag-blue-text", "data-testid": "crew-draft-restored",
                     "Your unsaved crew changes were kept. Press Save today's crew to keep them, or Undo to drop them."
@@ -141,6 +164,14 @@ pub fn CrewView() -> Element {
                                                         p { class: "text-xs text-muted truncate",
                                                             "{place}"
                                                             if changed { " · was {w.active_worker_count}" }
+                                                        }
+                                                        if let Some(n) = roster_for(id) {
+                                                            p { class: "text-xs text-accent-ink flex items-center gap-2", "data-testid": "crew-roster",
+                                                                "Roster: {n} present in linked groups"
+                                                                if n != value {
+                                                                    button { class: "underline", "data-testid": "crew-use-roster", onclick: move |_| { draft.write().insert(id, n); }, "Use {n}" }
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                     div { class: "flex items-center gap-1.5 self-end sm:self-auto",

@@ -5,6 +5,7 @@ pub mod media;
 pub mod progress;
 pub mod scheduler;
 pub mod status;
+pub mod workforce;
 
 use chrono::{DateTime, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set};

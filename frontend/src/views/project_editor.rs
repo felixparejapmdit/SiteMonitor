@@ -189,16 +189,32 @@ pub fn ProjectModal(detail: Option<WorkItemDetail>, on_close: EventHandler<()>) 
 
     // Picked from real accounts (People), so the owner only ever sees true names and phones.
     let staff: Vec<User> = app.users.read().iter().filter(|u| u.is_active && u.role.is_staff()).cloned().collect();
+    // Service 5 group leaders (Katiwala, II Katiwala, Kalihim) can lead or check a job too.
+    let workers = crate::views::workforce_ops::use_workers();
+    let leaders: Vec<Worker> = workers
+        .read()
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|w| !w.archived && !w.group_role.trim().is_empty() && !w.group_role.trim().eq_ignore_ascii_case("member"))
+        .collect();
     let person = move |label: &'static str, key: &'static str, name: String, phone: String| {
-        let known = staff.iter().any(|u| u.name == name);
+        let known = staff.iter().any(|u| u.name == name) || leaders.iter().any(|w| w.name == name);
         let options = staff.clone();
+        let leader_options = leaders.clone();
         let pick_from = staff.clone();
+        let pick_leader = leaders.clone();
         rsx! {
             div {
                 label { class: "label", r#for: "{key}-person", "{label}" }
                 select { id: "{key}-person", class: "field", "data-testid": "person-{key}",
                     onchange: move |e| {
-                        let (n, ph) = pick_from.iter().find(|u| u.id.to_string() == e.value()).map(|u| (u.name.clone(), u.phone.clone())).unwrap_or_default();
+                        let v = e.value();
+                        let (n, ph) = match v.strip_prefix("w:") {
+                            Some(wid) => pick_leader.iter().find(|w| w.id.to_string() == wid).map(|w| (w.name.clone(), w.phone.clone())),
+                            None => pick_from.iter().find(|u| u.id.to_string() == v).map(|u| (u.name.clone(), u.phone.clone())),
+                        }
+                        .unwrap_or_default();
                         let mut p = people.write();
                         match key {
                             "lead" => (p.group_leader_name, p.group_leader_phone) = (n, ph),
@@ -213,8 +229,15 @@ pub fn ProjectModal(detail: Option<WorkItemDetail>, on_close: EventHandler<()>) 
                     for u in options {
                         option { key: "{u.id}", value: "{u.id}", selected: u.name == name, "{u.name} · {u.role.label()}" }
                     }
+                    if !leader_options.is_empty() {
+                        optgroup { label: "Group leaders (Personnel)",
+                            for w in leader_options {
+                                option { key: "w{w.id}", value: "w:{w.id}", selected: w.name == name, "{w.name} · {w.group_role}, {w.project_group}" }
+                            }
+                        }
+                    }
                 }
-                if !phone.is_empty() { p { class: "hint", "Phone {phone} · from People" } }
+                if !phone.is_empty() { p { class: "hint", "Phone {phone}" } }
             }
         }
     };

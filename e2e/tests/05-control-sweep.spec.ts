@@ -28,8 +28,8 @@ async function pagesFor(page: Page, role: Role): Promise<string[]> {
   const hall = await areaId(page, "Multi-Purpose Hall (Parking Conversion)");
   const shared = ["/", "/agenda", "/archive", `/projects/${parking}`, `/projects/${pool}`, `/zones/${hall}`, `/handover/${gazebo}`];
   if (role === "VipClient") return shared;
-  const staff = [...shared, "/crew", "/equipment", "/decisions"];
-  return role === "OfficeAdmin" ? [...staff, "/map-studio", "/access", "/people", "/settings"] : staff;
+  const staff = [...shared, "/crew", "/equipment", "/decisions", "/personnel"];
+  return role === "OfficeAdmin" ? [...staff, "/map-studio", "/access", "/people", "/settings", "/workforce", "/operations", "/clinic"] : staff;
 }
 
 /** Collects problems (panics, console errors, failed API calls) while a page is open. */

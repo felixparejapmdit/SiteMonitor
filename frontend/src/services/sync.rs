@@ -100,6 +100,10 @@ pub async fn load(app: AppState, scope: DataScope) {
             }
             detail_epoch += 1;
         }
+        DataScope::Workforce => {
+            *crate::views::personnel::REFRESH.write() += 1;
+            *crate::views::workforce_ops::RECORDS.write() += 1;
+        }
         DataScope::Settings => {
             if let Ok(v) = api::get::<shared::EstateSettings>("/settings").await {
                 let mut settings = app.settings;

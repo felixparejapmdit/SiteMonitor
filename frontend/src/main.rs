@@ -52,6 +52,14 @@ pub enum Route {
         Studio {},
         #[route("/people")]
         People {},
+        #[route("/personnel")]
+        Personnel {},
+        #[route("/workforce")]
+        Workforce {},
+        #[route("/operations")]
+        Operations {},
+        #[route("/clinic")]
+        Clinic {},
         #[route("/access")]
         Access {},
         #[route("/settings")]
@@ -214,26 +222,40 @@ fn nav_for(app: AppState) -> Vec<NavItem> {
             v.push(item(Route::Archive {}, "History", "archive", "Your estate", Hue::Stone));
         }
         Some(r) => {
+            // One platform: the estate, the workforce, operations, and the system.
             let admin = r == UserRole::OfficeAdmin;
             v.push(item(Route::Home {}, if admin { "Overview" } else { "Today" }, "home", "", Hue::Emerald));
-            v.push(item(Route::Crew {}, "Crew", "hard-hat", "Daily work", Hue::Sky));
-            v.push(item(Route::Equipment {}, "Equipment", "truck", "Daily work", Hue::Amber));
-            v.push(item(Route::Decisions {}, if admin { "Issues" } else { "Report" }, "flag", "Daily work", Hue::Rose));
-            v.push(item(Route::Agenda {}, "Schedule", "calendar", "Daily work", Hue::Violet));
+            const ESTATE: &str = "Estate command";
             if app.can(Permission::ManageMap) {
-                v.push(item(Route::Studio {}, "Map Studio", "pen-tool", "Estate", Hue::Teal));
+                v.push(item(Route::Studio {}, "Map Studio", "pen-tool", ESTATE, Hue::Teal));
             }
-            v.push(item(Route::Archive {}, "History", "archive", "Estate", Hue::Stone));
+            v.push(item(Route::Decisions {}, if admin { "Issues" } else { "Report" }, "flag", ESTATE, Hue::Rose));
+            v.push(item(Route::Agenda {}, "Schedule", "calendar", ESTATE, Hue::Violet));
+            v.push(item(Route::Equipment {}, "Equipment", "truck", ESTATE, Hue::Amber));
+            v.push(item(Route::Archive {}, "History", "archive", ESTATE, Hue::Stone));
+            const CREW: &str = "Workforce & crew";
+            v.push(item(Route::Crew {}, "Crew", "hard-hat", CREW, Hue::Sky));
+            if app.can(Permission::ManageWorkforce) || app.can(Permission::ManageCrew) {
+                v.push(item(Route::Personnel {}, "Personnel", "users", CREW, Hue::Teal));
+            }
+            if app.can(Permission::ManageWorkforce) {
+                v.push(item(Route::Workforce {}, "Groups & records", "layers", CREW, Hue::Indigo));
+                v.push(item(Route::Operations {}, "Duty & operations", "clock", "Operations & duty", Hue::Blue));
+            }
+            if app.can(Permission::ManageClinic) {
+                v.push(item(Route::Clinic {}, "Clinic ledger", "info", "Operations & duty", Hue::Rose));
+            }
         }
     }
+    const ADMIN: &str = "System & admin";
     if app.can(Permission::ManagePeople) {
-        v.push(item(Route::People {}, "People", "users", "Admin", Hue::Blue));
+        v.push(item(Route::People {}, "People", "key", ADMIN, Hue::Blue));
     }
     if app.can(Permission::ManageAccess) {
-        v.push(item(Route::Access {}, "Access", "shield", "Admin", Hue::Indigo));
+        v.push(item(Route::Access {}, "Access", "shield", ADMIN, Hue::Indigo));
     }
     if app.can(Permission::ManageSettings) {
-        v.push(item(Route::Settings {}, "Settings", "settings", "Admin", Hue::Slate));
+        v.push(item(Route::Settings {}, "Settings", "settings", ADMIN, Hue::Slate));
     }
     v
 }
@@ -282,6 +304,27 @@ fn Shell() -> Element {
         .as_ref()
         .map(|d| d.iter().filter(|d| d.status == DecisionStatus::NeedsDetails && d.reported_by == me).count())
         .unwrap_or(0);
+
+    // Ctrl+K (⌘K) anywhere: find a worker (Service 5's worker lookup).
+    let router = use_navigator();
+    let lookup = app.can(Permission::ManageWorkforce) || app.can(Permission::ManageCrew);
+    use_future(move || async move {
+        if !lookup {
+            return;
+        }
+        let mut keys = document::eval(
+            "document.addEventListener('keydown', e => {
+               if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+                 e.preventDefault();
+                 const box = document.getElementById('worker-search');
+                 if (box) box.focus(); else dioxus.send('open');
+               }
+             });",
+        );
+        while keys.recv::<String>().await.is_ok() {
+            router.push(Route::Personnel {});
+        }
+    });
 
     // Scroll to the top whenever the page changes.
     let mut last_route = use_signal(|| route.clone());
@@ -571,6 +614,43 @@ fn People() -> Element {
         return rsx! { components::ui::EmptyState { icon: "users", title: "You don't have access to People", body: "Ask the Office Admin to give you \u{201c}Add people & reset passwords\u{201d}." } };
     }
     rsx! { PeopleView {} }
+}
+
+#[component]
+fn Personnel() -> Element {
+    let app = use_app();
+    if !app.can(Permission::ManageWorkforce) && !app.can(Permission::ManageCrew) {
+        return rsx! { components::ui::EmptyState { icon: "users", title: "You don't have access to Personnel", body: "Ask the Office Admin to give you \u{201c}Manage workers & volunteers\u{201d}." } };
+    }
+    rsx! { views::personnel::PersonnelView {} }
+}
+
+fn no_access(icon: &'static str, page: &str, permission: &str) -> Element {
+    rsx! { components::ui::EmptyState { icon, title: format!("You don't have access to {page}"), body: format!("Ask the Office Admin to give you \u{201c}{permission}\u{201d}.") } }
+}
+
+#[component]
+fn Workforce() -> Element {
+    if !use_app().can(Permission::ManageWorkforce) {
+        return no_access("layers", "workforce records", "Manage workers & volunteers");
+    }
+    rsx! { views::workforce_ops::WorkforceView {} }
+}
+
+#[component]
+fn Operations() -> Element {
+    if !use_app().can(Permission::ManageWorkforce) {
+        return no_access("clock", "duty & operations", "Manage workers & volunteers");
+    }
+    rsx! { views::workforce_ops::OperationsView {} }
+}
+
+#[component]
+fn Clinic() -> Element {
+    if !use_app().can(Permission::ManageClinic) {
+        return no_access("info", "the clinic ledger", "Clinic ledger (medical records)");
+    }
+    rsx! { views::clinic::ClinicView {} }
 }
 
 #[component]

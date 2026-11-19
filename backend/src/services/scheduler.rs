@@ -42,6 +42,11 @@ async fn tick(state: &AppState) {
     };
     let now = Local::now().format("%H:%M").to_string();
     if now == settings.roster_reset_time {
+        // Daily workforce snapshot (Service 5's "Daily Snapshot"), taken before the reset.
+        match crate::services::workforce::snapshot(&state.db, "daily").await {
+            Ok(_) => tracing::info!("daily workforce snapshot saved"),
+            Err(e) => tracing::warn!(error = %e, "daily workforce snapshot failed"),
+        }
         log_run(run(state, AutomationJob::MidnightRosterReset).await);
     }
     if now == settings.roster_prompt_time {

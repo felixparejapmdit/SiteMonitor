@@ -66,7 +66,12 @@ impl Hub {
 
     /// Silent background refresh for everyone.
     pub async fn changed(&self, scopes: &[DataScope]) {
-        self.send_to(&UserRole::ALL, &WsEvent::DataChanged { scopes: scopes.to_vec() }).await;
+        self.changed_from(scopes, None).await;
+    }
+
+    /// Like `changed`, naming the device that made the change (echo suppression).
+    pub async fn changed_from(&self, scopes: &[DataScope], origin: Option<&str>) {
+        self.send_to(&UserRole::ALL, &WsEvent::DataChanged { scopes: scopes.to_vec(), origin: origin.map(str::to_string) }).await;
     }
 }
 

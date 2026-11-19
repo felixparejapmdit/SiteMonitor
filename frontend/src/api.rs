@@ -33,6 +33,10 @@ pub enum ApiFail {
 impl ApiFail {
     pub fn message(&self) -> String {
         match self {
+            // Online but no answer means the SiteMonitor server is down or restarting, not the person's signal.
+            ApiFail::Network if crate::util::navigator_online() => {
+                "Can't reach the SiteMonitor server right now. Nothing was saved. Please try again in a minute.".into()
+            }
             ApiFail::Network => "No connection right now. Please try again when you have signal.".into(),
             ApiFail::Server(_, m) => m.clone(),
         }
@@ -47,14 +51,37 @@ pub async fn send_raw(method: &str, path: &str, body: Option<&serde_json::Value>
         "DELETE" => Method::DELETE,
         _ => Method::GET,
     };
-    let builder = RequestBuilder::new(&format!("/api{path}")).method(method);
+    let builder = RequestBuilder::new(&format!("/api{path}")).method(method).header("x-client-id", client_id());
     let request = match body {
         Some(b) => builder.json(b).map_err(|_| ApiFail::Server(0, "Could not prepare the request.".into()))?,
         None => builder.build().map_err(|_| ApiFail::Server(0, "Could not prepare the request.".into()))?,
     };
-    let send = Box::pin(request.send());
     // Big map pictures are uploaded and cut into zoom tiles in one request.
     let limit = if path.starts_with("/estate/base-maps") && !path.ends_with("/activate") { 300_000 } else { TIMEOUT_MS };
+    deliver(path, request, limit).await
+}
+
+/// This tab's id, sent with every request; live updates naming it are this
+/// tab's own changes echoing back, and are skipped.
+pub fn client_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| format!("tab-{:x}{:08x}", js_sys::Date::now() as u64, (js_sys::Math::random() * 4_294_967_295.0) as u64))
+}
+
+/// POSTs a chosen file as the raw request body (big backups: no base64, no JSON).
+pub async fn upload(path: &str, file: &web_sys::File, headers: &[(&str, String)]) -> Result<String, ApiFail> {
+    let mut builder = RequestBuilder::new(&format!("/api{path}")).method(Method::POST).header("content-type", "application/octet-stream");
+    for (k, v) in headers {
+        builder = builder.header(k, v);
+    }
+    let request = builder
+        .body(wasm_bindgen::JsValue::from(file.clone()))
+        .map_err(|_| ApiFail::Server(0, "Could not prepare the upload.".into()))?;
+    deliver(path, request, 600_000).await
+}
+
+async fn deliver(path: &str, request: gloo_net::http::Request, limit: u32) -> Result<String, ApiFail> {
+    let send = Box::pin(request.send());
     let timeout = Box::pin(TimeoutFuture::new(limit));
     let response = match select(send, timeout).await {
         Either::Left((Ok(r), _)) => r,

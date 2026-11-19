@@ -74,7 +74,9 @@ fn handle(app: AppState, event: WsEvent) {
     use DataScope::*;
     match event {
         WsEvent::Hello { .. } => {}
-        WsEvent::DataChanged { scopes } => sync::reload(app, scopes),
+        // Our own change echoing back: the screen already shows it.
+        WsEvent::DataChanged { origin: Some(o), .. } if o == crate::api::client_id() => {}
+        WsEvent::DataChanged { scopes, .. } => sync::reload(app, scopes),
 
         // ------------------------------------------------ owner (Tier 1)
         WsEvent::DecisionPublished(d) => {

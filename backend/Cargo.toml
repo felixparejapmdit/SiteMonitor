@@ -27,4 +27,8 @@ base64 = "0.22"
 dotenvy = "0.15"
 argon2 = "0.5"
 sha2 = "0.10"
+# Service 5 encrypted backups (.agwcz: PBKDF2-HMAC-SHA256 + AES-256-GCM) and service5.db import.
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

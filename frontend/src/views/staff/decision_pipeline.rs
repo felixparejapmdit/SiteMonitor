@@ -545,6 +545,16 @@ fn FieldReportForm(#[props(default)] editing: Option<DecisionAlert>, #[props(def
                         option { key: "{w.id}", value: "{w.id}", selected: project() == Some(w.id), "{w.title} — {util::area_name(&flat, w.area_id)}" }
                     }
                 }
+                if items.is_empty() {
+                    if app.can(Permission::ManageProjects) {
+                        p { class: "hint", "data-testid": "no-jobs-hint", "No jobs yet. "
+                            Link { to: Route::Home {}, class: "text-accent-ink underline", "Start one with New project on the Overview" }
+                            "."
+                        }
+                    } else {
+                        p { class: "hint", "data-testid": "no-jobs-hint", "No jobs in your zones yet. Ask the Office Admin to add the job or assign you its zone." }
+                    }
+                }
             }
             div {
                 p { class: "label", "What kind of issue?" }

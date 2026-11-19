@@ -99,6 +99,12 @@ pub fn SettingsView() -> Element {
                 }
             }
 
+            if app.can(Permission::ManageWorkforce) {
+                Section { title: "Workforce data", hint: "Personnel records merged from Service 5 DB: import its backups, download a backup, and go back to an earlier snapshot.",
+                    crate::views::personnel::WorkforceData {}
+                }
+            }
+
             Section { title: "Estate data", hint: "Try SiteMonitor with a ready-made estate, or wipe it and set up your own. People, their sign-ins and these settings are always kept.",
                 div { class: "divide-y divide-line border-y border-line", "data-testid": "estate-data",
                     div { class: "flex flex-wrap items-center gap-x-6 gap-y-3 py-3",

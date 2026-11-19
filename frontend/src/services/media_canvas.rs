@@ -84,14 +84,34 @@ pub async fn file_as_data_url(input_id: &str, max_bytes: f64) -> Result<Option<S
     if file.size() > max_bytes {
         return Err("That picture is larger than 60 MB. Please save a smaller copy and try again.".into());
     }
-    let reader = web_sys::FileReader::new().map_err(|_| "Could not read the picture.".to_string())?;
+    read_data_url(&file).await.map(Some).map_err(|_| "Could not read the picture.".to_string())
+}
+
+/// The chosen file (a backup), up to `max_bytes`; it is uploaded as-is.
+pub fn backup_file(input_id: &str, max_bytes: f64) -> Result<Option<web_sys::File>, String> {
+    let input: HtmlInputElement = crate::util::document()
+        .get_element_by_id(input_id)
+        .and_then(|e| e.dyn_into().ok())
+        .ok_or("The file input is missing.")?;
+    let Some(file) = input.files().and_then(|f| f.get(0)) else {
+        return Ok(None);
+    };
+    input.set_value("");
+    if file.size() > max_bytes {
+        return Err(format!("That file is larger than {} MB.", (max_bytes / 1_048_576.0).round()));
+    }
+    Ok(Some(file))
+}
+
+async fn read_data_url(file: &web_sys::File) -> Result<String, ()> {
+    let reader = web_sys::FileReader::new().map_err(|_| ())?;
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         reader.set_onload(Some(&resolve));
         reader.set_onerror(Some(&reject));
     });
-    reader.read_as_data_url(&file).map_err(|_| "Could not read the picture.".to_string())?;
-    JsFuture::from(promise).await.map_err(|_| "Could not read the picture.".to_string())?;
-    reader.result().ok().and_then(|v| v.as_string()).map(Some).ok_or_else(|| "Could not read the picture.".to_string())
+    reader.read_as_data_url(file).map_err(|_| ())?;
+    JsFuture::from(promise).await.map_err(|_| ())?;
+    reader.result().ok().and_then(|v| v.as_string()).ok_or(())
 }
 
 /// Crops any image URL to a 16:9 data URL.

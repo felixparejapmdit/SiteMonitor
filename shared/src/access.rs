@@ -25,6 +25,10 @@ pub enum Permission {
     ManageCrew,
     OperateEquipment,
     ManageEquipment,
+    /// Service 5 workforce records: people, their personal details, backups and imports.
+    ManageWorkforce,
+    /// Clinic ledger: health episodes, clinic visits, vaccines, contact tracing.
+    ManageClinic,
     // Issues & decisions
     RaiseIssues,
     PublishDecisions,
@@ -46,7 +50,7 @@ use Permission::*;
 pub const GROUPS: &[(&str, &[Permission])] = &[
     ("Projects", &[ManageProjects, UpdateProgress, SignOffProjects]),
     ("Site photos", &[UploadPhotos, ManagePhotoNotes, CommentOnPhotos]),
-    ("Crew & equipment", &[ManageCrew, OperateEquipment, ManageEquipment]),
+    ("Crew & equipment", &[ManageCrew, OperateEquipment, ManageEquipment, ManageWorkforce, ManageClinic]),
     ("Issues & decisions", &[RaiseIssues, PublishDecisions, AnswerDecisions]),
     ("Schedule", &[ManageSchedule, BookQuietDays]),
     ("Estate map", &[ManageMap]),
@@ -54,9 +58,9 @@ pub const GROUPS: &[(&str, &[Permission])] = &[
 ];
 
 impl Permission {
-    pub const ALL: [Permission; 18] = [
+    pub const ALL: [Permission; 20] = [
         ManageProjects, UpdateProgress, SignOffProjects, UploadPhotos, ManagePhotoNotes, CommentOnPhotos, ManageCrew,
-        OperateEquipment, ManageEquipment, RaiseIssues, PublishDecisions, AnswerDecisions, ManageSchedule, BookQuietDays,
+        OperateEquipment, ManageEquipment, ManageWorkforce, ManageClinic, RaiseIssues, PublishDecisions, AnswerDecisions, ManageSchedule, BookQuietDays,
         ManageMap, ManagePeople, ManageAccess, ManageSettings,
     ];
 
@@ -71,6 +75,8 @@ impl Permission {
             ManageCrew => "Move crew between jobs",
             OperateEquipment => "Move & report equipment",
             ManageEquipment => "Add, edit & retire equipment",
+            ManageWorkforce => "Manage workers & volunteers",
+            ManageClinic => "Clinic ledger (medical records)",
             RaiseIssues => "Report issues",
             PublishDecisions => "Send decisions to the owner",
             AnswerDecisions => "Answer decisions",
@@ -94,6 +100,8 @@ impl Permission {
             ManageCrew => "Set and change how many workers are on each job.",
             OperateEquipment => "Move machines, attach parts, report and clear breakdowns.",
             ManageEquipment => "Add new machines, rename them or retire them.",
+            ManageWorkforce => "See and edit worker records (personal details included), import Service 5 backups and restore snapshots.",
+            ManageClinic => "See and record health episodes, clinic visits, vaccines and contact tracing. Every change is logged.",
             RaiseIssues => "Send problems from the field to the office.",
             PublishDecisions => "Turn field reports into decisions for the owner.",
             AnswerDecisions => "Choose an option on decisions the office sends.",
@@ -109,7 +117,7 @@ impl Permission {
     /// Permissions that can lock people out or expose everything: shown with a
     /// warning in the matrix and confirmed before saving.
     pub fn is_sensitive(self) -> bool {
-        matches!(self, ManagePeople | ManageAccess | ManageSettings)
+        matches!(self, ManagePeople | ManageAccess | ManageSettings | ManageWorkforce | ManageClinic)
     }
 }
 
@@ -120,7 +128,8 @@ pub fn role_defaults(role: UserRole) -> &'static [Permission] {
         UserRole::SiteMonitor => &[UpdateProgress, UploadPhotos, ManagePhotoNotes, ManageCrew, OperateEquipment, RaiseIssues, ManageSchedule],
         UserRole::OfficeAdmin => &[
             ManageProjects, UpdateProgress, UploadPhotos, ManagePhotoNotes, ManageCrew, OperateEquipment, ManageEquipment,
-            RaiseIssues, PublishDecisions, ManageSchedule, ManageMap, ManagePeople, ManageAccess, ManageSettings,
+            ManageWorkforce, ManageClinic, RaiseIssues, PublishDecisions, ManageSchedule, ManageMap, ManagePeople, ManageAccess,
+            ManageSettings,
         ],
     }
 }

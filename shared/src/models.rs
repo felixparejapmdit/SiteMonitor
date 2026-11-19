@@ -613,6 +613,60 @@ impl EstateSettings {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Workforce (merged from Service 5 DB)
+// ---------------------------------------------------------------------------
+
+/// Today's status of a worker or volunteer.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+pub enum WorkerStatus {
+    #[default]
+    Present,
+    Absent,
+    /// "Passes" in Service 5: away with permission.
+    OnPass,
+}
+
+impl WorkerStatus {
+    pub const ALL: [WorkerStatus; 3] = [WorkerStatus::Present, WorkerStatus::Absent, WorkerStatus::OnPass];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WorkerStatus::Present => "Present",
+            WorkerStatus::Absent => "Absent",
+            WorkerStatus::OnPass => "On pass",
+        }
+    }
+
+    /// Reads Service 5's free-text status ("Present", "Absent", "Passes", …).
+    pub fn from_legacy(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "absent" => WorkerStatus::Absent,
+            "passes" | "pass" | "on pass" | "onpass" => WorkerStatus::OnPass,
+            _ => WorkerStatus::Present,
+        }
+    }
+}
+
+/// A worker or volunteer (Service 5's "worker"). The full original record is
+/// kept on the server; these are the fields every screen uses.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Worker {
+    pub id: Uuid,
+    /// Service 5's "A#" worker number.
+    pub a_number: String,
+    pub name: String,
+    pub phone: String,
+    pub trade: String,
+    pub department: String,
+    pub area: String,
+    pub project_group: String,
+    pub group_role: String,
+    pub status: WorkerStatus,
+    pub archived: bool,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tile_tests {
     use super::MapTiles;
