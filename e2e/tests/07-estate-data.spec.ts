@@ -21,6 +21,7 @@ test("only people who may change settings can clear or replace the estate", asyn
 test("clear data leaves an empty estate on a blank map, and everyone keeps their account", async ({ page, request }) => {
   const before = await json(await request.get("/api/users"));
   await openAs(page, "OfficeAdmin", "/settings");
+  await page.getByTestId("tab-Estate data").click();
   await page.getByTestId("clear-data").click();
   const confirm = page.getByTestId("reset-confirm");
   await expect(confirm).toBeDisabled();
@@ -44,6 +45,7 @@ test("clear data leaves an empty estate on a blank map, and everyone keeps their
 test("load sample data brings the sample estate back, worked by the people already here", async ({ page, request }) => {
   const before = await json(await request.get("/api/users"));
   await openAs(page, "OfficeAdmin", "/settings");
+  await page.getByTestId("tab-Estate data").click();
   await page.getByTestId("load-sample").click();
   await page.getByTestId("reset-word").fill("sample");
   await page.getByTestId("reset-confirm").click();

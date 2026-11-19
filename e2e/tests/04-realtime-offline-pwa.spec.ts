@@ -139,9 +139,11 @@ test("mobile layout: bottom tabs for field staff", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   await openAs(page, "SiteMonitor", "/", "Jun");
-  const tabs = page.getByRole("navigation", { name: "Main" }).last();
+  // Four pages, then "More" with every other page.
+  const tabs = page.getByTestId("bottom-bar");
   await expect(tabs).toBeVisible();
-  await expect(tabs.getByRole("link")).toHaveCount(5);
+  await expect(tabs.getByRole("link")).toHaveCount(4);
+  await expect(tabs.getByRole("button", { name: "More" })).toBeVisible();
   await tabs.getByRole("link", { name: "Equipment" }).click();
   await expect(page.getByRole("heading", { name: "Equipment" })).toBeVisible();
   await context.close();

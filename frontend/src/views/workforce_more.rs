@@ -132,6 +132,19 @@ pub fn AreasTab() -> Element {
 
 // --------------------------------------------------------- tomorrow (encoder)
 
+/// Tomorrow as Service 5 stages it (an object Start New Day turns into the task
+/// of the day); a blank task clears it.
+pub fn staged_tomorrow(w: Option<&Worker>, task: &str) -> Value {
+    if task.trim().is_empty() {
+        return Value::Null;
+    }
+    json!({
+        "specificTask": task.trim(), "area": w.map(|w| w.area.clone()).unwrap_or_default(), "project": w.map(|w| w.project.clone()).unwrap_or_default(),
+        "date": (chrono::Local::now() + Duration::days(1)).format("%Y-%m-%d").to_string(), "isAssigned": true, "dailyStatus": "Present",
+        "encodedAt": chrono::Utc::now().to_rfc3339(),
+    })
+}
+
 async fn save_profile(app: AppState, id: Uuid, patch: Value) -> Result<(), String> {
     match sync::mutate::<_, Value>(app, "Profile", "PUT", format!("/workers/{id}/profile"), &patch).await {
         Outcome::Saved(_) => {
@@ -162,10 +175,13 @@ pub fn TomorrowTab() -> Element {
     let n = changed.len();
     let save = move |_| {
         let changed = changed.clone();
+        let all = all.clone();
         async move {
             busy.set(true);
             for (id, v) in changed {
-                if let Err(e) = save_profile(app, id, json!({ "tomorrowAssignment": v })).await {
+                // Service 5's staged assignment: Start New Day makes it today's task.
+                let staged = staged_tomorrow(all.iter().find(|w| w.id == id), &v);
+                if let Err(e) = save_profile(app, id, json!({ "tomorrowAssignment": staged })).await {
                     app.error(e);
                     busy.set(false);
                     return;
@@ -244,7 +260,7 @@ pub fn BulkTab() -> Element {
                         sync::mutate::<_, Worker>(app, "Reassign", "PUT", format!("/workers/{}/reassign", w.id), &ReassignRequest { project_group: value(), area: w.area.clone(), department: w.department.clone(), reason: "Bulk update".into() }).await,
                         Outcome::Failed(_)
                     ),
-                    _ => save_profile(app, w.id, json!({ "tomorrowAssignment": value() })).await.is_ok(),
+                    _ => save_profile(app, w.id, json!({ "tomorrowAssignment": staged_tomorrow(Some(w), &value()) })).await.is_ok(),
                 };
                 if ok { done += 1 } else { missing.push(line.to_string()) }
             }
@@ -289,13 +305,9 @@ pub fn BulkTab() -> Element {
 pub fn PickListsTab() -> Element {
     let app = use_app();
     let lists = use_records("custom_datalists");
-    let shops = use_records("custom_woodland_shops");
+    // Service 5's separate pick-list keys are folded into this one record on import.
     let current = lists.read().clone().unwrap_or_default().into_iter().find(|v| s(v, "id").is_empty() || s(v, "id") == "_").unwrap_or(json!({}));
-    let legacy_shops: Vec<String> = shops.read().clone().unwrap_or_default().iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    let joined = |k: &str| {
-        let a = current[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
-        if k == "woodlandShops" && a.is_empty() { legacy_shops.join("\n") } else { a.join("\n") }
-    };
+    let joined = |k: &str| current[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default().join("\n");
     let keys = [("trades", "Trades"), ("tradeGroups", "Trade groups"), ("housingGroups", "Housing groups"), ("workResidences", "Work residences"), ("woodlandShops", "Woodland shops")];
     let mut draft = use_signal(HashMap::<&'static str, String>::new);
     let save = {
@@ -550,12 +562,17 @@ pub fn ProfileModal(worker: Worker, on_close: EventHandler<()>) -> Element {
         f("skillLevel", "Skill level", Kind::Text),
         f("hourlyRate", "Hourly rate", Kind::Number),
         f("subDepartment", "Sub-department", Kind::Text),
+        f("jOrder", "Issue a job order", choice(&["YES", "NO"])),
+        f("project", "Project", Kind::Text),
         f("specificTask", "Specific task", Kind::Text),
-        f("tomorrowAssignment", "Tomorrow's assignment", Kind::Text),
+        f("absentReason", "Remarks / reason", Kind::Text),
+        f("assignedUnit", "Housing unit / room", Kind::Text),
+        f("visitationHousing", "Housing group", Kind::Text),
         f("visitationGroup", "Visitation group", Kind::Text),
+        f("visitationRole", "Visitation role", choice(&["", "Katiwala", "II Katiwala", "Kalihim", "Member"])),
     ];
     if clinic {
-        fields.extend([f("bloodType", "Blood type", choice(&["", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"])), f("healthClearance", "Health clearance", Kind::Text), f("maintenanceMeds", "Maintenance medicine", Kind::Text), f("medicalNotes", "Medical notes", Kind::Long)]);
+        fields.extend([f("bloodType", "Blood type", choice(&["", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"])), f("medical", "Medical conditions", Kind::Text), f("medicalNotes", "Medical notes", Kind::Long)]);
     }
     let upload = move |_| async move {
         let file = match crate::services::media_canvas::file_as_data_url("profile-photo", 2.0 * 1_048_576.0).await {

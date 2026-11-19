@@ -168,3 +168,13 @@ export function pngBuffer(width = 800, height = 600): Buffer {
 }
 
 export const toast = (page: Page) => page.getByTestId("toast");
+
+/** Counts personnel data readable in the database without the key (`backend audit-data`). */
+export function auditData(): { workers: number; workers_plain: number; records: number; records_plain: number; snapshots_plain: number } {
+  const exe = join(ROOT, "target", "release", process.platform === "win32" ? "backend.exe" : "backend");
+  const out = existsSync(exe)
+    ? execFileSync(exe, ["audit-data"], { cwd: ROOT, encoding: "utf8" })
+    : execFileSync("cargo", ["run", "-q", "-p", "backend", "--release", "--", "audit-data"], { cwd: ROOT, encoding: "utf8" });
+  const line = out.trim().split("\n").reverse().find((l) => l.trim().startsWith("{"));
+  return JSON.parse(line!);
+}

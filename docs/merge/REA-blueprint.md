@@ -143,3 +143,33 @@ All ten phases are built and covered by `e2e/tests/08-*`, `09-*` and `10-*`. Kno
 - The PocketBase NAS maps and zones from Service 5 can't be imported: no export of them exists in `01_Rust_WC_DB`. Zones are drawn in Map Studio, and areas are mapped to them on the Areas & zones tab.
 - The dashboard has the main figures, not every Service 5 chart.
 - Print layout is checked in Chromium and WebKit (page size, layout, content). Real paper output and real Safari on iOS/macOS were not tested.
+
+## 7. Screen-by-screen audit (2026-11-20)
+
+Every screen in Service 5 (`database.html` views and the `js/*.js` modules) was compared with SiteMonitor. The phase 1–10 build had missed the items below; all are now built and covered by `e2e/tests/12-service5-audit.spec.ts`.
+
+| Service 5 screen | What was missing | Now in SiteMonitor |
+|---|---|---|
+| Daily Assignments / Personnel | Staged `tomorrowAssignment` objects showed as raw JSON; no Start New Day; no trade / group / area / housing / archive-reason filters; no "hide assigned"; no Columns; no multi-select; no archive reasons (Retired, Dismissed, Deceased); no permanent delete; no CSV; no print of the list | Personnel: all of these. Start New Day and delete take a snapshot first. Medical column only for clinic users (server-side). |
+| Job orders (distribution, encoder) | People with `jOrder: NO` or not present still got job orders; no output date; no batch by signatory; no default signatory | Print tab: eligibility rule (`checkJobOrderEligibility`) with a "not printed" list; date; grouped by project group / trade / housing / signatory |
+| Print reports | Semi-annual records update forms; list & attendance generator; grouping by trade / group / housing | Print tab: "Semi-annual records update forms", "List & attendance sheet" |
+| ID cards | Size, sort, selection, "generate list" from the selection | Print tab ID cards: all of these |
+| Departments & shops | Work residences & housing | Departments tab: residences and housing groups |
+| Signatories | Bulk assign groups | Signatories tab: "Assign groups" (one signatory per group) |
+| Project groups | Create, rename, delete, set area, members, signatory, print all, grouped by area, change log | Groups tab: all of these; every move is logged with its reason |
+| Analytics & history | Project roster history; worker / investigation dossier; dependability print | History tab: "Project roster history" (from daily snapshots), "Person dossier"; print buttons |
+| Visitations | Schedule vs history vs coverage; filters; mark done / cancel; record a past visit; unvisited by housing; print scheduled / last 7 days | Visitations tab: all of these |
+| Visitation groups | Members, roles, roster print, monthly attendance sheet | Visitation groups tab: all of these |
+| Dashboard | Tonight's duty, deployability tiers, housing overview, open health episodes | Workforce dashboard panels |
+| OT calculator / entries | Date navigation, load yesterday, per-volunteer / by-area / daily / matrix summaries, OT schedule print, rate from the person | Overtime tab: all of these |
+| Overnight duty | Month view and print | Duty history tab: month table |
+| Backup | Selective backup | Settings → Workforce data: "Download only some lists" |
+| Personal profile | Issue-a-job-order switch, project, remarks, housing group, visitation role, unit | Profile editor |
+
+Left out on purpose:
+
+- Signatories "Reset defaults": it restores two named people hard-coded in Service 5; SiteMonitor keeps the imported list instead.
+- PocketBase NAS sync and the estate map: replaced by the SiteMonitor server, live sync and Map Studio.
+- Excel (.xlsx) export: CSV opens in Excel.
+- Restore conflict review: imports merge newest-wins, and every import, Start New Day and delete takes a snapshot that can be restored.
+- Stale-task alerts on the dashboard: Service 5 marks a task stale from `taskStartedAt`; that date is kept with the record but no alert is shown yet.

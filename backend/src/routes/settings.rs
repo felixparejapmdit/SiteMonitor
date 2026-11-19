@@ -1,7 +1,7 @@
 //! Estate settings: name, automation times and the editable pick lists.
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::NaiveTime;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
@@ -76,6 +76,8 @@ pub async fn update(State(state): State<AppState>, me: CurrentUser, Json(req): J
 pub async fn load_sample(State(state): State<AppState>, me: CurrentUser) -> AppResult<StatusCode> {
     me.require(Permission::ManageSettings)?;
     crate::seed::load_sample(&state.db, me.0.id).await?;
+    // The workforce sample comes with it, linked to the sample zones and jobs.
+    crate::services::workforce_sample::load(&state.db).await?;
     after_reset(&state).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -99,7 +101,7 @@ async fn after_reset(state: &AppState) {
         }
     }
     use DataScope::*;
-    state.hub.changed(&[Map, WorkItems, Assets, Decisions, Agenda, Notifications, Photos, Users, Settings]).await;
+    state.hub.changed(&[Map, WorkItems, Assets, Decisions, Agenda, Notifications, Photos, Users, Settings, Workforce]).await;
 }
 
 #[cfg(test)]
@@ -130,4 +132,44 @@ mod tests {
         assert_eq!(back.category_label(AlertCategory::MaterialDelay), "Late delivery");
         assert_eq!(back.category_label(AlertCategory::DesignDecision), "Design choice");
     }
+}
+
+/// Creating or restoring a database package needs settings, workforce and clinic
+/// access: the package holds all three (in practice, the Office Admin).
+fn require_package(me: &CurrentUser) -> AppResult<()> {
+    me.require(Permission::ManageSettings)?;
+    me.require(Permission::ManageWorkforce)?;
+    me.require(Permission::ManageClinic)
+}
+
+/// `POST /api/settings/backup` — the whole database (estate, workforce, uploaded
+/// files) as one package encrypted with the passphrase in `x-backup-passphrase`.
+pub async fn backup_export(State(state): State<AppState>, me: CurrentUser, headers: HeaderMap) -> AppResult<Json<serde_json::Value>> {
+    require_package(&me)?;
+    let pass = crate::routes::workforce::passphrase(&headers).ok_or_else(|| AppError::bad("Choose a passphrase to protect the package."))?;
+    let pkg = crate::services::package::build(&state.db, &state.upload_dir).await?;
+    let sealed = tokio::task::spawn_blocking(move || crate::services::workforce::encrypt_agwcz(&pkg, &pass))
+        .await
+        .map_err(|e| AppError::bad(format!("The package stopped unexpectedly: {e}")))??;
+    tracing::info!(by = %me.0.name, "database package created");
+    Ok(Json(sealed))
+}
+
+/// `POST /api/settings/restore` — puts a package back (the raw file is the body).
+/// Local login accounts are kept; a workforce snapshot is taken first.
+pub async fn backup_import(State(state): State<AppState>, me: CurrentUser, headers: HeaderMap, body: axum::body::Bytes) -> AppResult<Json<crate::services::package::Restored>> {
+    require_package(&me)?;
+    let pass = crate::routes::workforce::passphrase(&headers).ok_or_else(|| AppError::bad("Enter the passphrase the package was made with."))?;
+    let env: serde_json::Value = serde_json::from_slice(&body).map_err(|_| AppError::bad("This file isn't a SiteMonitor database package."))?;
+    if env.get("_isAgwcEncrypted").and_then(|v| v.as_bool()) != Some(true) {
+        return Err(AppError::bad("Only encrypted packages can be restored."));
+    }
+    let pkg = tokio::task::spawn_blocking(move || crate::services::workforce::decrypt_agwcz(&env, &pass))
+        .await
+        .map_err(|e| AppError::bad(format!("The restore stopped unexpectedly: {e}")))??;
+    let report = crate::services::package::restore(&state.db, &state.upload_dir, pkg).await?;
+    use DataScope::*;
+    state.hub.changed(&[Map, WorkItems, Assets, Decisions, Agenda, Notifications, Photos, Users, Settings, Workforce]).await;
+    tracing::info!(by = %me.0.name, workers = report.workers, files = report.files, "database package restored");
+    Ok(Json(report))
 }

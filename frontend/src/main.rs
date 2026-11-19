@@ -16,7 +16,9 @@ use shared::*;
 use uuid::Uuid;
 
 use components::toast::ToastHost;
-use components::ui::{Avatar, Icon};
+use std::collections::{HashMap, HashSet};
+
+use components::ui::{current_tab, Avatar, Icon, PAGE_TABS};
 use services::{live, sync};
 use state::{use_app, AppState};
 use views::{
@@ -155,6 +157,8 @@ struct NavItem {
     /// Sidebar section heading ("" = none).
     group: &'static str,
     hue: Hue,
+    /// Tabbed pages: the key of their tabs (`views::page_tabs`), shown as sub-items.
+    page: &'static str,
 }
 
 /// Each menu item has its own colour, so it's recognisable at a glance.
@@ -173,22 +177,7 @@ enum Hue {
 }
 
 impl Hue {
-    /// The icon tile: soft background, strong icon colour.
-    fn tile(self) -> &'static str {
-        match self {
-            Hue::Emerald => "bg-emerald-50 text-emerald-700",
-            Hue::Sky => "bg-sky-50 text-sky-700",
-            Hue::Amber => "bg-amber-50 text-amber-700",
-            Hue::Rose => "bg-rose-50 text-rose-700",
-            Hue::Violet => "bg-violet-50 text-violet-700",
-            Hue::Teal => "bg-teal-50 text-teal-700",
-            Hue::Stone => "bg-stone-100 text-stone-600",
-            Hue::Blue => "bg-blue-50 text-blue-700",
-            Hue::Indigo => "bg-indigo-50 text-indigo-700",
-            Hue::Slate => "bg-slate-100 text-slate-600",
-        }
-    }
-    /// The icon colour alone (phone tab bar).
+    /// The icon colour (phone tab bar).
     fn ink(self) -> &'static str {
         match self {
             Hue::Emerald => "text-emerald-600",
@@ -206,11 +195,39 @@ impl Hue {
 }
 
 const SIDEBAR_KEY: &str = "sm-sidebar";
+const NAV_CLOSED_KEY: &str = "sm-nav-closed";
+
+/// Collapsed sidebar categories (remembered on this device), shared by the
+/// desktop sidebar and the phone drawer.
+static NAV_CLOSED: GlobalSignal<HashSet<String>> =
+    Signal::global(|| util::storage_get(NAV_CLOSED_KEY).unwrap_or_default().split('|').filter(|s| !s.is_empty()).map(String::from).collect());
+/// Tabbed pages whose tabs were shown or hidden by hand (otherwise: shown while on that page).
+static TABS_OPEN: GlobalSignal<HashMap<&'static str, bool>> = Signal::global(HashMap::new);
+
+fn nav_groups(nav: &[NavItem]) -> Vec<(&'static str, Vec<NavItem>)> {
+    let mut groups: Vec<(&'static str, Vec<NavItem>)> = vec![];
+    for it in nav.iter().cloned() {
+        match groups.last_mut() {
+            Some((g, items)) if *g == it.group => items.push(it),
+            _ => groups.push((it.group, vec![it])),
+        }
+    }
+    groups
+}
 
 /// The menu: each role's everyday pages, plus admin pages for whoever the
 /// access matrix allows.
 fn nav_for(app: AppState) -> Vec<NavItem> {
-    let item = |route: Route, label: &'static str, icon: &'static str, group: &'static str, hue: Hue| NavItem { route, label, icon, group, hue };
+    let item = |route: Route, label: &'static str, icon: &'static str, group: &'static str, hue: Hue| {
+        let page = match route {
+            Route::Workforce {} => "workforce",
+            Route::Operations {} => "operations",
+            Route::Clinic {} => "clinic",
+            Route::Settings {} => "settings",
+            _ => "",
+        };
+        NavItem { route, label, icon, group, hue, page }
+    };
     let mut v = vec![];
     match app.role() {
         Some(UserRole::VipClient) | None => {
@@ -280,30 +297,18 @@ fn Shell() -> Element {
     let toggle_icon = if fold { "chevron-right" } else { "chevron-left" };
     let toggle_label = if fold { "Open the menu" } else { "Fold the menu" };
     let live_class = if fold { "justify-center pb-2 text-xs text-muted" } else { "px-4 pb-2 text-xs text-muted" };
-    let mut groups: Vec<(&'static str, Vec<NavItem>)> = vec![];
-    for it in nav.iter().cloned() {
-        if groups.last().map(|(g, _)| *g) == Some(it.group) {
-            groups.last_mut().map(|(_, items)| items.push(it));
-        } else {
-            groups.push((it.group, vec![it]));
-        }
-    }
+    // The category holding the open page starts open.
+    let active_group = nav.iter().find(|i| is_active(&route, &i.route)).map(|i| i.group).unwrap_or("");
+    use_hook(move || {
+        NAV_CLOSED.write().remove(active_group);
+    });
+    // Phone: the slide-out menu and the "More" sheet.
+    let mut drawer = use_signal(|| false);
+    let mut more = use_signal(|| false);
     let pending = app.pending_offline_mutations.read().len();
     let user = app.current_user.read().clone();
-    let draft_count = app
-        .decisions
-        .read()
-        .as_ref()
-        .map(|d| d.iter().filter(|d| d.status == DecisionStatus::DraftInAdminQueue).count())
-        .unwrap_or(0);
-    // Reports the office sent back to me for more details.
-    let me = app.user_id();
-    let asked_me = app
-        .decisions
-        .read()
-        .as_ref()
-        .map(|d| d.iter().filter(|d| d.status == DecisionStatus::NeedsDetails && d.reported_by == me).count())
-        .unwrap_or(0);
+    let bar: Vec<NavItem> = nav.iter().take(4).cloned().collect();
+    let more_active = !bar.iter().any(|i| is_active(&route, &i.route));
 
     // Ctrl+K (⌘K) anywhere: find a worker (Service 5's worker lookup).
     let router = use_navigator();
@@ -331,11 +336,22 @@ fn Shell() -> Element {
     if *last_route.peek() != route {
         last_route.set(route.clone());
         util::scroll_top();
+        if NAV_CLOSED.peek().contains(active_group) {
+            NAV_CLOSED.write().remove(active_group);
+        }
+        drawer.set(false);
+        more.set(false);
     }
 
     rsx! {
         div { class: "min-h-screen flex flex-col", style: "--sidebar-w: {side_w}",
-            MobileTopBar {}
+            MobileTopBar { menu_open: drawer(), on_menu: move |_| drawer.set(true) }
+            if drawer() {
+                MobileDrawer { on_close: move |_| drawer.set(false) }
+            }
+            if more() {
+                MoreSheet { on_close: move |_| more.set(false) }
+            }
             div { class: "flex flex-1 min-h-0",
                 // ---------------------------------------------- sidebar
                 aside {
@@ -360,30 +376,7 @@ fn Shell() -> Element {
                             Icon { name: toggle_icon }
                         }
                     }
-                    nav { class: "px-2 pb-2 flex-1 overflow-y-auto no-scrollbar", "aria-label": "Main",
-                        for (gi, (group, items)) in groups.into_iter().enumerate() {
-                            div { key: "{gi}", class: "space-y-0.5",
-                                if !group.is_empty() {
-                                    if fold {
-                                        div { class: "h-px bg-line mx-2 my-2" }
-                                    } else {
-                                        p { class: "px-2.5 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted", "{group}" }
-                                    }
-                                }
-                                for item in items {
-                                    {
-                                        let (badge, badge_tone) = match item.label {
-                                            "Issues" => (draft_count, "bg-tag-amber-bg text-tag-amber-text"),
-                                            "Report" => (asked_me, "bg-tag-blue-bg text-tag-blue-text"),
-                                            _ => (0, ""),
-                                        };
-                                        let active = is_active(&route, &item.route);
-                                        rsx! { NavLink { key: "{item.label}", item, active, folded: fold, badge, badge_tone } }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    NavTree { fold, prefix: "nav" }
                     LiveStatus { class: live_class, compact: fold }
                     if let Some(u) = user.clone() {
                         if fold {
@@ -422,15 +415,199 @@ fn Shell() -> Element {
             // ---------------------------------------------- mobile tabs
             nav {
                 class: "md:hidden fixed bottom-0 inset-x-0 z-40 bg-surface/95 backdrop-blur border-t border-line safe-bottom",
-                "aria-label": "Main",
+                "aria-label": "Quick",
+                "data-testid": "bottom-bar",
                 div { class: "flex h-16",
-                    for item in nav.iter().take(5) {
+                    for item in bar {
                         Link {
                             key: "{item.label}",
                             to: item.route.clone(),
                             class: if is_active(&route, &item.route) { "tab-link active" } else { "tab-link" },
                             Icon { name: item.icon, size: 20, class: item.hue.ink().to_string() }
-                            span { "{item.label}" }
+                            span { class: "truncate max-w-full px-1", "{item.label}" }
+                        }
+                    }
+                    // The last slot opens every other page, in the sidebar's categories.
+                    button {
+                        class: if more_active || more() { "tab-link active" } else { "tab-link" },
+                        "aria-haspopup": "dialog",
+                        "aria-expanded": more(),
+                        "data-testid": "bottom-more",
+                        onclick: move |_| more.toggle(),
+                        Icon { name: "more", size: 20 }
+                        span { "More" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The sidebar's menu: categories as dropdowns, tabbed pages opening into their tabs.
+/// Used by the desktop sidebar and the phone drawer.
+#[component]
+fn NavTree(fold: bool, prefix: &'static str, #[props(default)] on_navigate: Option<EventHandler<()>>) -> Element {
+    let app = use_app();
+    let route: Route = use_route();
+    let nav = nav_for(app);
+    let decisions = app.decisions.read().clone().unwrap_or_default();
+    let me = app.user_id();
+    let draft_count = decisions.iter().filter(|d| d.status == DecisionStatus::DraftInAdminQueue).count();
+    // Reports the office sent back to me for more details.
+    let asked_me = decisions.iter().filter(|d| d.status == DecisionStatus::NeedsDetails && d.reported_by == me).count();
+    rsx! {
+        nav { class: "px-2 pb-2 flex-1 overflow-y-auto no-scrollbar", "aria-label": "Main",
+            for (gi, (group, items)) in nav_groups(&nav).into_iter().enumerate() {
+                div { key: "{gi}",
+                    if group.is_empty() || fold {
+                        if fold && !group.is_empty() {
+                            div { class: "h-px bg-line mx-2 my-2" }
+                        }
+                        div { class: "space-y-0.5",
+                            for item in items {
+                                {
+                                    let (badge, badge_tone) = nav_badge(item.label, draft_count, asked_me);
+                                    let active = is_active(&route, &item.route);
+                                    rsx! { NavLink { key: "{item.label}", item, active, folded: fold, badge, badge_tone, on_navigate } }
+                                }
+                            }
+                        }
+                    } else {
+                        {
+                            let open = !NAV_CLOSED.read().contains(group);
+                            rsx! {
+                                // A category: a dropdown row whose chevron turns, over its pages.
+                                button {
+                                    class: "nav-parent mt-1",
+                                    "aria-expanded": open,
+                                    "aria-controls": "{prefix}-group-{gi}",
+                                    "data-testid": "nav-group",
+                                    onclick: move |_| {
+                                        let mut c = NAV_CLOSED.write();
+                                        if !c.remove(group) {
+                                            c.insert(group.to_string());
+                                        }
+                                        util::storage_set(NAV_CLOSED_KEY, &c.iter().cloned().collect::<Vec<_>>().join("|"));
+                                    },
+                                    Icon { name: group_icon(group), size: 17, class: "text-muted".to_string() }
+                                    span { class: "flex-1 truncate", "{group}" }
+                                    Icon { name: "chevron-down", size: 14, class: if open { "nav-chev open".to_string() } else { "nav-chev".to_string() } }
+                                }
+                                if open {
+                                    ul { id: "{prefix}-group-{gi}", class: "nav-sub",
+                                        for item in items {
+                                            {
+                                                let (badge, badge_tone) = nav_badge(item.label, draft_count, asked_me);
+                                                let active = is_active(&route, &item.route);
+                                                let page = item.page;
+                                                let open = TABS_OPEN.read().get(page).copied().unwrap_or(active);
+                                                rsx! {
+                                                    SubItem { key: "{item.label}", item, active, badge, badge_tone, open, on_navigate,
+                                                        on_toggle: move |_| { TABS_OPEN.write().insert(page, !open); } }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Moves focus into a just-opened panel so Escape closes it straight away.
+fn focus_panel(id: &str) {
+    document::eval(&format!("setTimeout(() => document.getElementById('{id}')?.focus(), 0)"));
+}
+
+/// Phone and small tablet: the whole sidebar as a slide-out panel.
+#[component]
+fn MobileDrawer(on_close: EventHandler<()>) -> Element {
+    let app = use_app();
+    let user = app.current_user.read().clone();
+    rsx! {
+        div {
+            id: "mobile-drawer",
+            class: "md:hidden fixed inset-0 z-50",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Menu",
+            tabindex: "-1",
+            "data-testid": "mobile-drawer",
+            onmounted: move |_| focus_panel("mobile-drawer"),
+            onkeydown: move |e: KeyboardEvent| { if e.key() == Key::Escape { on_close.call(()); } },
+            div { class: "absolute inset-0 bg-[#0f0f0f]/30 fade-in", onclick: move |_| on_close.call(()) }
+            aside { class: "absolute inset-y-0 left-0 w-[290px] max-w-[85vw] bg-sidebar border-r border-line shadow-pop flex flex-col drawer-in",
+                div { class: "pl-4 pr-2 pt-4 pb-1 flex items-center gap-2.5",
+                    div { class: "w-8 h-8 rounded-lg chip-on flex items-center justify-center font-serif text-sm shrink-0", "S" }
+                    p { class: "text-sm font-semibold flex-1", "SiteMonitor" }
+                    button { class: "btn-icon btn-ghost h-9 w-9", "aria-label": "Close the menu", "data-testid": "menu-close", onclick: move |_| on_close.call(()), Icon { name: "x" } }
+                }
+                NavTree { fold: false, prefix: "drawer", on_navigate: move |_| on_close.call(()) }
+                LiveStatus { class: "px-4 pb-2 text-xs text-muted" }
+                if let Some(u) = user {
+                    div { class: "p-2 m-2 rounded-lg border border-line space-y-2 safe-bottom",
+                        div { class: "flex items-center gap-2.5 px-1 pt-1",
+                            Avatar { name: u.name.clone(), size: 34 }
+                            div { class: "min-w-0 flex-1",
+                                p { class: "text-sm font-medium truncate", "{u.name}" }
+                                p { class: "text-xs text-muted", "{u.role.label()}" }
+                            }
+                        }
+                        AccountActions {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The bottom bar's "More": every page, in the same categories as the sidebar.
+#[component]
+fn MoreSheet(on_close: EventHandler<()>) -> Element {
+    let app = use_app();
+    let route: Route = use_route();
+    let nav = nav_for(app);
+    rsx! {
+        div {
+            id: "more-sheet",
+            class: "md:hidden fixed inset-0 z-50",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "More pages",
+            tabindex: "-1",
+            "data-testid": "more-sheet",
+            onmounted: move |_| focus_panel("more-sheet"),
+            onkeydown: move |e: KeyboardEvent| { if e.key() == Key::Escape { on_close.call(()); } },
+            div { class: "absolute inset-0 bg-[#0f0f0f]/30 fade-in", onclick: move |_| on_close.call(()) }
+            div { class: "absolute inset-x-0 bottom-0 max-h-[80vh] overflow-y-auto bg-surface rounded-t-2xl shadow-pop sheet-in safe-bottom",
+                div { class: "sticky top-0 bg-surface/95 backdrop-blur flex items-center justify-between px-5 h-14 border-b border-line",
+                    p { class: "font-semibold", "All pages" }
+                    button { class: "btn-icon btn-ghost", "aria-label": "Close", "data-testid": "more-close", onclick: move |_| on_close.call(()), Icon { name: "x" } }
+                }
+                div { class: "px-4 pt-2 pb-24 space-y-4",
+                    for (group, items) in nav_groups(&nav) {
+                        section { key: "{group}", "data-testid": "more-group",
+                            p { class: "flex items-center gap-2 px-1 pt-2 pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted",
+                                Icon { name: if group.is_empty() { "home" } else { group_icon(group) }, size: 14 }
+                                if group.is_empty() { "Start" } else { "{group}" }
+                            }
+                            div { class: "grid grid-cols-3 gap-2",
+                                for item in items {
+                                    Link {
+                                        key: "{item.label}",
+                                        to: item.route.clone(),
+                                        class: if is_active(&route, &item.route) { "more-tile active" } else { "more-tile" },
+                                        "data-testid": "more-link",
+                                        onclick: move |_| on_close.call(()),
+                                        Icon { name: item.icon, size: 20, class: item.hue.ink().to_string() }
+                                        span { class: "text-xs text-center leading-tight", "{item.label}" }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -476,13 +653,19 @@ fn OfflineBanner() -> Element {
 
 /// Phone header: estate name, live status and the account menu.
 #[component]
-fn MobileTopBar() -> Element {
+fn MobileTopBar(menu_open: bool, on_menu: EventHandler<()>) -> Element {
     let app = use_app();
     let mut open = use_signal(|| false);
     let user = app.current_user.read().clone();
     rsx! {
         div { class: "md:hidden sticky top-0 z-40 h-12 glass rounded-none border-x-0 border-t-0 shadow-none",
-            div { class: "h-full px-4 flex items-center gap-3",
+            div { class: "h-full px-2 flex items-center gap-2",
+                button { class: "btn-icon btn-ghost h-10 w-10", "aria-label": "Open the menu", "aria-expanded": menu_open, "aria-haspopup": "dialog", "data-testid": "menu-open",
+                    onclick: move |_| on_menu.call(()),
+                    svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.75", stroke_linecap: "round", "aria-hidden": "true",
+                        path { d: "M4 7h16M4 12h16M4 17h16" }
+                    }
+                }
                 div { class: "w-7 h-7 rounded-md chip-on flex items-center justify-center font-serif text-sm shrink-0", "S" }
                 p { class: "text-sm font-semibold truncate flex-1", "SiteMonitor" }
                 LiveStatus { class: "text-xs text-muted" }
@@ -525,8 +708,7 @@ fn LiveStatus(class: &'static str, #[props(default)] compact: bool) -> Element {
 
 /// One menu entry: a coloured icon tile, the name, and a count if something is waiting.
 #[component]
-fn NavLink(item: NavItem, active: bool, folded: bool, badge: usize, badge_tone: &'static str) -> Element {
-    let tile = item.hue.tile();
+fn NavLink(item: NavItem, active: bool, folded: bool, badge: usize, badge_tone: &'static str, #[props(default)] on_navigate: Option<EventHandler<()>>) -> Element {
     let class = match (active, folded) {
         (true, true) => "nav-link active h-10 justify-center px-0",
         (false, true) => "nav-link h-10 justify-center px-0",
@@ -538,10 +720,11 @@ fn NavLink(item: NavItem, active: bool, folded: bool, badge: usize, badge_tone: 
         Link {
             to: item.route.clone(),
             class,
+            onclick: move |_| { if let Some(h) = on_navigate { h.call(()) } },
             title: if folded { name.clone() } else { String::new() },
             "aria-label": "{name}",
-            span { class: "relative w-7 h-7 rounded-lg flex items-center justify-center shrink-0 {tile}",
-                Icon { name: item.icon, size: 15 }
+            span { class: "relative w-5 h-5 flex items-center justify-center shrink-0",
+                Icon { name: item.icon, size: 17 }
                 if folded && badge > 0 {
                     span { class: "absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[10px] leading-4 font-semibold text-center", "{badge}" }
                 }
@@ -550,6 +733,80 @@ fn NavLink(item: NavItem, active: bool, folded: bool, badge: usize, badge_tone: 
                 span { class: "flex-1 truncate", "{item.label}" }
                 if badge > 0 {
                     span { class: "pill {badge_tone}", "data-testid": "nav-badge", "{badge}" }
+                }
+            }
+        }
+    }
+}
+
+fn nav_badge(label: &str, drafts: usize, asked: usize) -> (usize, &'static str) {
+    match label {
+        "Issues" => (drafts, "bg-tag-amber-bg text-tag-amber-text"),
+        "Report" => (asked, "bg-tag-blue-bg text-tag-blue-text"),
+        _ => (0, ""),
+    }
+}
+
+fn group_icon(group: &str) -> &'static str {
+    match group {
+        "Workforce & crew" => "users",
+        "Operations & duty" => "clock",
+        "System & admin" => "settings",
+        _ => "map",
+    }
+}
+
+/// A page inside a sidebar category. A page with tabs opens into those tabs,
+/// which match the tab bar on the page: pick either one and both follow.
+#[component]
+fn SubItem(item: NavItem, active: bool, badge: usize, badge_tone: &'static str, open: bool, on_toggle: EventHandler<()>, #[props(default)] on_navigate: Option<EventHandler<()>>) -> Element {
+    let app = use_app();
+    let page = item.page;
+    let tabs = views::page_tabs(app, page);
+    let tab = current_tab(page, &tabs);
+    let name = if badge > 0 { format!("{}, {badge} new", item.label) } else { item.label.to_string() };
+    let class = match (active, tabs.is_empty()) {
+        (true, true) => "nav-sub-link active",
+        (true, false) => "nav-sub-link current",
+        _ => "nav-sub-link",
+    };
+    rsx! {
+        li { class: "relative",
+            Link { to: item.route.clone(), class, "aria-label": "{name}", onclick: move |_| { if let Some(h) = on_navigate { h.call(()) } },
+                span { class: "flex-1 truncate", "{item.label}" }
+                if badge > 0 {
+                    span { class: "pill {badge_tone}", "data-testid": "nav-badge", "{badge}" }
+                }
+                if !tabs.is_empty() {
+                    span { class: "w-5 shrink-0" }
+                }
+            }
+            if !tabs.is_empty() {
+                button {
+                    class: "nav-chev-btn",
+                    "aria-label": if open { format!("Hide the {} sections", item.label) } else { format!("Show the {} sections", item.label) },
+                    "aria-expanded": open,
+                    "data-testid": "nav-expand",
+                    onclick: move |_| on_toggle.call(()),
+                    Icon { name: "chevron-down", size: 14, class: if open { "nav-chev open".to_string() } else { "nav-chev".to_string() } }
+                }
+                if open {
+                    ul { class: "nav-sub",
+                        for t in tabs.iter().copied() {
+                            li { key: "{t}",
+                                Link {
+                                    to: item.route.clone(),
+                                    class: if active && tab == t { "nav-sub-link active" } else { "nav-sub-link" },
+                                    "data-testid": "nav-tab-{t}",
+                                    onclick: move |_| {
+                                        PAGE_TABS.write().insert(page, t);
+                                        if let Some(h) = on_navigate { h.call(()) }
+                                    },
+                                    "{t}"
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

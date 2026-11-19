@@ -93,6 +93,17 @@ The end-to-end suite covers every phase of `PLAN.md`:
 - sign-in, first-password change, sign-out and the access matrix;
 - real-time pushes, offline queue and sync, the PWA manifest and service worker, and smoothness checks (no console errors, no layout shift on refresh).
 
+## Data privacy
+
+Real operational and personnel data never goes into Git.
+
+- **Encrypted at rest.** Every personnel record (workers and volunteers, all workforce lists including the clinic, and workforce snapshots) is stored encrypted with AES-256-GCM. The key is `data/keys/personnel.key` (created on first start) or the `SITEMONITOR_DATA_KEY` environment variable. **Back the key up** somewhere safe and private: without it the personnel data cannot be read. `backend audit-data` reports any personnel data still readable without the key (all counts should be 0). Data stored before encryption was on is encrypted automatically at start-up.
+- **Login accounts are separate.** Sign-in accounts live in their own table, are not encrypted, and are never wiped by Load sample data, Clear data or a restore, so a fresh clone is usable straight away.
+- **Exports are encrypted.** Workforce backups (Settings → Workforce data) and whole-database packages (Settings → Backup & restore) are always encrypted with a passphrase (PBKDF2-HMAC-SHA256, 600,000 rounds, AES-256-GCM).
+- **Sharing a database.** To move SiteMonitor to another machine, make a package in Settings → Backup & restore, send the `.smpkg` file and its passphrase to the other person separately (never through GitHub), and restore it there. Estate, projects, personnel, clinic records and photos come across; their local sign-in accounts are kept.
+- **On the device.** Saves queued while offline are encrypted in the browser (WebCrypto AES-256-GCM, key kept on the device and not exportable). Browsers only offer WebCrypto over HTTPS or on `localhost`; on a plain-HTTP LAN address the queue is stored unencrypted, so serve SiteMonitor over HTTPS (for example behind a reverse proxy) when phones use it.
+- **Git hygiene.** `.gitignore` excludes `data/` (database files, uploads, keys, backups), every database and dump format, backup and package files, snapshots, uploads, keys and `.env` files.
+
 ## Automations
 
 These jobs run in the estate's local time:

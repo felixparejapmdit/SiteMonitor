@@ -14,7 +14,7 @@ use shared::api::*;
 use shared::*;
 
 use crate::api;
-use crate::components::ui::{EmptyState, Icon, Modal, Spinner};
+use crate::components::ui::{current_tab, EmptyState, Icon, Modal, PageTabs, Spinner};
 use crate::services::sync::{self, Outcome};
 use crate::state::{use_app, AppState};
 use crate::util;
@@ -277,26 +277,6 @@ pub fn Table(head: Vec<&'static str>, rows: Vec<(String, Vec<String>)>, #[props(
     }
 }
 
-#[component]
-pub fn Tabs(tabs: Vec<&'static str>, current: Signal<&'static str>) -> Element {
-    let mut current = current;
-    rsx! {
-        div { class: "flex flex-wrap gap-1 border-b border-line", role: "tablist",
-            for t in tabs {
-                button {
-                    key: "{t}",
-                    role: "tab",
-                    "aria-selected": current() == t,
-                    "data-testid": "tab-{t}",
-                    class: if current() == t { "px-3 h-9 text-sm font-medium border-b-2 border-accent text-accent-ink" } else { "px-3 h-9 text-sm text-muted hover:text-ink" },
-                    onclick: move |_| current.set(t),
-                    "{t}"
-                }
-            }
-        }
-    }
-}
-
 /// Prints the page with a given paper set-up (e.g. folio or landscape).
 pub fn print_with(page_css: &str) {
     let css = format!("@page {{ {page_css} }}");
@@ -319,22 +299,22 @@ fn status_tone(s: WorkerStatus) -> Tone {
 
 #[component]
 pub fn WorkforceView() -> Element {
-    let tab = use_signal(|| "Dashboard");
+    let tab = current_tab("workforce", crate::views::WORKFORCE_TABS);
     rsx! {
         div { class: "space-y-5 rise-in",
             header { class: "space-y-1",
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Workforce" }
                 p { class: "text-[15px] text-muted", "Project groups and the jobs they work on, departments, the org chart, dependability and the change history." }
             }
-            Tabs { tabs: vec!["Dashboard", "Groups", "Areas & zones", "Departments", "Org chart", "Dependability", "History"], current: tab }
-            match tab() {
-                "Dashboard" => rsx! { crate::views::workforce_more::DashboardTab {} },
+            PageTabs { page: "workforce", tabs: crate::views::WORKFORCE_TABS.to_vec() }
+            match tab {
+                "Dashboard" => rsx! { crate::views::workforce_more::DashboardTab {} crate::views::workforce_extra::DashboardMore {} },
                 "Groups" => rsx! { GroupsTab {} },
                 "Areas & zones" => rsx! { crate::views::workforce_more::AreasTab {} },
-                "Departments" => rsx! { DepartmentsTab {} },
-                "Org chart" => rsx! { OrgChartTab {} },
-                "Dependability" => rsx! { DependabilityTab {} },
-                _ => rsx! { HistoryTab {} },
+                "Departments" => rsx! { DepartmentsTab {} crate::views::workforce_extra::HousingTables {} },
+                "Org chart" => rsx! { PrintButton { label: "Print org chart" } OrgChartTab {} },
+                "Dependability" => rsx! { PrintButton { label: "Print dependability roster" } DependabilityTab {} },
+                _ => rsx! { HistoryHub {} },
             }
         }
     }
@@ -349,17 +329,46 @@ fn GroupsTab() -> Element {
     });
     let jobs: Vec<WorkItem> = app.work_items.read().clone().unwrap_or_default().into_iter().filter(|w| w.status.is_active()).collect();
     let can_link = app.can(Permission::ManageWorkforce);
-    let list = groups.read().clone().unwrap_or_default();
+    let meta = use_records("project_groups_meta");
+    let meta_map: Value = meta.read().clone().unwrap_or_default().into_iter().next().unwrap_or(json!({}));
+    let mut editing = use_signal(|| None::<Option<String>>);
+    let mut log = use_signal(|| false);
+    let mut by_area = use_signal(|| false);
+    let mut list = groups.read().clone().unwrap_or_default();
+    if by_area() {
+        list.sort_by_key(|g| (s(&meta_map, &g.name).to_lowercase(), g.name.to_lowercase()));
+    }
+    let tools = rsx! {
+        div { class: "flex flex-wrap items-center gap-2 no-print",
+            p { class: "text-sm text-muted flex-1 min-w-[16rem]", "Link each group to the job it works on: the Crew page then shows how many of its people are present today." }
+            label { class: "flex items-center gap-2 text-sm",
+                input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "groups-by-area", checked: by_area(), onchange: move |e| by_area.set(e.checked()) }
+                "Grouped by area"
+            }
+            button { class: "btn-secondary", "data-testid": "groups-log", onclick: move |_| log.set(true), "Change log" }
+            button { class: "btn-secondary", "data-testid": "groups-print", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print all rosters" }
+            if can_link {
+                button { class: "btn-primary", "data-testid": "group-create", onclick: move |_| editing.set(Some(None)), Icon { name: "plus" } "Create group" }
+            }
+        }
+        crate::views::workforce_extra::GroupRosters { by_area: by_area() }
+        if let Some(name) = editing() {
+            crate::views::workforce_extra::GroupModal { name, on_close: move |_| { editing.set(None); groups.restart(); } }
+        }
+        if log() {
+            crate::views::workforce_extra::GroupChangeLog { on_close: move |_| log.set(false) }
+        }
+    };
     if list.is_empty() {
-        return rsx! { div { class: "card", EmptyState { icon: "users", title: "No project groups yet", body: "Groups come from each person's project group in Personnel." } } };
+        return rsx! { {tools} div { class: "card", EmptyState { icon: "users", title: "No project groups yet", body: "Create one, or set the project group of each person in Personnel." } } };
     }
     rsx! {
-        p { class: "text-sm text-muted", "Link each group to the job it works on: the Crew page then shows how many of its people are present today." }
-        ul { class: "card divide-y divide-line", "data-testid": "group-list",
+        {tools}
+        ul { class: "card divide-y divide-line no-print", "data-testid": "group-list",
             for g in list {
                 li { key: "{g.name}", class: "flex flex-wrap items-center gap-3 px-4 py-3", "data-testid": "group-row",
                     div { class: "flex-1 min-w-[12rem]",
-                        p { class: "font-medium", "{g.name}" }
+                        p { class: "font-medium", "{g.name}" if !s(&meta_map, &g.name).is_empty() { span { class: "text-muted font-normal text-sm ml-2", {s(&meta_map, &g.name)} } } }
                         p { class: "text-sm text-muted tabular", "{g.present} present · {g.absent} absent · {g.on_pass} on pass · {g.total} in all" }
                     }
                     select {
@@ -386,6 +395,9 @@ fn GroupsTab() -> Element {
                         for j in jobs.iter() {
                             option { key: "{j.id}", value: "{j.id}", selected: g.work_item_id == Some(j.id), "{j.title}" }
                         }
+                    }
+                    if can_link {
+                        button { class: "btn-icon btn-ghost", "aria-label": "Edit {g.name}", "data-testid": "group-edit", onclick: { let n = g.name.clone(); move |_| editing.set(Some(Some(n.clone()))) }, Icon { name: "edit" } }
                     }
                 }
             }
@@ -491,6 +503,25 @@ fn DependabilityTab() -> Element {
 }
 
 #[component]
+fn PrintButton(label: &'static str) -> Element {
+    rsx! { div { class: "flex justify-end no-print", button { class: "btn-secondary", "data-testid": "print-tab", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "{label}" } } }
+}
+
+/// Service 5's "Analytics & History": the change log, project roster history, and person dossiers.
+#[component]
+fn HistoryHub() -> Element {
+    let view = use_signal(|| "Change log");
+    rsx! {
+        crate::views::workforce_extra::Segmented { options: vec!["Change log", "Project roster history", "Person dossier"], current: view, testid: "history-view" }
+        match view() {
+            "Project roster history" => rsx! { crate::views::workforce_extra::ProjectHistory {} },
+            "Person dossier" => rsx! { crate::views::workforce_extra::Dossier {} },
+            _ => rsx! { HistoryTab {} },
+        }
+    }
+}
+
+#[component]
 fn HistoryTab() -> Element {
     let att = use_records("attendance_log");
     let asg = use_records("assignment_log");
@@ -519,26 +550,26 @@ fn HistoryTab() -> Element {
 
 #[component]
 pub fn OperationsView() -> Element {
-    let tab = use_signal(|| "Overnight duty");
+    let tab = current_tab("operations", crate::views::OPERATIONS_TABS);
     rsx! {
         div { class: "space-y-5 rise-in",
             header { class: "space-y-1 no-print",
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Operations & duty" }
                 p { class: "text-[15px] text-muted", "Overnight duty, the monthly attendance sheet, overtime, visitations, signatories and printing." }
             }
-            div { class: "no-print", Tabs { tabs: vec!["Overnight duty", "Duty history", "Tomorrow", "Attendance", "Overtime", "Visitations", "Visitation groups", "Signatories", "Bulk update", "Pick lists", "Print"], current: tab } }
-            match tab() {
+            PageTabs { page: "operations", tabs: crate::views::OPERATIONS_TABS.to_vec() }
+            match tab {
                 "Overnight duty" => rsx! { DutyTab {} },
-                "Duty history" => rsx! { crate::views::workforce_more::DutyHistoryTab {} },
+                "Duty history" => rsx! { crate::views::workforce_extra::DutyMonth {} crate::views::workforce_more::DutyHistoryTab {} },
                 "Tomorrow" => rsx! { crate::views::workforce_more::TomorrowTab {} },
-                "Visitation groups" => rsx! { crate::views::workforce_more::VisitGroupsTab {} },
+                "Visitation groups" => rsx! { crate::views::workforce_more::VisitGroupsTab {} crate::views::workforce_extra::VisitGroupMembers {} },
                 "Bulk update" => rsx! { crate::views::workforce_more::BulkTab {} },
                 "Pick lists" => rsx! { crate::views::workforce_more::PickListsTab {} },
                 "Attendance" => rsx! { AttendanceTab {} },
                 "Overtime" => rsx! { OvertimeTab {} },
-                "Visitations" => rsx! { VisitationsTab {} },
+                "Visitations" => rsx! { crate::views::workforce_extra::VisitationsHub {} },
                 "Signatories" => rsx! { SignatoriesTab {} },
-                _ => rsx! { PrintTab {} },
+                _ => rsx! { crate::views::workforce_print::PrintTab {} },
             }
         }
     }
@@ -613,6 +644,38 @@ fn DutyTab() -> Element {
             }
         }
     };
+    // Service 5 "Generate week": seven nights from the chosen date, the rotation carrying on.
+    let week = {
+        let area_list = area_list.clone();
+        let present: HashMap<String, bool> = people.iter().map(|w| (w.a_number.clone(), !w.archived && w.status == WorkerStatus::Present)).collect();
+        move |_| {
+            let mut areas = area_list.clone();
+            let present = present.clone();
+            async move {
+                let Ok(start) = NaiveDate::parse_from_str(&date(), "%Y-%m-%d") else { return };
+                for n in 0..7 {
+                    let d = (start + chrono::Duration::days(n)).format("%Y-%m-%d").to_string();
+                    let mut assignments = vec![];
+                    for a in areas.iter_mut() {
+                        let (picked, idx) = rotate(a, &|x| present.get(x).copied().unwrap_or(false));
+                        for p in picked {
+                            assignments.push(json!({ "aNumber": p, "areaId": s(a, "id") }));
+                        }
+                        a["lastRotationIndex"] = json!(idx);
+                    }
+                    if let Err(e) = save_record(app, "duty_schedules", &d, &json!({ "dateStr": d, "assignments": assignments })).await {
+                        return app.error(e);
+                    }
+                }
+                for a in &areas {
+                    if let Err(e) = save_record(app, "duty_areas", &s(a, "id"), a).await {
+                        return app.error(e);
+                    }
+                }
+                app.success("A week of duty made");
+            }
+        }
+    };
     let fields = vec![
         f("name", "Duty area", Kind::Text),
         f("shiftTime", "Shift time", Kind::Text),
@@ -627,6 +690,7 @@ fn DutyTab() -> Element {
             }
             if can_edit {
                 button { class: "btn-primary", "data-testid": "duty-generate", onclick: generate, Icon { name: "refresh" } "Make the roster for this date" }
+                button { class: "btn-secondary", "data-testid": "duty-week", onclick: week, "Make the week" }
                 button { class: "btn-secondary", "data-testid": "duty-add-area",
                     onclick: move |_| editing.set(Some((new_id("duty"), json!({ "roster": [], "workersNeeded": 1, "lastRotationIndex": -1, "shiftTime": "20:00" })))),
                     Icon { name: "plus" } "Add duty area"
@@ -796,11 +860,53 @@ fn OvertimeTab() -> Element {
     let workers = use_workers();
     let mut editing = use_signal(|| None::<(String, Value)>);
     let mut pasting = use_signal(|| false);
-    let map = by_a_number(&workers.read().clone().unwrap_or_default());
-    let list = ot.read().clone().unwrap_or_default();
+    let view = use_signal(|| "Entries");
+    let mut day = use_signal(today);
+    let mut every_day = use_signal(|| false);
+    let people = workers.read().clone().unwrap_or_default();
+    let map = by_a_number(&people);
+    let all = ot.read().clone().unwrap_or_default();
+    let list: Vec<Value> = all.iter().filter(|e| every_day() || s(e, "date") == day()).cloned().collect();
     let total: f64 = list.iter().filter_map(|e| e["computedPay"].as_f64()).sum();
     let mut sorted = list.clone();
     sorted.sort_by(|a, b| s(b, "date").cmp(&s(a, "date")));
+    let mut step = move |n: i64| {
+        if let Ok(d) = NaiveDate::parse_from_str(&day(), "%Y-%m-%d") {
+            day.set((d + chrono::Duration::days(n)).format("%Y-%m-%d").to_string());
+        }
+    };
+    // Service 5 "Load yesterday": copy the entries of the day before to this day, hours reset to 0.
+    let copy_yesterday = {
+        let all = all.clone();
+        move |_| {
+            let all = all.clone();
+            async move {
+                let Ok(d) = NaiveDate::parse_from_str(&day(), "%Y-%m-%d") else { return };
+                let prev = (d - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+                let from: Vec<Value> = all.iter().filter(|e| s(e, "date") == prev).cloned().collect();
+                if from.is_empty() {
+                    return app.error(format!("No overtime on {prev} to copy."));
+                }
+                for e in &from {
+                    let mut next = e.clone();
+                    next["id"] = json!(new_id("ot"));
+                    next["date"] = json!(day());
+                    next["hours"] = json!(0);
+                    next["computedPay"] = json!(0);
+                    if let Err(err) = save_record(app, "ot_entries", &s(&next, "id"), &next).await {
+                        return app.error(err);
+                    }
+                }
+                app.success(format!("{} copied from {prev}", util::plural(from.len(), "entry")));
+            }
+        }
+    };
+    if view() == "Summary" {
+        return rsx! {
+            crate::views::workforce_extra::Segmented { options: vec!["Entries", "Summary"], current: view, testid: "ot-view" }
+            crate::views::workforce_extra::OtSummary {}
+        };
+    }
     let rows: Vec<(String, Vec<String>)> = sorted
         .iter()
         .map(|e| {
@@ -819,14 +925,30 @@ fn OvertimeTab() -> Element {
         f("description", "Notes", Kind::Long),
     ];
     rsx! {
-        div { class: "flex flex-wrap items-center justify-between gap-3",
+        div { class: "flex flex-wrap items-center gap-2 no-print",
+            crate::views::workforce_extra::Segmented { options: vec!["Entries", "Summary"], current: view, testid: "ot-view" }
+            button { class: "btn-icon btn-ghost", "aria-label": "Previous day", "data-testid": "ot-prev", onclick: move |_| step(-1), Icon { name: "chevron-left" } }
+            input { r#type: "date", class: "field w-auto", "aria-label": "Day", "data-testid": "ot-day", value: "{day}", oninput: move |e| day.set(e.value()) }
+            button { class: "btn-icon btn-ghost", "aria-label": "Next day", "data-testid": "ot-next", onclick: move |_| step(1), Icon { name: "chevron-right" } }
+            button { class: "btn-ghost", "data-testid": "ot-today", onclick: move |_| day.set(today()), "Today" }
+            label { class: "flex items-center gap-2 text-sm",
+                input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "ot-all-days", checked: every_day(), onchange: move |e| every_day.set(e.checked()) }
+                "All days"
+            }
+            button { class: "btn-secondary", "data-testid": "ot-schedule-print", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print OT schedule" }
+            if app.can(Permission::ManageWorkforce) {
+                button { class: "btn-secondary", "data-testid": "ot-copy-yesterday", onclick: copy_yesterday, "Copy the day before" }
+            }
+        }
+        div { class: "flex flex-wrap items-center justify-between gap-3 no-print",
             p { class: "text-sm text-muted tabular", "data-testid": "ot-total", "{list.len()} entries · total ₱{total:.2}" }
             if app.can(Permission::ManageWorkforce) {
                 button { class: "btn-secondary", "data-testid": "ot-paste-open", onclick: move |_| pasting.set(true), Icon { name: "edit" } "From a list of names" }
-                button { class: "btn-primary", "data-testid": "ot-add", onclick: move |_| editing.set(Some((new_id("ot"), json!({ "date": today(), "otType": "regular", "status": "approved" })))), Icon { name: "plus" } "Add overtime" }
+                button { class: "btn-primary", "data-testid": "ot-add", onclick: move |_| editing.set(Some((new_id("ot"), json!({ "date": day(), "otType": "regular", "status": "approved" })))), Icon { name: "plus" } "Add overtime" }
             }
         }
         if pasting() { crate::views::workforce_more::OtPaste { on_close: move |_| pasting.set(false) } }
+        p { class: "font-semibold print-only", "Overtime schedule {day}" }
         Table { head: vec!["Date", "Work", "Who", "Kind", "Hours", "Rate", "Pay"], rows, on_edit: move |id: String| {
             if let Some(v) = sorted.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) }
         } }
@@ -834,63 +956,14 @@ fn OvertimeTab() -> Element {
             RecordModal { title: "Overtime".to_string(), list: "ot_entries", id, fields, initial: v, on_close: move |_| editing.set(None),
                 on_saved: move |saved: Value| {
                     // Pay = hours × rate, the Service 5 OT calculator rule.
-                    let pay = ((saved["hours"].as_f64().unwrap_or(0.0) * saved["hourlyRate"].as_f64().unwrap_or(0.0)) * 100.0).round() / 100.0;
+                    // The rate defaults to the hourly rate on the person record.
+                    let rate = saved["hourlyRate"].as_f64().or_else(|| map.get(&s(&saved, "volunteerId")).and_then(|w| w.hourly_rate)).unwrap_or(0.0);
+                    let pay = ((saved["hours"].as_f64().unwrap_or(0.0) * rate) * 100.0).round() / 100.0;
                     let mut next = saved.clone();
+                    next["hourlyRate"] = json!(rate);
                     next["computedPay"] = json!(pay);
                     let id = s(&saved, "id");
                     spawn(async move { let _ = save_record(app, "ot_entries", &id, &next).await; });
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn VisitationsTab() -> Element {
-    let app = use_app();
-    let visits = use_records("visitations");
-    let ministers = use_records("ministers");
-    let workers = use_workers();
-    let mut editing = use_signal(|| None::<(String, Value)>);
-    let map = by_a_number(&workers.read().clone().unwrap_or_default());
-    let mut list = visits.read().clone().unwrap_or_default();
-    list.sort_by(|a, b| s(b, "date").cmp(&s(a, "date")));
-    let names: Vec<String> = ministers.read().clone().unwrap_or_default().iter().map(|m| s(m, "name")).filter(|n| !n.is_empty()).collect();
-    let can_edit = app.can(Permission::ManageWorkforce);
-    let rows: Vec<(String, Vec<String>)> = list
-        .iter()
-        .map(|v| {
-            let who = if s(v, "workerName").is_empty() { name_of(&map, &s(v, "aNumber")) } else { s(v, "workerName") };
-            (s(v, "id"), vec![s(v, "date"), who, s(v, "ministerName"), s(v, "status"), s(v, "notes")])
-        })
-        .collect();
-    let fields = vec![
-        f("date", "Date", Kind::Date),
-        f("aNumber", "Person visited", Kind::Worker),
-        f("ministerName", "Minister", if names.is_empty() { Kind::Text } else { Kind::Choice(names) }),
-        f("status", "Status", choice(&["scheduled", "completed", "cancelled"])),
-        f("notes", "Notes", Kind::Long),
-    ];
-    let scheduled = list.iter().filter(|v| s(v, "status") == "scheduled").count();
-    rsx! {
-        div { class: "flex flex-wrap items-center justify-between gap-3",
-            p { class: "text-sm text-muted", "{scheduled} scheduled · {list.len()} in all" }
-            if can_edit {
-                button { class: "btn-primary", "data-testid": "visit-add", onclick: move |_| editing.set(Some((new_id("visit"), json!({ "date": today(), "status": "scheduled", "createdAt": chrono::Utc::now().to_rfc3339() })))), Icon { name: "plus" } "Schedule a visit" }
-            }
-        }
-        Table { head: vec!["Date", "Person", "Minister", "Status", "Notes"], rows, on_edit: move |id: String| {
-            if can_edit { if let Some(v) = list.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) } }
-        } }
-        if let Some((id, v)) = editing() {
-            RecordModal { title: "Visitation".to_string(), list: "visitations", id, fields, initial: v, on_close: move |_| editing.set(None),
-                on_saved: move |saved: Value| {
-                    // Keep the visited person's name on the record, as Service 5 does.
-                    let mut next = saved.clone();
-                    if let Some(w) = map.get(&s(&saved, "aNumber")) { next["workerName"] = json!(w.name); }
-                    if s(&saved, "status") == "completed" && s(&saved, "completedAt").is_empty() { next["completedAt"] = json!(chrono::Utc::now().to_rfc3339()); }
-                    let id = s(&saved, "id");
-                    spawn(async move { let _ = save_record(app, "visitations", &id, &next).await; });
                 }
             }
         }
@@ -906,9 +979,12 @@ fn SignatoriesTab() -> Element {
     let join = |v: &Value, k: &str| v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_else(|| s(v, k));
     let rows: Vec<(String, Vec<String>)> = list.iter().map(|v| (s(v, "id"), vec![s(v, "name"), join(v, "trades"), join(v, "projectGroups"), s(v, "signatureDate")])).collect();
     let fields = vec![f("name", "Name", Kind::Text), f("trades", "Trades (comma separated)", Kind::Text), f("projectGroups", "Project groups (comma separated)", Kind::Text), f("signatureDate", "Signed", Kind::Date)];
+    let mut assigning = use_signal(|| false);
     rsx! {
-        div { class: "flex justify-end",
+        if assigning() { crate::views::workforce_extra::SignatoryAssign { on_close: move |_| assigning.set(false) } }
+        div { class: "flex justify-end gap-2",
             if app.can(Permission::ManageWorkforce) {
+                button { class: "btn-secondary", "data-testid": "sig-assign-open", onclick: move |_| assigning.set(true), "Assign groups" }
                 button { class: "btn-primary", "data-testid": "sig-add", onclick: move |_| editing.set(Some((new_id("sig"), json!({ "signatureDate": today() })))), Icon { name: "plus" } "Add signatory" }
             }
         }
@@ -931,135 +1007,6 @@ fn SignatoriesTab() -> Element {
                     spawn(async move { let _ = save_record(app, "signatories", &id, &next).await; });
                 }
             }
-        }
-    }
-}
-
-#[component]
-fn PrintTab() -> Element {
-    let workers = use_workers();
-    let sigs = use_records("signatories");
-    let mut kind = use_signal(|| "id");
-    let mut group = use_signal(String::new);
-    let family = use_resource(move || async move {
-        if kind() == "family" { api::get::<Vec<Value>>("/workforce/family-roster").await.unwrap_or_default() } else { vec![] }
-    });
-    let people: Vec<Worker> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).collect();
-    let mut groups: Vec<String> = people.iter().map(|w| w.project_group.clone()).filter(|g| !g.is_empty()).collect();
-    groups.sort();
-    groups.dedup();
-    let mut chosen: Vec<Worker> = people.into_iter().filter(|w| group().is_empty() || w.project_group == group()).collect();
-    if kind() == "tomorrow" {
-        chosen.retain(|w| !w.tomorrow.trim().is_empty());
-    }
-    // Service 5's distribution: job orders come out grouped (by project group, or
-    // by residence for residential job orders), each group under its signatory.
-    let by_residence = kind() == "residential";
-    chosen.sort_by(|a, b| {
-        let key = |w: &Worker| if by_residence { w.residence.to_lowercase() } else { w.project_group.to_lowercase() };
-        key(a).cmp(&key(b)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-    let signatories = sigs.read().clone().unwrap_or_default();
-    let signer_for = move |g: &str| -> (String, String) {
-        signatories
-            .iter()
-            .find(|v| v["projectGroups"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(g))))
-            .or_else(|| signatories.first())
-            .map(|v| (s(v, "name"), s(v, "signatureUrl")))
-            .unwrap_or_default()
-    };
-    let date = if kind() == "tomorrow" { util::long_day(chrono::Utc::now() + chrono::Duration::days(1)) } else { util::long_day(chrono::Utc::now()) };
-    let mut sections: Vec<(String, Vec<Worker>)> = vec![];
-    for w in chosen.iter().cloned() {
-        let key = if by_residence { if w.residence.is_empty() { "No residence".to_string() } else { w.residence.clone() } } else { w.project_group.clone() };
-        match sections.last_mut() {
-            Some((k, list)) if *k == key => list.push(w),
-            _ => sections.push((key, vec![w])),
-        }
-    }
-    let paper = match kind() {
-        "id" | "family" => "size: A4; margin: 10mm",
-        _ => "size: 8.5in 13in; margin: 0.4in",
-    };
-    rsx! {
-        div { class: "flex flex-wrap items-end gap-3 no-print",
-            div {
-                label { class: "label", r#for: "print-kind", "Print" }
-                select { id: "print-kind", class: "field", "data-testid": "print-kind",
-                    onchange: move |e| kind.set(match e.value().as_str() { "jo" => "jo", "tomorrow" => "tomorrow", "residential" => "residential", "family" => "family", _ => "id" }),
-                    option { value: "id", selected: kind() == "id", "ID cards" }
-                    option { value: "jo", selected: kind() == "jo", "Job orders by group (4 per folio page)" }
-                    option { value: "tomorrow", selected: kind() == "tomorrow", "Tomorrow's job orders" }
-                    option { value: "residential", selected: kind() == "residential", "Residential job orders" }
-                    option { value: "family", selected: kind() == "family", "Family roster" }
-                }
-            }
-            div {
-                label { class: "label", r#for: "print-group", "Project group" }
-                select { id: "print-group", class: "field", "data-testid": "print-group", onchange: move |e| group.set(e.value()),
-                    option { value: "", "Everyone" }
-                    for g in groups { option { key: "{g}", value: "{g}", "{g}" } }
-                }
-            }
-            button { class: "btn-primary", "data-testid": "print-now", onclick: move |_| print_with(paper), Icon { name: "archive" } "Print" }
-        }
-        match kind() {
-            "id" => rsx! {
-                div { class: "grid grid-cols-2 sm:grid-cols-3 gap-4 print-grid-ids", "data-testid": "id-cards",
-                    for w in chosen {
-                        div { key: "{w.id}", class: "id-card card p-4 flex gap-3 break-inside-avoid",
-                            if w.has_photo { img { src: "/api/workers/{w.id}/photo", alt: "", class: "w-16 h-20 object-cover rounded" } }
-                            div { class: "space-y-1 min-w-0",
-                                p { class: "text-[10px] uppercase tracking-wider text-muted", "SiteMonitor · Workforce ID" }
-                                p { class: "text-lg font-semibold leading-tight", "{w.name}" }
-                                p { class: "text-sm tabular", "A# {w.a_number}" }
-                                p { class: "text-xs text-muted", "{w.trade} · {w.project_group}" }
-                            }
-                        }
-                    }
-                }
-            },
-            "family" => rsx! {
-                p { class: "font-semibold print-only", "Family roster — {date}" }
-                Table { head: vec!["Name", "A#", "Group", "Spouse", "Father", "Mother", "Emergency contact"],
-                    rows: family.read().clone().unwrap_or_default().iter().map(|v| (s(v, "aNumber") + &s(v, "name"), vec![
-                        s(v, "name"), s(v, "aNumber"), s(v, "group"), s(v, "spouseName"), s(v, "fatherName"), s(v, "motherName"),
-                        format!("{} {}", s(v, "emergencyContact"), s(v, "emergencyPhone")).trim().to_string(),
-                    ])).collect() }
-            },
-            _ => rsx! {
-                if sections.is_empty() {
-                    div { class: "card", EmptyState { icon: "archive", title: "Nothing to print", body: if kind() == "tomorrow" { "Set tomorrow's assignments on the Tomorrow tab first." } else { "No people match." } } }
-                }
-                for (key, list) in sections {
-                    {
-                        let (signer, signature) = signer_for(&key);
-                        rsx! {
-                            section { key: "{key}", class: "space-y-2",
-                                p { class: "font-semibold no-print", "{key}" span { class: "text-muted font-normal ml-2", "signed by {signer}" } }
-                                div { class: "grid sm:grid-cols-2 gap-4 job-orders", "data-testid": "job-orders",
-                                    for w in list {
-                                        div { key: "{w.id}", class: "job-order card p-4 space-y-2 break-inside-avoid",
-                                            p { class: "font-semibold text-center", "JOB ORDER" }
-                                            p { class: "text-sm", "Name: " b { "{w.name}" } " · A# {w.a_number}" }
-                                            p { class: "text-sm", "Trade: {w.trade}" }
-                                            p { class: "text-sm", "Project group: {w.project_group}" }
-                                            if by_residence { p { class: "text-sm", "Residence: {w.residence}" } } else { p { class: "text-sm", "Area: {w.area}" } }
-                                            if !w.tomorrow.is_empty() { p { class: "text-sm", "Task: {w.tomorrow}" } }
-                                            p { class: "text-sm", "Date: {date}" }
-                                            div { class: "pt-2 border-t border-line text-center",
-                                                if signature.starts_with("data:image/") { img { src: "{signature}", alt: "Signature", class: "h-10 mx-auto object-contain" } }
-                                                p { class: "text-sm", "{signer}" }
-                                                p { class: "text-xs text-muted", "Signatory" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
         }
     }
 }

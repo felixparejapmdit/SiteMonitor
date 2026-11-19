@@ -32,6 +32,48 @@ pub struct OfflineMutation {
     pub queued_at: DateTime<Utc>,
 }
 
+// Queued writes can hold personal details, so they are encrypted at rest with
+// AES-256-GCM (WebCrypto). The key is made on this device, cannot be exported,
+// and is kept in its own IndexedDB store. WebCrypto needs HTTPS (or localhost);
+// on a plain-HTTP address the queue falls back to storing the text as is.
+#[wasm_bindgen(inline_js = r#"
+function req(r) { return new Promise((ok, no) => { r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }); }
+async function key() {
+  const open = indexedDB.open("sitemonitor-keys", 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("k");
+  const db = await req(open);
+  let k = await req(db.transaction("k").objectStore("k").get("queue"));
+  if (!k) {
+    k = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    await req(db.transaction("k", "readwrite").objectStore("k").put(k, "queue"));
+  }
+  db.close();
+  return k;
+}
+function b64(bytes) { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); }
+export async function seal_text(text) {
+  if (!(globalThis.crypto && crypto.subtle)) return text;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), new TextEncoder().encode(text)));
+  const all = new Uint8Array(12 + ct.length);
+  all.set(iv);
+  all.set(ct, 12);
+  return "smq1:" + b64(all);
+}
+export async function open_text(s) {
+  if (!s.startsWith("smq1:")) return s;
+  const raw = Uint8Array.from(atob(s.slice(5)), (c) => c.charCodeAt(0));
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: raw.subarray(0, 12) }, await key(), raw.subarray(12));
+  return new TextDecoder().decode(pt);
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen(catch)]
+    async fn seal_text(text: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch)]
+    async fn open_text(sealed: &str) -> Result<JsValue, JsValue>;
+}
+
 fn js_err(e: JsValue) -> String {
     e.as_string().unwrap_or_else(|| format!("{e:?}"))
 }
@@ -78,11 +120,13 @@ async fn open() -> Result<IdbDatabase, String> {
 
 /// Adds a mutation to the end of the queue.
 pub async fn enqueue(m: &OfflineMutation) -> Result<(), String> {
+    // Encrypt before opening the transaction: an IndexedDB transaction closes while we await.
+    let json = serde_json::to_string(m).map_err(|e| e.to_string())?;
+    let sealed = seal_text(&json).await.map_err(js_err)?;
     let db = open().await?;
     let tx = db.transaction_with_str_and_mode(STORE, IdbTransactionMode::Readwrite).map_err(js_err)?;
     let store = tx.object_store(STORE).map_err(js_err)?;
-    let json = serde_json::to_string(m).map_err(|e| e.to_string())?;
-    let req = store.add(&JsValue::from_str(&json)).map_err(js_err)?;
+    let req = store.add(&sealed).map_err(js_err)?;
     request_done(&req).await.map_err(js_err)?;
     db.close();
     Ok(())
@@ -100,7 +144,9 @@ pub async fn list() -> Result<Vec<OfflineMutation>, String> {
     let values = js_sys::Array::from(&values);
     let mut out = Vec::new();
     for i in 0..values.length() {
-        let Some(text) = values.get(i).as_string() else { continue };
+        let Some(stored) = values.get(i).as_string() else { continue };
+        // Unreadable entries (e.g. the device key was cleared) are skipped, not fatal.
+        let Some(text) = open_text(&stored).await.ok().and_then(|v| v.as_string()) else { continue };
         if let Ok(mut m) = serde_json::from_str::<OfflineMutation>(&text) {
             m.key = keys.get(i).as_f64().unwrap_or_default();
             out.push(m);

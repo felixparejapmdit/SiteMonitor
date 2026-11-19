@@ -3,9 +3,12 @@
 pub mod agenda;
 pub mod media;
 pub mod progress;
+pub mod package;
 pub mod scheduler;
+pub mod vault;
 pub mod status;
 pub mod workforce;
+pub mod workforce_sample;
 
 use chrono::{DateTime, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set};

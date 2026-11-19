@@ -164,7 +164,10 @@ test("print set-ups: landscape attendance sheet and 4-up folio job orders @safar
 
   await page.getByTestId("tab-Print").click();
   await page.getByTestId("print-kind").selectOption("jo");
-  await expect(page.locator(".job-order")).toHaveCount(4);
+  // Job orders go only to people present today (Service 5 eligibility); the rest are listed.
+  await expect(page.locator(".job-order").filter({ hasText: "Pedro Leader" })).toHaveCount(1);
+  await expect(page.locator(".job-order").filter({ hasText: "Ben Member" })).toHaveCount(0);
+  await expect(page.getByTestId("print-left-out")).toContainText("Ben Member (absent)");
   await page.getByTestId("print-now").click();
   await expect.poll(() => page.evaluate(() => document.getElementById("print-page")?.textContent)).toContain("8.5in 13in");
   expect(await page.evaluate(() => (window as any).__printed)).toBe(true);

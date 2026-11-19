@@ -69,6 +69,21 @@ pub fn client_id() -> &'static str {
 }
 
 /// POSTs a chosen file as the raw request body (big backups: no base64, no JSON).
+/// The passphrase header for encrypted backups (hex keeps any character safe in a header).
+pub fn passphrase_header(pass: &str) -> Vec<(&'static str, String)> {
+    if pass.is_empty() { vec![] } else { vec![("x-backup-passphrase", pass.bytes().map(|b| format!("{b:02x}")).collect())] }
+}
+
+/// A request with extra headers and no body (e.g. an encrypted backup download).
+pub async fn send_with(method: &str, path: &str, headers: &[(&str, String)]) -> Result<String, ApiFail> {
+    let mut builder = RequestBuilder::new(&format!("/api{path}")).method(if method == "POST" { Method::POST } else { Method::GET });
+    for (k, v) in headers {
+        builder = builder.header(k, v);
+    }
+    let request = builder.build().map_err(|_| ApiFail::Server(0, "Could not prepare the request.".into()))?;
+    deliver(path, request, 600_000).await
+}
+
 pub async fn upload(path: &str, file: &web_sys::File, headers: &[(&str, String)]) -> Result<String, ApiFail> {
     let mut builder = RequestBuilder::new(&format!("/api{path}")).method(Method::POST).header("content-type", "application/octet-stream");
     for (k, v) in headers {

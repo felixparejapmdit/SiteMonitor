@@ -20,8 +20,8 @@ use shared::api::{ImportMode, WorkforceImportReport};
 use shared::WorkerStatus;
 use uuid::Uuid;
 
-use crate::convert::enc;
 use crate::error::{AppError, AppResult};
+use crate::services::vault;
 
 /// Per-device screen state in Service 5, not data.
 const SKIP: &[&str] = &["dashboard_dismissed", "dashboard_dismissed_event_ids", "dashboard_dismissed_visit_ids"];
@@ -66,6 +66,27 @@ pub fn read(bytes: &[u8], passphrase: Option<&str>) -> AppResult<Normalized> {
 
 /// `.agwcz` archives from Service 5's `js/crypto.js`: PBKDF2-HMAC-SHA256 →
 /// AES-256-GCM, with a SHA-256 of the plaintext for an integrity check.
+/// The reverse of `decrypt_agwcz`: an encrypted backup in the format Service 5
+/// writes (PBKDF2-HMAC-SHA256, 600,000 rounds, AES-256-GCM, SHA-256 of the plain text).
+pub fn encrypt_agwcz(data: &Value, passphrase: &str) -> AppResult<Value> {
+    use aes_gcm::aead::{rand_core::RngCore, OsRng};
+    if passphrase.chars().count() < 8 {
+        return Err(AppError::bad("Use a passphrase of at least 8 characters."));
+    }
+    let plain = serde_json::to_vec(data).map_err(|e| AppError::bad(e.to_string()))?;
+    let (mut salt, mut iv) = ([0u8; 16], [0u8; 12]);
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut iv);
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), &salt, 600_000, &mut key);
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| AppError::bad("Could not encrypt the backup."))?;
+    let ct = cipher.encrypt(Nonce::from_slice(&iv), plain.as_ref()).map_err(|_| AppError::bad("Could not encrypt the backup."))?;
+    Ok(json!({
+        "_isAgwcEncrypted": true, "format": "agwcz", "version": 1, "algo": "AES-GCM", "kdf": "PBKDF2-HMAC-SHA256", "iterations": 600_000,
+        "salt": B64.encode(salt), "iv": B64.encode(iv), "sha256": hex(&Sha256::digest(&plain)), "data": B64.encode(ct),
+    }))
+}
+
 pub fn decrypt_agwcz(env: &Value, passphrase: &str) -> AppResult<Value> {
     let field = |k: &str| -> AppResult<Vec<u8>> {
         let s = env.get(k).and_then(Value::as_str).ok_or_else(|| AppError::bad(format!("The encrypted backup is missing its \"{k}\".")))?;
@@ -129,6 +150,17 @@ fn read_sqlite(bytes: &[u8]) -> AppResult<(Value, Vec<(String, Value)>)> {
 
 /// Service 5's `LEGACY_KEY_MAP` plus its `wc_` / `_data` storage names, so
 /// every generation of key lands in one collection.
+fn custom_list_field(c: &str) -> Option<&'static str> {
+    Some(match c {
+        "custom_trades" => "trades",
+        "custom_trade_groups" => "tradeGroups",
+        "custom_housing_groups" => "housingGroups",
+        "custom_work_residences" => "workResidences",
+        "custom_woodland_shops" => "woodlandShops",
+        _ => return None,
+    })
+}
+
 pub fn canonical(key: &str) -> String {
     let mapped = match key {
         "workersData" | "workers_data" | "wc_workers_data" => "workers",
@@ -185,6 +217,17 @@ pub fn normalize(raw: Value) -> AppResult<Normalized> {
         }
         let c = canonical(&key);
         if SKIP.contains(&c.as_str()) {
+            continue;
+        }
+        // Service 5 also keeps each pick list under its own key (wc_custom_trades, …):
+        // they become fields of the one custom_datalists record.
+        if let Some(field) = custom_list_field(&c) {
+            if let Value::Array(items) = value {
+                let slot = dicts.entry("custom_datalists".into()).or_default();
+                if !items.is_empty() && slot.get(field).is_none_or(|v| v.as_array().is_none_or(Vec::is_empty)) {
+                    slot.insert(field.into(), Value::Array(items));
+                }
+            }
             continue;
         }
         match value {
@@ -351,29 +394,161 @@ pub fn stable_uuid(text: &str) -> Uuid {
     uuid::Builder::from_random_bytes(b).into_uuid()
 }
 
-/// The typed columns of one worker row, taken from a Service 5 record.
-fn worker_row(w: &Value) -> Value {
-    let wid = str_of(w, "workerId");
-    let id = Uuid::parse_str(&wid).unwrap_or_else(|_| stable_uuid(&format!("wid:{wid}")));
-    let trade = match str_of(w, "trade") {
+/// One person as stored: the full Service 5 record, decrypted.
+#[derive(Clone, Debug)]
+pub struct Person {
+    pub id: Uuid,
+    pub updated_at: DateTime<Utc>,
+    pub p: Value,
+}
+
+fn flag(v: &Value) -> bool {
+    v.as_bool() == Some(true) || v.as_str() == Some("true")
+}
+
+/// What the screens show for a person, worked out from the stored record
+/// (the record is encrypted, so this happens here rather than in SQL).
+pub fn worker_of(x: &Person) -> shared::Worker {
+    let w = &x.p;
+    let s = |k: &str| str_of(w, k);
+    let first = |a: &str, b: &str| if s(a).is_empty() { s(b) } else { s(a) };
+    let trade = match s("trade") {
         t if !t.is_empty() => t,
         _ => w.get("trades").and_then(Value::as_array).and_then(|a| a.first()).and_then(scalar).unwrap_or_default(),
     };
-    let role = match str_of(w, "groupRole") {
-        r if !r.is_empty() => r,
-        _ => str_of(w, "projectRole"),
+    let tomorrow = match &w["tomorrowAssignment"] {
+        Value::Object(o) => o.get("specificTask").and_then(scalar).unwrap_or_default(),
+        Value::String(t) => t.clone(),
+        _ => String::new(),
     };
-    let status = WorkerStatus::from_legacy(&match str_of(w, "dailyStatus") {
-        s if !s.is_empty() => s,
-        _ => str_of(w, "status"),
-    });
-    let archived = [w.get("archived"), w.get("isArchived")].into_iter().flatten().any(|v| v.as_bool() == Some(true));
-    json!({
-        "id": id, "a_number": str_of(w, "aNumber"), "name": str_of(w, "name"), "phone": str_of(w, "phone"),
-        "trade": trade, "department": str_of(w, "department"), "area": str_of(w, "area"),
-        "project_group": str_of(w, "projectGroup"), "group_role": role, "daily_status": enc(&status),
-        "archived": archived, "profile": w,
-    })
+    shared::Worker {
+        id: x.id,
+        a_number: s("aNumber"),
+        name: s("name"),
+        phone: s("phone"),
+        trade,
+        department: s("department"),
+        area: s("area"),
+        project_group: s("projectGroup"),
+        group_role: first("groupRole", "projectRole"),
+        status: WorkerStatus::from_legacy(&first("dailyStatus", "status")),
+        archived: flag(&w["archived"]) || flag(&w["isArchived"]),
+        updated_at: x.updated_at,
+        has_photo: s("photoUrl").starts_with("data:image/"),
+        tomorrow,
+        residence: first("workResidence", "residence"),
+        task: s("specificTask"),
+        project: s("project"),
+        remarks: s("absentReason"),
+        spouse: s("spouseName"),
+        housing: s("visitationHousing"),
+        visit_group: s("visitationGroup"),
+        visit_role: s("visitationRole"),
+        archive_category: s("archiveCategory"),
+        medical: s("medical"),
+        birthday: s("birthday"),
+        hourly_rate: w["hourlyRate"].as_f64().or_else(|| s("hourlyRate").parse().ok()),
+        skill_level: s("skillLevel"),
+        job_order: !(s("jOrder") == "NO" || w["issueJobOrder"].as_bool() == Some(false) || s("issueJobOrder") == "false"),
+        assigned_today: flag(&w["isAssignedToday"]),
+        task_since: s("taskStartedAt"),
+        stale_off: flag(&w["disableStaleAlerts"]),
+    }
+}
+
+fn person_of(r: &sea_orm::QueryResult) -> AppResult<Person> {
+    Ok(Person { id: r.try_get("", "id")?, updated_at: r.try_get("", "updated_at")?, p: vault::open(r.try_get("", "profile")?)? })
+}
+
+/// Everyone, decrypted.
+pub async fn people<C: ConnectionTrait>(db: &C) -> AppResult<Vec<Person>> {
+    let rows = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT id, updated_at, profile FROM workers")).await?;
+    rows.iter().map(person_of).collect()
+}
+
+pub async fn person<C: ConnectionTrait>(db: &C, id: Uuid) -> AppResult<Option<Person>> {
+    let row = db.query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres, "SELECT id, updated_at, profile FROM workers WHERE id = $1", [id.into()])).await?;
+    row.as_ref().map(person_of).transpose()
+}
+
+/// Stores a person encrypted. The plain columns of the table are left blank,
+/// so nothing about the person can be read from the database without the key.
+pub async fn save_person<C: ConnectionTrait>(db: &C, id: Uuid, p: &Value) -> AppResult<()> {
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        "INSERT INTO workers (id, a_number, name, phone, trade, department, area, project_group, group_role, daily_status, archived, profile, updated_at)
+         VALUES ($1, '', '', '', '', '', '', '', '', 'Present', false, $2, now())
+         ON CONFLICT (id) DO UPDATE SET a_number = '', name = '', phone = '', trade = '', department = '', area = '', project_group = '',
+           group_role = '', daily_status = 'Present', archived = false, profile = EXCLUDED.profile, updated_at = now()",
+        [id.into(), vault::seal(p)?.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+/// Encrypts personnel data stored before encryption was switched on (runs at start-up).
+pub async fn seal_existing(db: &DatabaseConnection) -> AppResult<usize> {
+    let mut n = 0;
+    let rows = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT id, updated_at, profile FROM workers WHERE jsonb_typeof(profile) <> 'string'")).await?;
+    for r in &rows {
+        let x = person_of(r)?;
+        save_person(db, x.id, &x.p).await?;
+        n += 1;
+    }
+    let rows = db
+        .query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT collection, id, data FROM workforce_records WHERE jsonb_typeof(data) <> 'string'"))
+        .await?;
+    for r in &rows {
+        let (c, id, data): (String, String, Value) = (r.try_get("", "collection")?, r.try_get("", "id")?, r.try_get("", "data")?);
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "UPDATE workforce_records SET data = $3 WHERE collection = $1 AND id = $2",
+            [c.into(), id.into(), vault::seal(&data)?.into()],
+        ))
+        .await?;
+        n += 1;
+    }
+    let rows = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT id, data FROM workforce_snapshots WHERE jsonb_typeof(data) <> 'string'")).await?;
+    for r in &rows {
+        let (id, data): (Uuid, Value) = (r.try_get("", "id")?, r.try_get("", "data")?);
+        db.execute(Statement::from_sql_and_values(DatabaseBackend::Postgres, "UPDATE workforce_snapshots SET data = $2 WHERE id = $1", [id.into(), vault::seal(&data)?.into()]))
+            .await?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// How much personnel data could be read from the database without the key:
+/// rows not encrypted, and plain columns that are not blank. All should be 0.
+pub async fn plain_counts(db: &DatabaseConnection) -> AppResult<Value> {
+    let n = |sql: &'static str| async move {
+        let row = db.query_one(Statement::from_string(DatabaseBackend::Postgres, sql)).await?;
+        AppResult::Ok(row.and_then(|r| r.try_get::<i64>("", "n").ok()).unwrap_or(0))
+    };
+    Ok(json!({
+        "workers": n("SELECT COUNT(*) AS n FROM workers").await?,
+        "workers_plain": n("SELECT COUNT(*) AS n FROM workers WHERE jsonb_typeof(profile) <> 'string' OR name <> '' OR a_number <> '' OR phone <> ''").await?,
+        "records": n("SELECT COUNT(*) AS n FROM workforce_records").await?,
+        "records_plain": n("SELECT COUNT(*) AS n FROM workforce_records WHERE jsonb_typeof(data) <> 'string'").await?,
+        "snapshots_plain": n("SELECT COUNT(*) AS n FROM workforce_snapshots WHERE jsonb_typeof(data) <> 'string'").await?,
+    }))
+}
+
+/// A snapshot, decrypted.
+pub async fn snapshot_data<C: ConnectionTrait>(db: &C, id: Uuid) -> AppResult<Option<Value>> {
+    let row = db.query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres, "SELECT data FROM workforce_snapshots WHERE id = $1", [id.into()])).await?;
+    row.map(|r| vault::open(r.try_get("", "data")?)).transpose()
+}
+
+/// Every snapshot as (taken at, decrypted data), oldest first.
+pub async fn all_snapshots<C: ConnectionTrait>(db: &C) -> AppResult<Vec<(DateTime<Utc>, Value)>> {
+    let rows = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT taken_at, data FROM workforce_snapshots ORDER BY taken_at")).await?;
+    rows.iter().map(|r| Ok((r.try_get("", "taken_at")?, vault::open(r.try_get("", "data")?)?))).collect()
+}
+
+fn worker_id(w: &Value) -> Uuid {
+    let wid = str_of(w, "workerId");
+    Uuid::parse_str(&wid).unwrap_or_else(|_| stable_uuid(&format!("wid:{wid}")))
 }
 
 // ------------------------------------------------------------------ writing
@@ -397,27 +572,16 @@ pub async fn import(db: &DatabaseConnection, data: Normalized, mode: ImportMode,
         }
     } else {
         // A# matches keep the ids of workers that were added in SiteMonitor first.
-        let by_a: HashMap<String, Uuid> = query_pairs(&txn, "SELECT a_number, id::text FROM workers WHERE a_number <> ''")
-            .await?
-            .into_iter()
-            .filter_map(|(a, id)| Uuid::parse_str(&id).ok().map(|id| (a, id)))
-            .collect();
-        let rows: Vec<Value> = data
-            .workers
-            .iter()
-            .map(|w| {
-                let mut r = worker_row(w);
-                if let Some(id) = by_a.get(&str_of(w, "aNumber")) {
-                    r["id"] = json!(id);
-                    r["profile"]["workerId"] = json!(id);
-                }
-                r
-            })
-            .collect();
+        let by_a: HashMap<String, Uuid> = people(&txn).await?.into_iter().map(|x| (str_of(&x.p, "aNumber"), x.id)).filter(|(a, _)| !a.is_empty()).collect();
         if mode == ImportMode::Replace {
             txn.execute_unprepared("DELETE FROM workers").await?;
         }
-        exec(&txn, UPSERT_WORKERS, Value::Array(rows)).await?;
+        for w in &data.workers {
+            let mut w = w.clone();
+            let id = by_a.get(&str_of(&w, "aNumber")).copied().unwrap_or_else(|| worker_id(&w));
+            w["workerId"] = json!(id);
+            save_person(&txn, id, &w).await?;
+        }
         report.workers = data.workers.len();
     }
 
@@ -437,7 +601,7 @@ pub async fn import(db: &DatabaseConnection, data: Normalized, mode: ImportMode,
         if mode == ImportMode::Replace {
             exec(&txn, "DELETE FROM workforce_records WHERE collection = ($1::jsonb ->> 0)", json!([c])).await?;
         }
-        let rows: Vec<Value> = items.iter().map(|(id, v)| json!({ "c": c, "id": id, "v": v })).collect();
+        let rows: Vec<Value> = items.iter().map(|(id, v)| Ok(json!({ "c": c, "id": id, "v": vault::seal(v)? }))).collect::<AppResult<_>>()?;
         exec(&txn, UPSERT_RECORDS, Value::Array(rows)).await?;
         report.collections.push((c.clone(), items.len()));
     }
@@ -450,23 +614,13 @@ pub async fn import(db: &DatabaseConnection, data: Normalized, mode: ImportMode,
             "INSERT INTO workforce_snapshots (id, taken_at, reason, workers, data)
              SELECT $1, ($2 || 'T23:59:00')::timestamptz, $3, $4, $5
              WHERE NOT EXISTS (SELECT 1 FROM workforce_snapshots WHERE reason = $3)",
-            [Uuid::new_v4().into(), date.clone().into(), reason.into(), workers.into(), snap.clone().into()],
+            [Uuid::new_v4().into(), date.clone().into(), reason.into(), workers.into(), vault::seal(snap)?.into()],
         ))
         .await?;
     }
     txn.commit().await?;
     Ok(report)
 }
-
-const UPSERT_WORKERS: &str = r#"
-INSERT INTO workers (id, a_number, name, phone, trade, department, area, project_group, group_role, daily_status, archived, profile, updated_at)
-SELECT (e->>'id')::uuid, e->>'a_number', e->>'name', e->>'phone', e->>'trade', e->>'department', e->>'area',
-       e->>'project_group', e->>'group_role', e->>'daily_status', (e->>'archived')::boolean, e->'profile', now()
-FROM jsonb_array_elements($1::jsonb) e
-ON CONFLICT (id) DO UPDATE SET a_number = EXCLUDED.a_number, name = EXCLUDED.name, phone = EXCLUDED.phone,
-    trade = EXCLUDED.trade, department = EXCLUDED.department, area = EXCLUDED.area, project_group = EXCLUDED.project_group,
-    group_role = EXCLUDED.group_role, daily_status = EXCLUDED.daily_status, archived = EXCLUDED.archived,
-    profile = EXCLUDED.profile, updated_at = now()"#;
 
 const UPSERT_RECORDS: &str = r#"
 INSERT INTO workforce_records (collection, id, data, updated_at)
@@ -480,16 +634,25 @@ pub async fn export<C: ConnectionTrait>(db: &C) -> AppResult<Value> {
     out.insert("format".into(), json!("sitemonitor-workforce"));
     out.insert("version".into(), json!(11));
     out.insert("exportedAt".into(), json!(Utc::now().to_rfc3339()));
-    let workers = query_json(db, "SELECT COALESCE(jsonb_agg(profile || jsonb_build_object('workerId', id::text) ORDER BY name), '[]'::jsonb) AS j FROM workers").await?;
-    out.insert("workers".into(), workers);
-    let per = query_json(
-        db,
-        "SELECT COALESCE(jsonb_object_agg(collection, items), '{}'::jsonb) AS j FROM (
-           SELECT collection, jsonb_agg(data ORDER BY id) AS items FROM workforce_records GROUP BY collection) t",
-    )
-    .await?;
-    if let Value::Object(per) = per {
+    let mut workers: Vec<Value> = people(db)
+        .await?
+        .into_iter()
+        .map(|x| {
+            let mut p = x.p;
+            p["workerId"] = json!(x.id.to_string());
+            p
+        })
+        .collect();
+    workers.sort_by_key(|w| str_of(w, "name").to_lowercase());
+    out.insert("workers".into(), Value::Array(workers));
+    let rows = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT collection, data FROM workforce_records ORDER BY collection, id")).await?;
+    let mut per: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for r in &rows {
+        per.entry(r.try_get("", "collection")?).or_default().push(vault::open(r.try_get("", "data")?)?);
+    }
+    {
         for (c, items) in per {
+            let items = Value::Array(items);
             // A dictionary collection is stored as its single "_" row.
             let v = match items {
                 Value::Array(mut a) if is_dict(&c) && a.len() == 1 && a[0].is_object() => a.remove(0),
@@ -528,7 +691,7 @@ pub async fn list_records<C: ConnectionTrait>(db: &C, collection: &str) -> AppRe
             [collection.into()],
         ))
         .await?;
-    Ok(rows.into_iter().filter_map(|r| r.try_get::<Value>("", "data").ok()).collect())
+    rows.iter().map(|r| vault::open(r.try_get("", "data")?)).collect()
 }
 
 /// Writes one record. Last write wins; the record is stamped with the time and
@@ -551,7 +714,7 @@ pub async fn put_record<C: ConnectionTrait>(db: &C, collection: &str, id: &str, 
         DatabaseBackend::Postgres,
         "INSERT INTO workforce_records (collection, id, data, updated_at) VALUES ($1, $2, $3, now())
          ON CONFLICT (collection, id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()",
-        [collection.into(), id.into(), data.clone().into()],
+        [collection.into(), id.into(), vault::seal(&data)?.into()],
     ))
     .await?;
     Ok(data)
@@ -588,7 +751,7 @@ async fn snapshot_in<C: ConnectionTrait>(db: &C, reason: &str) -> AppResult<Uuid
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Postgres,
         "INSERT INTO workforce_snapshots (id, reason, workers, data) VALUES ($1, $2, $3, $4)",
-        [id.into(), reason.into(), workers.into(), data.into()],
+        [id.into(), reason.into(), workers.into(), vault::seal(&data)?.into()],
     ))
     .await?;
     db.execute(Statement::from_sql_and_values(
@@ -608,11 +771,6 @@ async fn exec<C: ConnectionTrait>(db: &C, sql: &str, arg: Value) -> AppResult<()
 async fn count<C: ConnectionTrait>(db: &C, sql: &str) -> AppResult<i64> {
     let row = db.query_one(Statement::from_string(DatabaseBackend::Postgres, sql)).await?;
     Ok(row.and_then(|r| r.try_get::<i64>("", "n").ok()).unwrap_or(0))
-}
-
-async fn query_json<C: ConnectionTrait>(db: &C, sql: &str) -> AppResult<Value> {
-    let row = db.query_one(Statement::from_string(DatabaseBackend::Postgres, sql)).await?;
-    Ok(row.and_then(|r| r.try_get::<Value>("", "j").ok()).unwrap_or(Value::Null))
 }
 
 async fn query_pairs<C: ConnectionTrait>(db: &C, sql: &str) -> AppResult<Vec<(String, String)>> {
@@ -659,9 +817,9 @@ mod tests {
 
         let v1 = normalize(json!([{ "id": "7", "name": "Jun", "status": "Passes" }])).unwrap();
         assert_eq!(v1.label, "Service 5 backup (v1)");
-        let row = worker_row(&v1.workers[0]);
-        assert_eq!(row["a_number"], "7");
-        assert_eq!(row["daily_status"], "OnPass");
+        let w = worker_of(&Person { id: Uuid::nil(), updated_at: Utc::now(), p: v1.workers[0].clone() });
+        assert_eq!(w.a_number, "7");
+        assert_eq!(w.status, WorkerStatus::OnPass);
     }
 
     #[test]
@@ -670,6 +828,17 @@ mod tests {
         assert_eq!(v["volunteerId"], "w9");
         assert_eq!(v["boosterIntervalDays"], 30);
         assert_eq!(v["requiresBooster"], true);
+    }
+
+    #[test]
+    fn separate_pick_lists_fold_into_custom_datalists() {
+        let n = normalize(json!({ "version": 11, "workers": [{ "aNumber": "1", "name": "A" }],
+            "custom_datalists": { "trades": [] }, "wc_custom_trades": ["Mason"], "wc_custom_woodland_shops": ["Paint Shop"] }))
+        .unwrap();
+        let lists = &n.collections["custom_datalists"][0].1;
+        assert_eq!(lists["trades"], json!(["Mason"]));
+        assert_eq!(lists["woodlandShops"], json!(["Paint Shop"]));
+        assert!(!n.collections.contains_key("custom_trades"));
     }
 
     #[test]

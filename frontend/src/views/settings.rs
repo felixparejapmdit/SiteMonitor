@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use shared::*;
 
 use crate::api;
-use crate::components::ui::{Icon, Modal, Spinner};
+use crate::components::ui::{current_tab, Icon, Modal, PageTabs, Spinner};
 use crate::services::sync;
 use crate::state::use_app;
 use crate::Route;
@@ -19,6 +19,8 @@ pub fn SettingsView() -> Element {
     let saved = app.settings.read().clone();
     let d = draft();
     let dirty = d != saved;
+    let tabs = crate::views::settings_tabs(app);
+    let tab = current_tab("settings", &tabs);
 
     let save = move |_| async move {
         busy.set(true);
@@ -40,7 +42,9 @@ pub fn SettingsView() -> Element {
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Settings" }
                 p { class: "text-[15px] text-muted", "When the automatic jobs run, and the choices people pick from." }
             }
+            PageTabs { page: "settings", tabs: tabs.clone() }
 
+            if tab == "General" {
             Section { title: "Automatic jobs", hint: "Times are in the estate's local time. Changes start from the next minute.",
                 div { class: "grid sm:grid-cols-2 gap-4",
                     TimeField { id: "t-reset", label: "Crew reset", hint: "Clears yesterday's crew numbers.", value: d.roster_reset_time.clone(),
@@ -54,6 +58,8 @@ pub fn SettingsView() -> Element {
                 }
             }
 
+            }
+            if tab == "Crew" {
             Section { title: "Reasons for moving workers", hint: "Offered as quick choices on the Crew page. People can still type their own.",
                 div { class: "space-y-2 max-w-xl",
                     for (i, r) in d.crew_move_reasons.iter().enumerate() {
@@ -73,6 +79,8 @@ pub fn SettingsView() -> Element {
                 }
             }
 
+            }
+            if tab == "Issues" {
             Section { title: "Issue categories", hint: "Rename the categories used when reporting issues. Leave blank to keep the built-in name.",
                 div { class: "divide-y divide-line border-y border-line max-w-xl",
                     for c in AlertCategory::ALL {
@@ -86,6 +94,8 @@ pub fn SettingsView() -> Element {
                 }
             }
 
+            }
+            if tab == "Schedule" {
             Section { title: "Schedule event types", hint: "Rename the event types on the schedule. Leave blank to keep the built-in name.",
                 div { class: "divide-y divide-line border-y border-line max-w-xl",
                     for k in AgendaEventType::ALL {
@@ -99,18 +109,25 @@ pub fn SettingsView() -> Element {
                 }
             }
 
-            if app.can(Permission::ManageWorkforce) {
+            }
+            if tab == "Workforce data" {
                 Section { title: "Workforce data", hint: "Personnel records merged from Service 5 DB: import its backups, download a backup, and go back to an earlier snapshot.",
                     crate::views::personnel::WorkforceData {}
                 }
             }
 
+            if tab == "Backup & restore" {
+                Section { title: "Backup & restore", hint: "Move the whole SiteMonitor (estate, projects, personnel, clinic, photos) to another machine, or keep a copy, as one encrypted package. Share the package and its passphrase directly with your team, never through GitHub.",
+                    BackupRestore {}
+                }
+            }
+            if tab == "Estate data" {
             Section { title: "Estate data", hint: "Try SiteMonitor with a ready-made estate, or wipe it and set up your own. People, their sign-ins and these settings are always kept.",
                 div { class: "divide-y divide-line border-y border-line", "data-testid": "estate-data",
                     div { class: "flex flex-wrap items-center gap-x-6 gap-y-3 py-3",
                         div { class: "flex-1 min-w-[16rem]",
                             p { class: "text-sm font-medium", "Load sample data" }
-                            p { class: "text-sm text-muted", "Replaces the map, zones, projects, reports, photos, equipment and schedule with a sample estate, worked by your current team." }
+                            p { class: "text-sm text-muted", "Replaces the estate (map, zones, projects, reports, photos, equipment, schedule) and the workforce (personnel, groups, duty, overtime, visitations, clinic) with matching sample data, worked by your current team. A workforce snapshot is kept first." }
                         }
                         button { class: "btn-secondary", "data-testid": "load-sample", onclick: move |_| confirm.set(Some(Reset::Sample)),
                             Icon { name: "sparkles" }
@@ -129,10 +146,12 @@ pub fn SettingsView() -> Element {
                     }
                 }
             }
+            }
             if let Some(kind) = confirm() {
                 ConfirmReset { kind, on_close: move |_| confirm.set(None) }
             }
 
+            if dirty || ["General", "Crew", "Issues", "Schedule"].contains(&tab) {
             div { class: "sticky bottom-16 md:bottom-0 z-20 -mx-4 sm:-mx-6 lg:-mx-10 px-4 sm:px-6 lg:px-10 py-3 bg-page/95 backdrop-blur border-t border-line flex items-center justify-end gap-2",
                 if dirty { span { class: "text-sm text-muted mr-auto", "You have unsaved changes." } }
                 button { class: "btn-ghost h-10 px-4", disabled: !dirty || busy(), onclick: move |_| draft.set(app.settings.peek().clone()), "Undo changes" }
@@ -140,6 +159,7 @@ pub fn SettingsView() -> Element {
                     if busy() { Spinner {} }
                     "Save settings"
                 }
+            }
             }
         }
     }
@@ -161,7 +181,7 @@ fn ConfirmReset(kind: Reset, on_close: EventHandler<()>) -> Element {
     let (title, body, word, action, path, done) = match kind {
         Reset::Sample => (
             "Load sample data?",
-            "Everything in the estate (the map, zones, projects, reports, photos, equipment and schedule) is replaced by the sample estate. People, their sign-ins and settings stay.",
+            "Everything in the estate (the map, zones, projects, reports, photos, equipment and schedule) and the workforce (personnel, groups, duty, attendance, overtime, visitations, clinic and signatories) is replaced by matching sample data. A workforce snapshot is kept first. People, their sign-ins and settings stay.",
             "SAMPLE",
             "Replace with sample data",
             "/settings/sample-data",
@@ -236,6 +256,98 @@ fn TimeField(id: &'static str, label: &'static str, hint: &'static str, value: S
             label { class: "label", r#for: id, "{label}" }
             input { id, r#type: "time", class: "field", "data-testid": id, value: "{value}", oninput: move |e| on_change.call(e.value()) }
             p { class: "hint", "{hint}" }
+        }
+    }
+}
+
+/// Encrypted database packages: download one, or restore one made elsewhere.
+#[component]
+fn BackupRestore() -> Element {
+    let app = use_app();
+    let mut pass = use_signal(String::new);
+    let mut pass2 = use_signal(String::new);
+    let mut rpass = use_signal(String::new);
+    let mut word = use_signal(String::new);
+    let mut busy = use_signal(|| None::<&'static str>);
+    let mut result = use_signal(|| None::<serde_json::Value>);
+    let ok_pass = pass().chars().count() >= 8 && pass() == pass2();
+    let make = move |_| async move {
+        busy.set(Some("make"));
+        match api::send_with("POST", "/settings/backup", &api::passphrase_header(&pass())).await {
+            Ok(text) => {
+                crate::views::personnel::save_file(&format!("sitemonitor-{}.smpkg", chrono::Local::now().format("%Y-%m-%d")), &text);
+                app.success("Encrypted package downloaded");
+            }
+            Err(e) => app.error(e.message()),
+        }
+        busy.set(None);
+    };
+    let restore = move |_| async move {
+        let file = match crate::services::media_canvas::backup_file("package-file", 1024.0 * 1_048_576.0) {
+            Ok(Some(f)) => f,
+            Ok(None) => return app.error("Choose the package file first."),
+            Err(e) => return app.error(e),
+        };
+        busy.set(Some("restore"));
+        match api::upload("/settings/restore", &file, &api::passphrase_header(&rpass())).await {
+            Ok(text) => {
+                result.set(serde_json::from_str(&text).ok());
+                app.success("Package restored. Reloading…");
+                gloo_timers::future::TimeoutFuture::new(1200).await;
+                if let Some(w) = web_sys::window() {
+                    let _ = w.location().reload();
+                }
+            }
+            Err(e) => app.error(e.message()),
+        }
+        busy.set(None);
+    };
+    rsx! {
+        div { class: "grid lg:grid-cols-2 gap-6", "data-testid": "backup-restore",
+            div { class: "space-y-3",
+                p { class: "text-sm font-medium", "Make an encrypted package" }
+                p { class: "text-sm text-muted", "Everything in one .smpkg file, encrypted with AES-256-GCM. Without the passphrase nobody can open it, so keep the passphrase safe and send it separately from the file." }
+                div { class: "grid sm:grid-cols-2 gap-3",
+                    div {
+                        label { class: "label", r#for: "pkg-pass", "Passphrase" }
+                        input { id: "pkg-pass", r#type: "password", class: "field", autocomplete: "new-password", "data-testid": "pkg-pass", value: "{pass}", oninput: move |e| pass.set(e.value()) }
+                    }
+                    div {
+                        label { class: "label", r#for: "pkg-pass2", "Type it again" }
+                        input { id: "pkg-pass2", r#type: "password", class: "field", autocomplete: "new-password", "data-testid": "pkg-pass2", value: "{pass2}", oninput: move |e| pass2.set(e.value()) }
+                    }
+                }
+                if !pass().is_empty() && !ok_pass {
+                    p { class: "text-xs text-muted", "At least 8 characters, typed the same twice." }
+                }
+                button { class: "btn-primary", "data-testid": "pkg-make", disabled: !ok_pass || busy().is_some(), onclick: make,
+                    if busy() == Some("make") { Spinner {} } else { Icon { name: "archive" } }
+                    "Download encrypted package"
+                }
+            }
+            div { class: "space-y-3",
+                p { class: "text-sm font-medium", "Restore a package" }
+                p { class: "text-sm text-muted", "Replaces this estate, its personnel and photos with the package. Sign-in accounts here are kept. A workforce snapshot is taken first." }
+                input { id: "package-file", r#type: "file", class: "field py-1.5", accept: ".smpkg,.agwcz,application/json", "data-testid": "pkg-file" }
+                div { class: "grid sm:grid-cols-2 gap-3",
+                    div {
+                        label { class: "label", r#for: "pkg-rpass", "Package passphrase" }
+                        input { id: "pkg-rpass", r#type: "password", class: "field", autocomplete: "off", "data-testid": "pkg-rpass", value: "{rpass}", oninput: move |e| rpass.set(e.value()) }
+                    }
+                    div {
+                        label { class: "label", r#for: "pkg-word", "Type RESTORE to confirm" }
+                        input { id: "pkg-word", class: "field", autocomplete: "off", "data-testid": "pkg-word", value: "{word}", oninput: move |e| word.set(e.value()) }
+                    }
+                }
+                button { class: "btn-secondary text-tag-red-text", "data-testid": "pkg-restore",
+                    disabled: word().trim() != "RESTORE" || rpass().is_empty() || busy().is_some(), onclick: restore,
+                    if busy() == Some("restore") { Spinner {} } else { Icon { name: "upload" } }
+                    "Restore package"
+                }
+                if let Some(r) = result() {
+                    p { class: "text-sm text-tag-green-text", "data-testid": "pkg-result", "Restored: {r[\"workers\"]} people, {r[\"files\"]} files, {r[\"accounts_added\"]} accounts added." }
+                }
+            }
         }
     }
 }

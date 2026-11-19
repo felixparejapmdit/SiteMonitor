@@ -143,6 +143,7 @@ test("Personnel page: counts, search, Ctrl+K, add and edit a worker", async ({ p
 
 test("snapshots: take one, change something, restore it back", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/settings");
+  await page.getByTestId("tab-Workforce data").click();
   await page.getByTestId("take-snapshot").click();
   await expect(page.getByText("Snapshot saved").first()).toBeVisible();
   const target = (await workers(request)).find((w: any) => w.a_number === "PW-002");
@@ -150,6 +151,7 @@ test("snapshots: take one, change something, restore it back", async ({ page, re
   expect((await workers(request)).find((w: any) => w.a_number === "PW-002").name).toBe("Renamed Volunteer");
 
   await page.reload();
+  await page.getByTestId("tab-Workforce data").click();
   const newest = page.getByTestId("snapshot-row").filter({ hasText: "manual" }).first();
   await newest.getByTestId("restore-snapshot").click();
   await newest.getByTestId("restore-confirm").click();
@@ -157,12 +159,15 @@ test("snapshots: take one, change something, restore it back", async ({ page, re
   expect((await workers(request)).find((w: any) => w.a_number === "PW-002").name).toBe("Playwright Volunteer");
 });
 
-test("the downloaded backup imports back as a SiteMonitor backup", async ({ request }) => {
-  const exported = await (await request.get("/api/workforce/export")).json();
-  expect(exported.format).toBe("sitemonitor-workforce");
-  const res = await importFile(request, "back.json", JSON.stringify(exported));
+test("the downloaded backup is encrypted and imports back with its passphrase", async ({ request }) => {
+  expect((await request.get("/api/workforce/export")).status()).toBe(400); // personnel data never leaves in the clear
+  const headers = { "x-backup-passphrase": Buffer.from("team passphrase", "utf8").toString("hex") };
+  const file = await (await request.get("/api/workforce/export", { headers })).text();
+  expect(JSON.parse(file)._isAgwcEncrypted).toBe(true);
+  expect(file).not.toContain("Playwright Volunteer");
+  const res = await importFile(request, "back.agwcz", file, { passphrase: "team passphrase" });
   expect(res.ok(), await res.text()).toBeTruthy();
   const report = await res.json();
-  expect(report.detected).toBe("SiteMonitor workforce backup");
+  expect(report.detected).toBe("Encrypted SiteMonitor workforce backup");
   expect(report.workers).toBe((await workers(request)).length);
 });

@@ -674,6 +674,50 @@ pub struct Worker {
     /// Where the person stays (Service 5 `workResidence` / `residence`).
     #[serde(default)]
     pub residence: String,
+    /// Today's task, project and absence reason (Service 5 `specificTask`, `project`, `absentReason`).
+    #[serde(default)]
+    pub task: String,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub remarks: String,
+    #[serde(default)]
+    pub spouse: String,
+    /// Visitation housing cluster and group.
+    #[serde(default)]
+    pub housing: String,
+    #[serde(default)]
+    pub visit_group: String,
+    #[serde(default)]
+    pub visit_role: String,
+    /// Retired, Dismissed or Deceased when archived.
+    #[serde(default)]
+    pub archive_category: String,
+    /// Medical conditions — blank unless the viewer has "Clinic ledger".
+    #[serde(default)]
+    pub medical: String,
+    #[serde(default)]
+    pub birthday: String,
+    #[serde(default)]
+    pub hourly_rate: Option<f64>,
+    #[serde(default)]
+    pub skill_level: String,
+    /// Service 5 "Issue a job order" (`jOrder` YES/NO).
+    #[serde(default = "yes")]
+    pub job_order: bool,
+    /// Given a task today (cleared by Start New Day).
+    #[serde(default)]
+    pub assigned_today: bool,
+    /// When the current task started (Service 5 `taskStartedAt`), for stale-task alerts.
+    #[serde(default)]
+    pub task_since: String,
+    /// Stale-task alerts turned off for this person.
+    #[serde(default)]
+    pub stale_off: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[cfg(test)]

@@ -72,11 +72,24 @@ async fn main() -> anyhow::Result<()> {
             println!("Password set for {email}.");
             return Ok(());
         }
+        "audit-data" => {
+            // Counts personnel data readable without the key (should all be 0).
+            Migrator::up(&db, None).await?;
+            println!("{}", services::workforce::plain_counts(&db).await?);
+            return Ok(());
+        }
         "" | "serve" => {}
         other => anyhow::bail!("unknown command `{other}` (use `serve` or `reset`)"),
     }
 
     Migrator::up(&db, None).await?;
+    // Personnel data is encrypted at rest; the key lives outside the database (and outside Git).
+    let key_file = PathBuf::from(std::env::var("DATA_KEY_FILE").unwrap_or_else(|_| "data/keys/personnel.key".into()));
+    services::vault::init(&key_file)?;
+    let sealed = services::workforce::seal_existing(&db).await?;
+    if sealed > 0 {
+        tracing::info!(records = sealed, "encrypted personnel data stored before encryption was on");
+    }
     if seed::seed_if_empty(&db).await? {
         tracing::info!("seeded a fresh estate");
     }

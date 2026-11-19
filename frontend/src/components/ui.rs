@@ -6,6 +6,36 @@ use shared::Tone;
 use crate::services::media_canvas;
 use crate::state::use_app;
 
+/// The open tab of each tabbed page (by page key). The page's tab bar and the
+/// sidebar's sub-items both read and set it, so they always agree.
+pub static PAGE_TABS: GlobalSignal<std::collections::HashMap<&'static str, &'static str>> = Signal::global(std::collections::HashMap::new);
+
+/// The open tab of `page` (the first one until someone picks another).
+pub fn current_tab(page: &'static str, tabs: &[&'static str]) -> &'static str {
+    PAGE_TABS.read().get(page).copied().filter(|t| tabs.contains(t)).or(tabs.first().copied()).unwrap_or("")
+}
+
+/// A page's own tab bar: plain text tabs with an underline on the open one.
+#[component]
+pub fn PageTabs(page: &'static str, tabs: Vec<&'static str>) -> Element {
+    let open = current_tab(page, &tabs);
+    rsx! {
+        div { class: "page-tabs no-scrollbar no-print", role: "tablist", "aria-label": "Sections",
+            for t in tabs {
+                button {
+                    key: "{t}",
+                    role: "tab",
+                    "aria-selected": open == t,
+                    "data-testid": "tab-{t}",
+                    class: if open == t { "page-tab active" } else { "page-tab" },
+                    onclick: move |_| { PAGE_TABS.write().insert(page, t); },
+                    "{t}"
+                }
+            }
+        }
+    }
+}
+
 /// Line icons (24×24, 1.75 stroke).
 #[component]
 pub fn Icon(name: &'static str, #[props(default = 16)] size: u32, #[props(default)] class: String) -> Element {

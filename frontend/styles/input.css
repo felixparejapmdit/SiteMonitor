@@ -94,6 +94,28 @@
   .nav-link { @apply flex items-center gap-2.5 rounded-md px-2.5 h-8 text-sm text-muted; transition: background-color .12s ease, color .12s ease; }
   .nav-link:hover { @apply bg-hover text-ink; }
   .nav-link.active { @apply bg-accent-soft text-accent-ink font-medium; }
+  /* Dropdown rows: a parent with a chevron that turns, and an indented list
+     of sub-items on a thin guide line, each marked by a small dot. */
+  .nav-parent { @apply w-full flex items-center gap-2.5 rounded-md px-2.5 h-9 text-sm font-medium text-ink text-left; transition: background-color .12s ease; }
+  .nav-parent:hover { @apply bg-hover; }
+  .nav-parent:focus-visible, .nav-sub-link:focus-visible, .nav-chev-btn:focus-visible { outline: 2px solid rgb(var(--c-accent-ink) / .5); outline-offset: 1px; }
+  .nav-chev { @apply ml-auto shrink-0 text-muted; transition: transform .2s ease; }
+  .nav-chev.open { transform: rotate(180deg); }
+  .nav-sub { @apply relative ml-[18px] pl-3 border-l space-y-px py-1; border-color: rgb(var(--c-muted) / .22); animation: navOpen .18s ease-out; }
+  .nav-sub-link { @apply relative flex items-center gap-2 rounded-md px-2 h-8 text-[13px] text-muted; transition: background-color .12s ease, color .12s ease; }
+  .nav-sub-link::before { content: ""; position: absolute; left: calc(-0.75rem - 3px); top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 9999px; background: rgb(var(--c-muted) / .4); }
+  .nav-sub-link:hover { @apply bg-hover text-ink; }
+  .nav-sub-link.active { @apply bg-accent-soft text-accent-ink font-medium; }
+  .nav-sub-link.active::before { background: rgb(var(--c-accent-ink)); }
+  .nav-sub-link.current { @apply text-ink font-medium; }
+  .nav-chev-btn { @apply absolute right-1 top-1 h-6 w-6 rounded flex items-center justify-center text-muted; }
+  .nav-chev-btn:hover { @apply bg-hover text-ink; }
+  /* A page's own tabs (same tabs as its sidebar sub-items). */
+  .page-tabs { @apply flex gap-6 overflow-x-auto border-b border-line; }
+  .page-tab { @apply relative shrink-0 h-10 text-sm text-muted whitespace-nowrap; transition: color .12s ease; }
+  .page-tab:hover { @apply text-ink; }
+  .page-tab.active { @apply text-ink font-medium; }
+  .page-tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px; background: rgb(var(--c-accent-ink)); }
   .tab-link { @apply flex flex-col items-center justify-center gap-0.5 text-[11px] text-muted flex-1 h-full; }
   .tab-link.active { @apply text-accent-ink font-medium; }
 
@@ -167,6 +189,7 @@
 .toast.leaving { animation: toastOut .22s ease-in both; }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes navOpen { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @keyframes riseIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes scaleIn { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
 @keyframes toastIn { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
@@ -214,3 +237,17 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Phone menu: slide-out drawer, bottom sheet and its tiles. */
+@layer components {
+  .more-tile { @apply flex flex-col items-center justify-center gap-1.5 rounded-xl border border-line px-1 py-3 text-ink min-h-[76px]; transition: background-color .12s ease; }
+  .more-tile:hover { @apply bg-hover; }
+  .more-tile.active { @apply bg-accent-soft text-accent-ink border-transparent font-medium; }
+}
+@layer utilities {
+  .drawer-in { animation: drawerIn .22s cubic-bezier(.22,1,.36,1); }
+  .sheet-in { animation: sheetIn .24s cubic-bezier(.22,1,.36,1); }
+}
+@keyframes drawerIn { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes sheetIn { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .drawer-in, .sheet-in { animation: none; } }

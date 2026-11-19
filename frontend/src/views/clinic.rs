@@ -6,21 +6,22 @@ use chrono::{Duration, NaiveDate};
 use dioxus::prelude::*;
 use serde_json::{json, Value};
 
-use crate::components::ui::Icon;
-use crate::views::workforce_ops::{by_a_number, choice, f, name_of, new_id, print_with, s, today, use_records, use_workers, Field, Kind, RecordModal, Table, Tabs};
+use crate::components::ui::{current_tab, Icon, PageTabs};
+use crate::views::workforce_ops::{by_a_number, choice, f, name_of, new_id, print_with, s, today, use_records, use_workers, Field, Kind, RecordModal, Table};
 
 #[component]
 pub fn ClinicView() -> Element {
-    let tab = use_signal(|| "Health episodes");
+    let tab = current_tab("clinic", crate::views::CLINIC_TABS);
     rsx! {
         div { class: "space-y-5 rise-in",
             header { class: "space-y-1 no-print",
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Clinic ledger" }
                 p { class: "text-[15px] text-muted", "Medical records are private: only people with \u{201c}Clinic ledger\u{201d} access see this page, and every change is logged." }
             }
-            div { class: "no-print", Tabs { tabs: vec!["Health episodes", "Clinic visits", "Vaccines", "Medications", "Contact tracing", "Audit trail"], current: tab } }
-            match tab() {
+            PageTabs { page: "clinic", tabs: crate::views::CLINIC_TABS.to_vec() }
+            match tab {
                 "Health episodes" => rsx! { Episodes {} },
+                "Clearance" => rsx! { Clearance {} },
                 "Clinic visits" => rsx! { Visits {} },
                 "Medications" => rsx! { Simple { list: "volunteer_medications", title: "Medication", head: vec!["Person", "Medicine", "Dose", "How often", "From", "Until"],
                     keys: vec!["volunteerId", "medicationName", "dosage", "frequency", "startDate", "endDate"],
@@ -241,6 +242,71 @@ fn Convert() -> Element {
                             }
                         },
                         "Open an episode"
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Service 5 health clearance per person (`healthClearance`): full, restricted
+/// or pending review. Changes are kept in the audit trail.
+#[component]
+fn Clearance() -> Element {
+    let app = crate::state::use_app();
+    let mut profiles = use_resource(|| async { crate::api::get::<Vec<Value>>("/workforce/family-roster").await.unwrap_or_default() });
+    let list = profiles.read().clone().unwrap_or_default();
+    let label = |st: &str| match st {
+        "CLEARED_FULL" => "Cleared (full)",
+        "CLEARED_RESTRICTED" => "Cleared (restricted)",
+        "PENDING_REVIEW" => "Pending review",
+        _ => "Not set",
+    };
+    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+    for p in &list {
+        *counts.entry(label(&s(&p["healthClearance"], "status"))).or_default() += 1;
+    }
+    let summary = counts.iter().map(|(k, n)| format!("{n} {}", k.to_lowercase())).collect::<Vec<_>>().join(" · ");
+    rsx! {
+        p { class: "text-sm text-muted", "data-testid": "clearance-summary", "{summary}" }
+        div { class: "card overflow-x-auto",
+            table { class: "w-full text-sm",
+                thead { tr { class: "text-left text-muted border-b border-line",
+                    th { class: "px-3 py-2", "Person" } th { class: "px-3 py-2", "Clearance" } th { class: "px-3 py-2", "Issued" } th { class: "px-3 py-2", "Quarantined" }
+                } }
+                tbody { class: "divide-y divide-line",
+                    for p in list.iter().cloned() {
+                        {
+                            let hc = p["healthClearance"].clone();
+                            let st = s(&hc, "status");
+                            rsx! {
+                                tr { key: "{s(&p, \"id\")}", "data-testid": "clearance-row",
+                                    td { class: "px-3 py-2", {s(&p, "name")} span { class: "text-muted ml-2", {s(&p, "aNumber")} } }
+                                    td { class: "px-3 py-1.5",
+                                        select { class: "field w-auto", "aria-label": "Clearance of {s(&p, \"name\")}", "data-testid": "clearance-status",
+                                            onchange: move |e| {
+                                                let p = p.clone();
+                                                async move {
+                                                    let mut hc = if p["healthClearance"].is_object() { p["healthClearance"].clone() } else { json!({}) };
+                                                    hc["status"] = json!(e.value());
+                                                    hc["updatedAt"] = json!(chrono::Utc::now().to_rfc3339());
+                                                    if e.value().starts_with("CLEARED") { hc["clearanceIssuedAt"] = json!(today()); }
+                                                    match crate::api::put::<_, Value>(&format!("/workers/{}/profile", s(&p, "id")), &json!({ "healthClearance": hc })).await {
+                                                        Ok(_) => { app.success("Clearance saved"); profiles.restart(); }
+                                                        Err(err) => app.error(err.message()),
+                                                    }
+                                                }
+                                            },
+                                            for (v, l) in [("", "Not set"), ("CLEARED_FULL", "Cleared (full)"), ("CLEARED_RESTRICTED", "Cleared (restricted)"), ("PENDING_REVIEW", "Pending review")] {
+                                                option { key: "{v}", value: "{v}", selected: st == v, "{l}" }
+                                            }
+                                        }
+                                    }
+                                    td { class: "px-3 py-2 tabular", {s(&hc, "clearanceIssuedAt")} }
+                                    td { class: "px-3 py-2", {if hc["isQuarantined"].as_bool() == Some(true) { "Yes" } else { "No" }} }
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -610,3 +610,9 @@ pub struct SaveAssetRequest {
     pub current_area_id: Uuid,
     pub is_retired: bool,
 }
+
+/// `POST /api/workers/delete` — permanent removal of the chosen people.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DeleteWorkersRequest {
+    pub ids: Vec<Uuid>,
+}
