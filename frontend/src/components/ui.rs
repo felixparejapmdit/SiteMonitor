@@ -128,6 +128,13 @@ pub fn Modal(#[props(into)] title: String, on_close: EventHandler<()>, children:
             role: "dialog",
             "aria-modal": "true",
             "aria-label": "{title}",
+            tabindex: "-1",
+            // Move focus into the dialog (unless a field inside already took it) so Escape works straight away.
+            onmounted: move |_| {
+                document::eval(
+                    "setTimeout(() => { const d = [...document.querySelectorAll('[role=dialog]')].pop(); if (d && !d.contains(document.activeElement)) d.focus(); }, 0)",
+                );
+            },
             onkeydown: move |e: KeyboardEvent| {
                 if e.key() == Key::Escape {
                     on_close.call(());

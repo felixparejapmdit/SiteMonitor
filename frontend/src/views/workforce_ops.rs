@@ -15,7 +15,8 @@ use shared::*;
 
 use crate::api;
 use crate::components::ui::{EmptyState, Icon, Modal, Spinner};
-use crate::state::use_app;
+use crate::services::sync::{self, Outcome};
+use crate::state::{use_app, AppState};
 use crate::util;
 use crate::views::personnel::REFRESH as WORKERS_CHANGED;
 
@@ -36,12 +37,18 @@ pub fn use_records(list: &'static str) -> Resource<Vec<Value>> {
     })
 }
 
-pub async fn save_record(list: &str, id: &str, v: &Value) -> Result<Value, api::ApiFail> {
-    let r = api::put::<_, Value>(&format!("/workforce/records/{list}/{}", js_sys::encode_uri_component(id)), v).await;
-    if r.is_ok() {
-        *RECORDS.write() += 1;
+/// Saves a record. Without signal it is kept on this device and sent when the
+/// connection is back (the office's and field edits never block each other).
+pub async fn save_record(app: AppState, list: &str, id: &str, v: &Value) -> Result<Value, String> {
+    let path = format!("/workforce/records/{list}/{}", js_sys::encode_uri_component(id));
+    match sync::mutate::<_, Value>(app, "Workforce record", "PUT", path, v).await {
+        Outcome::Saved(saved) => {
+            *RECORDS.write() += 1;
+            Ok(saved)
+        }
+        Outcome::Queued => Ok(v.clone()),
+        Outcome::Failed(e) => Err(e),
     }
-    r
 }
 
 pub async fn delete_record(list: &str, id: &str) -> Result<(), api::ApiFail> {
@@ -115,6 +122,10 @@ pub fn RecordModal(
     initial: Value,
     on_close: EventHandler<()>,
     #[props(default)] on_saved: Option<EventHandler<Value>>,
+    /// Save here instead of the record list (e.g. `/workers/{id}/profile`).
+    #[props(default)] endpoint: Option<String>,
+    /// Offer Delete (existing records only).
+    #[props(default = true)] deletable: bool,
 ) -> Element {
     let app = use_app();
     let workers = use_workers();
@@ -122,7 +133,7 @@ pub fn RecordModal(
     let mut busy = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
     // New records start without an id; saved ones (and imported ones) have one.
-    let existing = initial.get("id").is_some();
+    let existing = deletable && endpoint.is_none() && initial.get("id").is_some();
     let people = workers.read().clone().unwrap_or_default();
     let remove = {
         let id = id.clone();
@@ -143,11 +154,26 @@ pub fn RecordModal(
     };
     let save = {
         let id = id.clone();
+        let title = title.clone();
         move |_| {
             let id = id.clone();
+            let title = title.clone();
+            let endpoint = endpoint.clone();
             async move {
                 busy.set(true);
-                match save_record(list, &id, &draft()).await {
+                let result = match &endpoint {
+                    // A different save target (e.g. a worker's profile) instead of a record list.
+                    Some(path) => match sync::mutate::<_, Value>(app, title.clone(), "PUT", path.clone(), &draft()).await {
+                        Outcome::Saved(v) => {
+                            *WORKERS_CHANGED.write() += 1;
+                            Ok(v)
+                        }
+                        Outcome::Queued => Ok(draft()),
+                        Outcome::Failed(e) => Err(e),
+                    },
+                    None => save_record(app, list, &id, &draft()).await,
+                };
+                match result {
                     Ok(v) => {
                         app.success("Saved");
                         if let Some(h) = on_saved {
@@ -155,7 +181,7 @@ pub fn RecordModal(
                         }
                         on_close.call(());
                     }
-                    Err(e) => app.error(e.message()),
+                    Err(e) => app.error(e),
                 }
                 busy.set(false);
             }
@@ -293,16 +319,18 @@ fn status_tone(s: WorkerStatus) -> Tone {
 
 #[component]
 pub fn WorkforceView() -> Element {
-    let tab = use_signal(|| "Groups");
+    let tab = use_signal(|| "Dashboard");
     rsx! {
         div { class: "space-y-5 rise-in",
             header { class: "space-y-1",
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Workforce" }
                 p { class: "text-[15px] text-muted", "Project groups and the jobs they work on, departments, the org chart, dependability and the change history." }
             }
-            Tabs { tabs: vec!["Groups", "Departments", "Org chart", "Dependability", "History"], current: tab }
+            Tabs { tabs: vec!["Dashboard", "Groups", "Areas & zones", "Departments", "Org chart", "Dependability", "History"], current: tab }
             match tab() {
+                "Dashboard" => rsx! { crate::views::workforce_more::DashboardTab {} },
                 "Groups" => rsx! { GroupsTab {} },
+                "Areas & zones" => rsx! { crate::views::workforce_more::AreasTab {} },
                 "Departments" => rsx! { DepartmentsTab {} },
                 "Org chart" => rsx! { OrgChartTab {} },
                 "Dependability" => rsx! { DependabilityTab {} },
@@ -498,9 +526,14 @@ pub fn OperationsView() -> Element {
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Operations & duty" }
                 p { class: "text-[15px] text-muted", "Overnight duty, the monthly attendance sheet, overtime, visitations, signatories and printing." }
             }
-            div { class: "no-print", Tabs { tabs: vec!["Overnight duty", "Attendance", "Overtime", "Visitations", "Signatories", "Print"], current: tab } }
+            div { class: "no-print", Tabs { tabs: vec!["Overnight duty", "Duty history", "Tomorrow", "Attendance", "Overtime", "Visitations", "Visitation groups", "Signatories", "Bulk update", "Pick lists", "Print"], current: tab } }
             match tab() {
                 "Overnight duty" => rsx! { DutyTab {} },
+                "Duty history" => rsx! { crate::views::workforce_more::DutyHistoryTab {} },
+                "Tomorrow" => rsx! { crate::views::workforce_more::TomorrowTab {} },
+                "Visitation groups" => rsx! { crate::views::workforce_more::VisitGroupsTab {} },
+                "Bulk update" => rsx! { crate::views::workforce_more::BulkTab {} },
+                "Pick lists" => rsx! { crate::views::workforce_more::PickListsTab {} },
                 "Attendance" => rsx! { AttendanceTab {} },
                 "Overtime" => rsx! { OvertimeTab {} },
                 "Visitations" => rsx! { VisitationsTab {} },
@@ -568,14 +601,14 @@ fn DutyTab() -> Element {
                     }
                     let mut next = a.clone();
                     next["lastRotationIndex"] = json!(idx);
-                    if let Err(e) = save_record("duty_areas", &s(a, "id"), &next).await {
-                        return app.error(e.message());
+                    if let Err(e) = save_record(app, "duty_areas", &s(a, "id"), &next).await {
+                        return app.error(e);
                     }
                 }
                 let d = date();
-                match save_record("duty_schedules", &d, &json!({ "dateStr": d, "assignments": assignments })).await {
+                match save_record(app, "duty_schedules", &d, &json!({ "dateStr": d, "assignments": assignments })).await {
                     Ok(_) => app.success("Duty roster made"),
-                    Err(e) => app.error(e.message()),
+                    Err(e) => app.error(e),
                 }
             }
         }
@@ -762,6 +795,7 @@ fn OvertimeTab() -> Element {
     let ot = use_records("ot_entries");
     let workers = use_workers();
     let mut editing = use_signal(|| None::<(String, Value)>);
+    let mut pasting = use_signal(|| false);
     let map = by_a_number(&workers.read().clone().unwrap_or_default());
     let list = ot.read().clone().unwrap_or_default();
     let total: f64 = list.iter().filter_map(|e| e["computedPay"].as_f64()).sum();
@@ -788,9 +822,11 @@ fn OvertimeTab() -> Element {
         div { class: "flex flex-wrap items-center justify-between gap-3",
             p { class: "text-sm text-muted tabular", "data-testid": "ot-total", "{list.len()} entries · total ₱{total:.2}" }
             if app.can(Permission::ManageWorkforce) {
+                button { class: "btn-secondary", "data-testid": "ot-paste-open", onclick: move |_| pasting.set(true), Icon { name: "edit" } "From a list of names" }
                 button { class: "btn-primary", "data-testid": "ot-add", onclick: move |_| editing.set(Some((new_id("ot"), json!({ "date": today(), "otType": "regular", "status": "approved" })))), Icon { name: "plus" } "Add overtime" }
             }
         }
+        if pasting() { crate::views::workforce_more::OtPaste { on_close: move |_| pasting.set(false) } }
         Table { head: vec!["Date", "Work", "Who", "Kind", "Hours", "Rate", "Pay"], rows, on_edit: move |id: String| {
             if let Some(v) = sorted.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) }
         } }
@@ -802,7 +838,7 @@ fn OvertimeTab() -> Element {
                     let mut next = saved.clone();
                     next["computedPay"] = json!(pay);
                     let id = s(&saved, "id");
-                    spawn(async move { let _ = save_record("ot_entries", &id, &next).await; });
+                    spawn(async move { let _ = save_record(app, "ot_entries", &id, &next).await; });
                 }
             }
         }
@@ -854,7 +890,7 @@ fn VisitationsTab() -> Element {
                     if let Some(w) = map.get(&s(&saved, "aNumber")) { next["workerName"] = json!(w.name); }
                     if s(&saved, "status") == "completed" && s(&saved, "completedAt").is_empty() { next["completedAt"] = json!(chrono::Utc::now().to_rfc3339()); }
                     let id = s(&saved, "id");
-                    spawn(async move { let _ = save_record("visitations", &id, &next).await; });
+                    spawn(async move { let _ = save_record(app, "visitations", &id, &next).await; });
                 }
             }
         }
@@ -892,7 +928,7 @@ fn SignatoriesTab() -> Element {
                         next[k] = json!(s(&saved, k).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect::<Vec<_>>());
                     }
                     let id = s(&saved, "id");
-                    spawn(async move { let _ = save_record("signatories", &id, &next).await; });
+                    spawn(async move { let _ = save_record(app, "signatories", &id, &next).await; });
                 }
             }
         }
@@ -905,24 +941,57 @@ fn PrintTab() -> Element {
     let sigs = use_records("signatories");
     let mut kind = use_signal(|| "id");
     let mut group = use_signal(String::new);
+    let family = use_resource(move || async move {
+        if kind() == "family" { api::get::<Vec<Value>>("/workforce/family-roster").await.unwrap_or_default() } else { vec![] }
+    });
     let people: Vec<Worker> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).collect();
     let mut groups: Vec<String> = people.iter().map(|w| w.project_group.clone()).filter(|g| !g.is_empty()).collect();
     groups.sort();
     groups.dedup();
-    let chosen: Vec<Worker> = people.into_iter().filter(|w| group().is_empty() || w.project_group == group()).collect();
-    let signer = sigs.read().clone().unwrap_or_default().into_iter().find(|v| {
-        let g = group();
-        g.is_empty() || v["projectGroups"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(g.as_str())))
+    let mut chosen: Vec<Worker> = people.into_iter().filter(|w| group().is_empty() || w.project_group == group()).collect();
+    if kind() == "tomorrow" {
+        chosen.retain(|w| !w.tomorrow.trim().is_empty());
+    }
+    // Service 5's distribution: job orders come out grouped (by project group, or
+    // by residence for residential job orders), each group under its signatory.
+    let by_residence = kind() == "residential";
+    chosen.sort_by(|a, b| {
+        let key = |w: &Worker| if by_residence { w.residence.to_lowercase() } else { w.project_group.to_lowercase() };
+        key(a).cmp(&key(b)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-    let signer = signer.map(|v| s(&v, "name")).unwrap_or_default();
-    let date = util::long_day(chrono::Utc::now());
+    let signatories = sigs.read().clone().unwrap_or_default();
+    let signer_for = move |g: &str| -> (String, String) {
+        signatories
+            .iter()
+            .find(|v| v["projectGroups"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(g))))
+            .or_else(|| signatories.first())
+            .map(|v| (s(v, "name"), s(v, "signatureUrl")))
+            .unwrap_or_default()
+    };
+    let date = if kind() == "tomorrow" { util::long_day(chrono::Utc::now() + chrono::Duration::days(1)) } else { util::long_day(chrono::Utc::now()) };
+    let mut sections: Vec<(String, Vec<Worker>)> = vec![];
+    for w in chosen.iter().cloned() {
+        let key = if by_residence { if w.residence.is_empty() { "No residence".to_string() } else { w.residence.clone() } } else { w.project_group.clone() };
+        match sections.last_mut() {
+            Some((k, list)) if *k == key => list.push(w),
+            _ => sections.push((key, vec![w])),
+        }
+    }
+    let paper = match kind() {
+        "id" | "family" => "size: A4; margin: 10mm",
+        _ => "size: 8.5in 13in; margin: 0.4in",
+    };
     rsx! {
         div { class: "flex flex-wrap items-end gap-3 no-print",
             div {
                 label { class: "label", r#for: "print-kind", "Print" }
-                select { id: "print-kind", class: "field", "data-testid": "print-kind", onchange: move |e| kind.set(if e.value() == "jo" { "jo" } else { "id" }),
+                select { id: "print-kind", class: "field", "data-testid": "print-kind",
+                    onchange: move |e| kind.set(match e.value().as_str() { "jo" => "jo", "tomorrow" => "tomorrow", "residential" => "residential", "family" => "family", _ => "id" }),
                     option { value: "id", selected: kind() == "id", "ID cards" }
-                    option { value: "jo", selected: kind() == "jo", "Job orders (4 per folio page)" }
+                    option { value: "jo", selected: kind() == "jo", "Job orders by group (4 per folio page)" }
+                    option { value: "tomorrow", selected: kind() == "tomorrow", "Tomorrow's job orders" }
+                    option { value: "residential", selected: kind() == "residential", "Residential job orders" }
+                    option { value: "family", selected: kind() == "family", "Family roster" }
                 }
             }
             div {
@@ -932,36 +1001,65 @@ fn PrintTab() -> Element {
                     for g in groups { option { key: "{g}", value: "{g}", "{g}" } }
                 }
             }
-            button { class: "btn-primary", "data-testid": "print-now",
-                onclick: move |_| print_with(if kind() == "jo" { "size: 8.5in 13in; margin: 0.4in" } else { "size: A4; margin: 10mm" }),
-                Icon { name: "archive" } "Print {chosen.len()}"
-            }
+            button { class: "btn-primary", "data-testid": "print-now", onclick: move |_| print_with(paper), Icon { name: "archive" } "Print" }
         }
-        if kind() == "id" {
-            div { class: "grid grid-cols-2 sm:grid-cols-3 gap-4 print-grid-ids", "data-testid": "id-cards",
-                for w in chosen {
-                    div { key: "{w.id}", class: "id-card card p-4 space-y-1 break-inside-avoid",
-                        p { class: "text-[10px] uppercase tracking-wider text-muted", "SiteMonitor · Workforce ID" }
-                        p { class: "text-lg font-semibold leading-tight", "{w.name}" }
-                        p { class: "text-sm tabular", "A# {w.a_number}" }
-                        p { class: "text-xs text-muted", "{w.trade} · {w.project_group}" }
+        match kind() {
+            "id" => rsx! {
+                div { class: "grid grid-cols-2 sm:grid-cols-3 gap-4 print-grid-ids", "data-testid": "id-cards",
+                    for w in chosen {
+                        div { key: "{w.id}", class: "id-card card p-4 flex gap-3 break-inside-avoid",
+                            if w.has_photo { img { src: "/api/workers/{w.id}/photo", alt: "", class: "w-16 h-20 object-cover rounded" } }
+                            div { class: "space-y-1 min-w-0",
+                                p { class: "text-[10px] uppercase tracking-wider text-muted", "SiteMonitor · Workforce ID" }
+                                p { class: "text-lg font-semibold leading-tight", "{w.name}" }
+                                p { class: "text-sm tabular", "A# {w.a_number}" }
+                                p { class: "text-xs text-muted", "{w.trade} · {w.project_group}" }
+                            }
+                        }
                     }
                 }
-            }
-        } else {
-            div { class: "grid sm:grid-cols-2 gap-4 job-orders", "data-testid": "job-orders",
-                for w in chosen {
-                    div { key: "{w.id}", class: "job-order card p-4 space-y-2 break-inside-avoid",
-                        p { class: "font-semibold text-center", "JOB ORDER" }
-                        p { class: "text-sm", "Name: " b { "{w.name}" } " · A# {w.a_number}" }
-                        p { class: "text-sm", "Trade: {w.trade}" }
-                        p { class: "text-sm", "Project group: {w.project_group}" }
-                        p { class: "text-sm", "Area: {w.area}" }
-                        p { class: "text-sm", "Date: {date}" }
-                        p { class: "text-sm pt-6 border-t border-line text-center", "{signer}" br {} span { class: "text-xs text-muted", "Signatory" } }
+            },
+            "family" => rsx! {
+                p { class: "font-semibold print-only", "Family roster — {date}" }
+                Table { head: vec!["Name", "A#", "Group", "Spouse", "Father", "Mother", "Emergency contact"],
+                    rows: family.read().clone().unwrap_or_default().iter().map(|v| (s(v, "aNumber") + &s(v, "name"), vec![
+                        s(v, "name"), s(v, "aNumber"), s(v, "group"), s(v, "spouseName"), s(v, "fatherName"), s(v, "motherName"),
+                        format!("{} {}", s(v, "emergencyContact"), s(v, "emergencyPhone")).trim().to_string(),
+                    ])).collect() }
+            },
+            _ => rsx! {
+                if sections.is_empty() {
+                    div { class: "card", EmptyState { icon: "archive", title: "Nothing to print", body: if kind() == "tomorrow" { "Set tomorrow's assignments on the Tomorrow tab first." } else { "No people match." } } }
+                }
+                for (key, list) in sections {
+                    {
+                        let (signer, signature) = signer_for(&key);
+                        rsx! {
+                            section { key: "{key}", class: "space-y-2",
+                                p { class: "font-semibold no-print", "{key}" span { class: "text-muted font-normal ml-2", "signed by {signer}" } }
+                                div { class: "grid sm:grid-cols-2 gap-4 job-orders", "data-testid": "job-orders",
+                                    for w in list {
+                                        div { key: "{w.id}", class: "job-order card p-4 space-y-2 break-inside-avoid",
+                                            p { class: "font-semibold text-center", "JOB ORDER" }
+                                            p { class: "text-sm", "Name: " b { "{w.name}" } " · A# {w.a_number}" }
+                                            p { class: "text-sm", "Trade: {w.trade}" }
+                                            p { class: "text-sm", "Project group: {w.project_group}" }
+                                            if by_residence { p { class: "text-sm", "Residence: {w.residence}" } } else { p { class: "text-sm", "Area: {w.area}" } }
+                                            if !w.tomorrow.is_empty() { p { class: "text-sm", "Task: {w.tomorrow}" } }
+                                            p { class: "text-sm", "Date: {date}" }
+                                            div { class: "pt-2 border-t border-line text-center",
+                                                if signature.starts_with("data:image/") { img { src: "{signature}", alt: "Signature", class: "h-10 mx-auto object-contain" } }
+                                                p { class: "text-sm", "{signer}" }
+                                                p { class: "text-xs text-muted", "Signatory" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-            }
+            },
         }
     }
 }
@@ -981,9 +1079,10 @@ pub fn StatusButtons(worker: Worker) -> Element {
                     onclick: move |_| {
                         let id = worker.id;
                         async move {
-                            match api::put::<_, Worker>(&format!("/workers/{id}/status"), &WorkerStatusRequest { status: st, reason: String::new() }).await {
-                                Ok(_) => *WORKERS_CHANGED.write() += 1,
-                                Err(e) => app.error(e.message()),
+                            match sync::mutate::<_, Worker>(app, "Attendance", "PUT", format!("/workers/{id}/status"), &WorkerStatusRequest { status: st, reason: String::new() }).await {
+                                Outcome::Saved(_) => *WORKERS_CHANGED.write() += 1,
+                                Outcome::Queued => {}
+                                Outcome::Failed(e) => app.error(e),
                             }
                         }
                     },
@@ -1013,13 +1112,14 @@ pub fn ReassignModal(worker: Worker, on_close: EventHandler<()>) -> Element {
                         onclick: move |_| {
                             let id = worker.id;
                             async move {
-                                match api::put::<_, Worker>(&format!("/workers/{id}/reassign"), &req()).await {
-                                    Ok(w) => {
+                                match sync::mutate::<_, Worker>(app, "Reassign", "PUT", format!("/workers/{id}/reassign"), &req()).await {
+                                    Outcome::Saved(w) => {
                                         app.success(format!("{} reassigned", w.name));
                                         *WORKERS_CHANGED.write() += 1;
                                         on_close.call(());
                                     }
-                                    Err(e) => app.error(e.message()),
+                                    Outcome::Queued => on_close.call(()),
+                                    Outcome::Failed(e) => app.error(e),
                                 }
                             }
                         },

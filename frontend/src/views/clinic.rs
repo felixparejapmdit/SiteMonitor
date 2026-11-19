@@ -18,15 +18,19 @@ pub fn ClinicView() -> Element {
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Clinic ledger" }
                 p { class: "text-[15px] text-muted", "Medical records are private: only people with \u{201c}Clinic ledger\u{201d} access see this page, and every change is logged." }
             }
-            div { class: "no-print", Tabs { tabs: vec!["Health episodes", "Clinic visits", "Vaccines", "Contact tracing", "Audit trail"], current: tab } }
+            div { class: "no-print", Tabs { tabs: vec!["Health episodes", "Clinic visits", "Vaccines", "Medications", "Contact tracing", "Audit trail"], current: tab } }
             match tab() {
                 "Health episodes" => rsx! { Episodes {} },
                 "Clinic visits" => rsx! { Visits {} },
-                "Vaccines" => rsx! { Simple { list: "volunteer_vaccines", title: "Vaccine", head: vec!["Person", "Vaccine", "Given", "Lot", "Booster due"],
+                "Medications" => rsx! { Simple { list: "volunteer_medications", title: "Medication", head: vec!["Person", "Medicine", "Dose", "How often", "From", "Until"],
+                    keys: vec!["volunteerId", "medicationName", "dosage", "frequency", "startDate", "endDate"],
+                    fields: vec![f("volunteerId", "Person", Kind::Worker), f("medicationName", "Medicine", Kind::Text), f("dosage", "Dose", Kind::Text),
+                                 f("frequency", "How often", Kind::Text), f("startDate", "From", Kind::Date), f("endDate", "Until", Kind::Date), f("notes", "Notes", Kind::Long)] } },
+                "Vaccines" => rsx! { Boosters {} Simple { list: "volunteer_vaccines", title: "Vaccine", head: vec!["Person", "Vaccine", "Given", "Lot", "Booster due"],
                     keys: vec!["volunteerId", "vaccineName", "dateAdministered", "lotNumber", "boosterDueDate"],
                     fields: vec![f("volunteerId", "Person", Kind::Worker), f("vaccineName", "Vaccine", Kind::Text), f("dateAdministered", "Given on", Kind::Date),
                                  f("lotNumber", "Lot number", Kind::Text), f("administeredBy", "Given by", Kind::Text), f("boosterDueDate", "Booster due", Kind::Date), f("notes", "Notes", Kind::Long)] } },
-                "Contact tracing" => rsx! { Simple { list: "contact_traces", title: "Contact", head: vec!["Contact", "Episode", "How", "Status", "Traced"],
+                "Contact tracing" => rsx! { Convert {} Simple { list: "contact_traces", title: "Contact", head: vec!["Contact", "Episode", "How", "Status", "Traced"],
                     keys: vec!["contactWorkerId", "healthEventId", "contactType", "status", "tracedAt"],
                     fields: vec![f("contactWorkerId", "Person in contact", Kind::Worker), f("healthEventId", "Episode id", Kind::Text),
                                  f("contactType", "How", choice(&["household", "workplace", "roommate", "other"])), f("status", "Status", choice(&["monitoring", "cleared", "converted"])), f("tracedAt", "Traced on", Kind::Date)] } },
@@ -169,4 +173,77 @@ fn Audit() -> Element {
     let rows: Vec<(String, Vec<String>)> =
         list.iter().map(|v| (s(v, "id"), vec![s(v, "timestamp").chars().take(16).collect(), s(v, "editedBy"), s(v, "action"), s(v, "details"), s(v, "recordId")])).collect();
     rsx! { Table { head: vec!["When", "Who", "Action", "Record type", "Record"], rows } }
+}
+
+/// Boosters due within two weeks, or already overdue.
+#[component]
+fn Boosters() -> Element {
+    let vax = use_records("volunteer_vaccines");
+    let workers = use_workers();
+    let map = by_a_number(&workers.read().clone().unwrap_or_default());
+    let soon = (chrono::Local::now().date_naive() + Duration::days(14)).format("%Y-%m-%d").to_string();
+    let now = today();
+    let due: Vec<(String, String, bool)> = vax
+        .read()
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .filter(|v| !s(v, "boosterDueDate").is_empty() && s(v, "boosterDateReceived").is_empty() && s(v, "boosterDueDate") <= soon)
+        .map(|v| (name_of(&map, &s(v, "volunteerId")), s(v, "boosterDueDate"), s(v, "boosterDueDate") < now))
+        .collect();
+    if due.is_empty() {
+        return rsx! { p { class: "text-sm text-muted", "data-testid": "boosters", "No boosters due in the next two weeks." } };
+    }
+    rsx! {
+        div { class: "rounded-md bg-tag-amber-bg text-tag-amber-text px-4 py-3 text-sm space-y-1", "data-testid": "boosters",
+            p { class: "font-semibold", "{due.len()} booster(s) due" }
+            for (n, d, late) in due { p { key: "{n}{d}", "{n} — {d}" if late { " (overdue)" } } }
+        }
+    }
+}
+
+/// Service 5's "convert contact to episode": a traced contact who becomes sick
+/// gets their own health episode, and the trace is marked converted.
+#[component]
+fn Convert() -> Element {
+    let app = crate::state::use_app();
+    let traces = use_records("contact_traces");
+    let workers = use_workers();
+    let map = by_a_number(&workers.read().clone().unwrap_or_default());
+    let open: Vec<Value> = traces.read().clone().unwrap_or_default().into_iter().filter(|t| s(t, "status") != "converted" && s(t, "status") != "cleared").collect();
+    if open.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "card p-4 space-y-2", "data-testid": "contacts-open",
+            p { class: "font-semibold", "Contacts being watched" }
+            for t in open {
+                div { key: "{s(&t, \"id\")}", class: "flex items-center gap-3 text-sm",
+                    span { class: "flex-1", {name_of(&map, &s(&t, "contactWorkerId"))} span { class: "text-muted ml-2", "{s(&t, \"contactType\")}" } }
+                    button { class: "btn-secondary", "data-testid": "contact-convert",
+                        onclick: {
+                            let t = t.clone();
+                            move |_| {
+                                let t = t.clone();
+                                async move {
+                                    let ev = new_id("he");
+                                    let episode = json!({ "workerId": s(&t, "contactWorkerId"), "dayZero": today(), "status": "active", "diagnosis": "From contact tracing", "linkedFromTraces": [s(&t, "id")], "createdAt": chrono::Utc::now().to_rfc3339() });
+                                    if let Err(e) = crate::views::workforce_ops::save_record(app, "health_events", &ev, &episode).await { return app.error(e); }
+                                    let mut done = t.clone();
+                                    done["status"] = json!("converted");
+                                    done["convertedToEventId"] = json!(ev);
+                                    done["convertedAt"] = json!(chrono::Utc::now().to_rfc3339());
+                                    match crate::views::workforce_ops::save_record(app, "contact_traces", &s(&t, "id"), &done).await {
+                                        Ok(_) => app.success("Episode opened"),
+                                        Err(e) => app.error(e),
+                                    }
+                                }
+                            }
+                        },
+                        "Open an episode"
+                    }
+                }
+            }
+        }
+    }
 }

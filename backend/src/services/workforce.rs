@@ -38,6 +38,8 @@ pub struct Normalized {
     pub workers: Vec<Value>,
     /// collection → (id, item); dictionary collections hold one `DICT_ID` item.
     pub collections: BTreeMap<String, Vec<(String, Value)>>,
+    /// Service 5's own daily snapshots found in a service5.db: (date, data).
+    pub legacy_snapshots: Vec<(String, Value)>,
 }
 
 // ------------------------------------------------------------------ reading
@@ -46,8 +48,10 @@ pub struct Normalized {
 /// `.agwcz` backup, a Service 5 JSON backup of any version, or our own export.
 pub fn read(bytes: &[u8], passphrase: Option<&str>) -> AppResult<Normalized> {
     if bytes.starts_with(b"SQLite format 3\0") {
-        let mut n = normalize(read_sqlite(bytes)?)?;
+        let (records, snapshots) = read_sqlite(bytes)?;
+        let mut n = normalize(records)?;
         n.label = "Service 5 database (service5.db)".into();
+        n.legacy_snapshots = snapshots;
         return Ok(n);
     }
     let raw: Value = serde_json::from_slice(bytes).map_err(|_| AppError::bad("This file isn't a Service 5 backup, a service5.db, or a SiteMonitor workforce backup."))?;
@@ -91,10 +95,10 @@ pub fn decrypt_agwcz(env: &Value, passphrase: &str) -> AppResult<Value> {
 }
 
 /// `service5.db`: the `records` table holds each collection as JSON under its key.
-fn read_sqlite(bytes: &[u8]) -> AppResult<Value> {
+fn read_sqlite(bytes: &[u8]) -> AppResult<(Value, Vec<(String, Value)>)> {
     let path = std::env::temp_dir().join(format!("service5-import-{}.db", Uuid::new_v4()));
     std::fs::write(&path, bytes).map_err(anyhow::Error::from)?;
-    let result = (|| -> rusqlite::Result<Map<String, Value>> {
+    let result = (|| -> rusqlite::Result<(Map<String, Value>, Vec<(String, Value)>)> {
         let conn = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let mut stmt = conn.prepare("SELECT key, data FROM records")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
@@ -105,12 +109,22 @@ fn read_sqlite(bytes: &[u8]) -> AppResult<Value> {
                 out.insert(k, v);
             }
         }
-        Ok(out)
+        // Service 5's daily snapshots (older databases may not have the table).
+        let mut snaps = vec![];
+        if let Ok(mut s) = conn.prepare("SELECT snapshot_date, data FROM daily_snapshots ORDER BY snapshot_date") {
+            let rows = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows.flatten() {
+                if let Ok(v) = serde_json::from_str(&row.1) {
+                    snaps.push((row.0, v));
+                }
+            }
+        }
+        Ok((out, snaps))
     })();
     let _ = std::fs::remove_file(&path);
-    let mut obj = result.map_err(|_| AppError::bad("That SQLite file doesn't look like a Service 5 database (no \"records\" table)."))?;
+    let (mut obj, snaps) = result.map_err(|_| AppError::bad("That SQLite file doesn't look like a Service 5 database (no \"records\" table)."))?;
     obj.insert("version".into(), json!(11));
-    Ok(Value::Object(obj))
+    Ok((Value::Object(obj), snaps))
 }
 
 /// Service 5's `LEGACY_KEY_MAP` plus its `wc_` / `_data` storage names, so
@@ -220,7 +234,7 @@ pub fn normalize(raw: Value) -> AppResult<Normalized> {
     let mut workers: Vec<Value> = workers.into_values().collect();
     workers.sort_by_key(|w| str_of(w, "name").to_lowercase());
     let label = if ours { "SiteMonitor workforce backup".into() } else { format!("Service 5 backup (v{version})") };
-    Ok(Normalized { label, workers, collections })
+    Ok(Normalized { label, workers, collections, legacy_snapshots: vec![] })
 }
 
 /// Service 5's per-worker backfills (`normalizeBackupData`), minus random ids:
@@ -427,6 +441,19 @@ pub async fn import(db: &DatabaseConnection, data: Normalized, mode: ImportMode,
         exec(&txn, UPSERT_RECORDS, Value::Array(rows)).await?;
         report.collections.push((c.clone(), items.len()));
     }
+    // Service 5's own daily snapshots become restorable snapshots here (once each).
+    for (date, snap) in &data.legacy_snapshots {
+        let reason = format!("Service 5 daily snapshot {date}");
+        let workers = snap["workers"].as_array().map(Vec::len).unwrap_or(0) as i32;
+        txn.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "INSERT INTO workforce_snapshots (id, taken_at, reason, workers, data)
+             SELECT $1, ($2 || 'T23:59:00')::timestamptz, $3, $4, $5
+             WHERE NOT EXISTS (SELECT 1 FROM workforce_snapshots WHERE reason = $3)",
+            [Uuid::new_v4().into(), date.clone().into(), reason.into(), workers.into(), snap.clone().into()],
+        ))
+        .await?;
+    }
     txn.commit().await?;
     Ok(report)
 }
@@ -489,7 +516,7 @@ pub fn known(c: &str) -> bool {
         || matches!(
             c,
             "attendance_log" | "assignment_log" | "duty_areas" | "duty_schedules" | "ot_entries" | "visitations" | "visitation_groups"
-                | "ministers" | "signatories" | "history" | "group_links" | "project_groups_meta" | "custom_datalists"
+                | "ministers" | "signatories" | "history" | "group_links" | "project_groups_meta" | "custom_datalists" | "area_zones"
         )
 }
 

@@ -35,6 +35,7 @@ pub fn PersonnelView() -> Element {
     let mut filter = use_signal(|| Filter::All);
     let mut editing = use_signal(|| None::<Option<Worker>>);
     let mut reassigning = use_signal(|| None::<Worker>);
+    let mut profiling = use_signal(|| None::<Worker>);
 
     let all = match &*workers.read() {
         Some(Ok(w)) => w.clone(),
@@ -126,6 +127,11 @@ pub fn PersonnelView() -> Element {
                                     }
                                 }
                             },
+                            if w.has_photo {
+                                img { src: "/api/workers/{w.id}/photo", alt: "", loading: "lazy", class: "w-9 h-9 rounded-full object-cover shrink-0", "data-testid": "worker-photo" }
+                            } else {
+                                crate::components::ui::Avatar { name: w.name.clone(), size: 36 }
+                            }
                             div { class: "flex-1 min-w-0",
                                 p { class: "font-medium truncate",
                                     "{w.name}"
@@ -148,7 +154,11 @@ pub fn PersonnelView() -> Element {
                             if can_edit {
                                 {
                                     let w2 = w.clone();
-                                    rsx! { button { class: "btn-icon btn-ghost", "aria-label": "Edit {w.name}", "data-testid": "edit-worker", onclick: move |_| editing.set(Some(Some(w2.clone()))), Icon { name: "edit" } } }
+                                    let w4 = w.clone();
+                                    rsx! {
+                                        button { class: "btn-icon btn-ghost", "aria-label": "Profile of {w.name}", title: "Personal details", "data-testid": "profile-worker", onclick: move |_| profiling.set(Some(w4.clone())), Icon { name: "info" } }
+                                        button { class: "btn-icon btn-ghost", "aria-label": "Edit {w.name}", "data-testid": "edit-worker", onclick: move |_| editing.set(Some(Some(w2.clone()))), Icon { name: "edit" } }
+                                    }
                                 }
                             }
                         }
@@ -158,6 +168,9 @@ pub fn PersonnelView() -> Element {
         }
         if let Some(target) = editing() {
             WorkerModal { worker: target, on_close: move |_| editing.set(None) }
+        }
+        if let Some(w) = profiling() {
+            crate::views::workforce_more::ProfileModal { worker: w, on_close: move |_| profiling.set(None) }
         }
         if let Some(w) = reassigning() {
             crate::views::workforce_ops::ReassignModal { worker: w, on_close: move |_| reassigning.set(None) }

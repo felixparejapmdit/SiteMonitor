@@ -65,6 +65,8 @@ pub fn relative(dt: DateTime<Utc>) -> String {
 pub fn plural(n: usize, word: &str) -> String {
     if n == 1 {
         format!("1 {word}")
+    } else if word == "person" {
+        format!("{n} people")
     } else {
         format!("{n} {word}s")
     }

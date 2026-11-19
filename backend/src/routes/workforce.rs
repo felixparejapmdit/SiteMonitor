@@ -11,6 +11,7 @@ use shared::api::*;
 use shared::*;
 use uuid::Uuid;
 
+use sea_orm::EntityTrait;
 use shared::ws::DataScope;
 
 use crate::convert::{dec, enc};
@@ -18,7 +19,10 @@ use crate::error::{AppError, AppResult};
 use crate::services::workforce;
 use crate::state::{AppState, CurrentUser};
 
-const COLUMNS: &str = "id, a_number, name, phone, trade, department, area, project_group, group_role, daily_status, archived, updated_at";
+const COLUMNS: &str = "id, a_number, name, phone, trade, department, area, project_group, group_role, daily_status, archived, updated_at,
+    COALESCE(profile->>'photoUrl', '') LIKE 'data:image/%' AS has_photo,
+    COALESCE(profile->>'tomorrowAssignment', '') AS tomorrow,
+    COALESCE(NULLIF(profile->>'workResidence', ''), profile->>'residence', '') AS residence";
 
 fn worker(r: &QueryResult) -> Option<Worker> {
     Some(Worker {
@@ -34,7 +38,169 @@ fn worker(r: &QueryResult) -> Option<Worker> {
         status: dec(&r.try_get::<String>("", "daily_status").ok()?),
         archived: r.try_get("", "archived").ok()?,
         updated_at: r.try_get("", "updated_at").ok()?,
+        has_photo: r.try_get("", "has_photo").unwrap_or(false),
+        tomorrow: r.try_get("", "tomorrow").unwrap_or_default(),
+        residence: r.try_get("", "residence").unwrap_or_default(),
     })
+}
+
+/// Which workers a Site Monitor may see and update: those whose Service 5 area
+/// is mapped to one of their zones, or whose project group works on a job in
+/// those zones. Everyone else sees everyone. `None` = no limit.
+async fn visible_ids(state: &AppState, user: &CurrentUser) -> AppResult<Option<std::collections::HashSet<Uuid>>> {
+    if user.0.role != UserRole::SiteMonitor || user.0.can(Permission::ManageWorkforce) {
+        return Ok(None);
+    }
+    let parents: std::collections::HashMap<Uuid, Option<Uuid>> =
+        crate::entities::spatial_area::Entity::find().all(&state.db).await?.into_iter().map(|a| (a.id, a.parent_id)).collect();
+    let mine = |zone: Uuid| shared::access::works_in(&user.0, zone, |z| parents.get(&z).copied().flatten());
+    let zone_of = |v: &Value, k: &str| v[k].as_str().and_then(|s| Uuid::parse_str(s).ok());
+    let areas: std::collections::HashSet<String> =
+        workforce::list_records(&state.db, "area_zones").await?.into_iter().filter(|v| zone_of(v, "zone_id").is_some_and(mine)).filter_map(|v| v["id"].as_str().map(str::to_string)).collect();
+    let job_zone: std::collections::HashMap<Uuid, Uuid> =
+        crate::entities::work_item::Entity::find().all(&state.db).await?.into_iter().map(|w| (w.id, w.area_id)).collect();
+    let groups: std::collections::HashSet<String> = workforce::list_records(&state.db, "group_links")
+        .await?
+        .into_iter()
+        .filter(|v| zone_of(v, "work_item_id").and_then(|j| job_zone.get(&j).copied()).is_some_and(mine))
+        .filter_map(|v| v["id"].as_str().map(str::to_string))
+        .collect();
+    let rows = state.db.query_all(stmt("SELECT id, area, project_group FROM workers", vec![])).await?;
+    Ok(Some(
+        rows.iter()
+            .filter(|r| {
+                let a: String = r.try_get("", "area").unwrap_or_default();
+                let g: String = r.try_get("", "project_group").unwrap_or_default();
+                areas.contains(&a) || groups.contains(&g)
+            })
+            .filter_map(|r| r.try_get::<Uuid>("", "id").ok())
+            .collect(),
+    ))
+}
+
+async fn require_visible(state: &AppState, user: &CurrentUser, id: Uuid) -> AppResult<()> {
+    match visible_ids(state, user).await? {
+        Some(ids) if !ids.contains(&id) => Err(AppError::forbidden("That person isn't in your zones. Ask the Office Admin to map their area to a zone.")),
+        _ => Ok(()),
+    }
+}
+
+/// Personal details fields the profile editor may change. Health ones need "Clinic ledger".
+const PROFILE_FIELDS: &[&str] = &[
+    "birthday", "civilStatus", "address", "residence", "workResidence", "language", "fatherName", "motherName", "spouseName",
+    "spouseBirthday", "spouseContact", "spouseChurchDuty", "weddingDate", "children", "emergencyContact", "emergencyPhone",
+    "emergencyRelationship", "skillLevel", "hourlyRate", "subDepartment", "specificTask", "tomorrowAssignment", "assignment",
+    "visitationGroup", "visitationHousing", "photoUrl",
+];
+const HEALTH_FIELDS: &[&str] = &["bloodType", "medicalNotes", "maintenanceMeds", "healthClearance", "medical", "healthAndClearance"];
+
+/// `GET /api/workers/{id}/photo` — the photo kept in the worker's record.
+pub async fn photo(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    can_read_workforce(&user)?;
+    let row = state.db.query_one(stmt("SELECT profile->>'photoUrl' AS p FROM workers WHERE id = $1", vec![id.into()])).await?;
+    let url: String = row.and_then(|r| r.try_get("", "p").ok()).unwrap_or_default();
+    let (head, data) = url.split_once(',').ok_or_else(|| AppError::not_found("photo"))?;
+    let mime = head.strip_prefix("data:").and_then(|h| h.strip_suffix(";base64")).filter(|m| m.starts_with("image/")).ok_or_else(|| AppError::not_found("photo"))?;
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|_| AppError::not_found("photo"))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, mime.to_string()), (axum::http::header::CACHE_CONTROL, "private, max-age=300".to_string())], bytes).into_response())
+}
+
+/// `GET /api/workers/{id}/profile` — the personal details (health ones only with "Clinic ledger").
+pub async fn profile(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<Value>> {
+    user.require(Permission::ManageWorkforce)?;
+    let row = state.db.query_one(stmt("SELECT profile FROM workers WHERE id = $1", vec![id.into()])).await?;
+    let mut p: Value = row.and_then(|r| r.try_get("", "profile").ok()).ok_or_else(|| AppError::not_found("worker"))?;
+    if let Some(m) = p.as_object_mut() {
+        m.remove("attendanceHistory");
+        m.remove("assignmentHistory");
+        if !user.0.can(Permission::ManageClinic) {
+            for k in HEALTH_FIELDS {
+                m.remove(*k);
+            }
+        }
+    }
+    Ok(Json(p))
+}
+
+/// `PUT /api/workers/{id}/profile` — saves personal details; other fields are ignored.
+pub async fn save_profile(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(body): Json<Value>) -> AppResult<Json<Worker>> {
+    user.require(Permission::ManageWorkforce)?;
+    let clinic = user.0.can(Permission::ManageClinic);
+    let mut patch = serde_json::Map::new();
+    for (k, v) in body.as_object().into_iter().flatten() {
+        if PROFILE_FIELDS.contains(&k.as_str()) || (clinic && HEALTH_FIELDS.contains(&k.as_str())) {
+            patch.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(p) = patch.get("photoUrl").and_then(Value::as_str) {
+        if !p.is_empty() && (!p.starts_with("data:image/") || p.len() > 3_000_000) {
+            return Err(AppError::bad("The photo must be a picture under 2 MB."));
+        }
+    }
+    one(&state, id).await?;
+    state.db.execute(stmt("UPDATE workers SET profile = profile || $2::jsonb, updated_at = now() WHERE id = $1", vec![id.into(), Value::Object(patch).into()])).await?;
+    announce(&state, None).await;
+    Ok(Json(one(&state, id).await?))
+}
+
+/// `GET /api/workforce/summary` — the workforce dashboard.
+pub async fn summary(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<WorkforceSummary>> {
+    can_read_workforce(&user)?;
+    let pairs = |sql: &str| {
+        let db = state.db.clone();
+        let sql = sql.to_string();
+        async move {
+            let rows = db.query_all(stmt(&sql, vec![])).await?;
+            AppResult::Ok(rows.iter().filter_map(|r| Some((r.try_get_by_index::<String>(0).ok()?, r.try_get_by_index::<i64>(1).ok()? as u32))).collect::<Vec<_>>())
+        }
+    };
+    let trades = pairs("SELECT COALESCE(NULLIF(trade, ''), 'No trade'), COUNT(*) FROM workers WHERE NOT archived GROUP BY 1 ORDER BY 2 DESC, 1").await?;
+    let departments = pairs("SELECT COALESCE(NULLIF(department, ''), 'No department'), COUNT(*) FROM workers WHERE NOT archived GROUP BY 1 ORDER BY 2 DESC, 1").await?;
+    let since = (chrono::Local::now().date_naive() - chrono::Duration::days(13)).format("%Y-%m-%d").to_string();
+    let rows = state
+        .db
+        .query_all(stmt(
+            "SELECT data->>'date' AS d,
+                    COUNT(DISTINCT data->>'aNumber') FILTER (WHERE data->>'newStatus' = 'Absent') AS a,
+                    COUNT(DISTINCT data->>'aNumber') FILTER (WHERE data->>'newStatus' IN ('Passes', 'On Pass')) AS p
+             FROM workforce_records WHERE collection = 'attendance_log' AND data->>'date' >= $1 GROUP BY 1 ORDER BY 1",
+            vec![since.into()],
+        ))
+        .await?;
+    let trend = rows
+        .iter()
+        .filter_map(|r| Some((r.try_get::<String>("", "d").ok()?, r.try_get::<i64>("", "a").ok()? as u32, r.try_get::<i64>("", "p").ok()? as u32)))
+        .collect();
+    let month = chrono::Local::now().format("-%m-").to_string();
+    let rows = state
+        .db
+        .query_all(stmt(
+            "SELECT name, profile->>'birthday' AS b FROM workers WHERE NOT archived AND COALESCE(profile->>'birthday', '') LIKE '%' || $1 || '%'
+             ORDER BY substring(profile->>'birthday' from 9 for 2)",
+            vec![month.into()],
+        ))
+        .await?;
+    let birthdays = rows.iter().filter_map(|r| Some((r.try_get::<String>("", "name").ok()?, r.try_get::<String>("", "b").ok()?))).collect();
+    Ok(Json(WorkforceSummary { trades, departments, trend, birthdays }))
+}
+
+/// `GET /api/workforce/family-roster` — family and emergency details for printing.
+pub async fn family_roster(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<Value>>> {
+    user.require(Permission::ManageWorkforce)?;
+    let rows = state
+        .db
+        .query_all(stmt(
+            "SELECT jsonb_build_object('name', name, 'aNumber', a_number, 'group', project_group,
+               'spouseName', profile->>'spouseName', 'children', profile->'children', 'fatherName', profile->>'fatherName',
+               'motherName', profile->>'motherName', 'emergencyContact', profile->>'emergencyContact',
+               'emergencyPhone', profile->>'emergencyPhone', 'address', profile->>'address') AS j
+             FROM workers WHERE NOT archived ORDER BY project_group, lower(name)",
+            vec![],
+        ))
+        .await?;
+    Ok(Json(rows.iter().filter_map(|r| r.try_get::<Value>("", "j").ok()).collect()))
 }
 
 fn stmt(sql: &str, values: Vec<sea_orm::Value>) -> Statement {
@@ -52,7 +218,8 @@ pub async fn list(State(state): State<AppState>, user: CurrentUser) -> AppResult
         user.require(Permission::ManageCrew)?;
     }
     let rows = state.db.query_all(stmt(&format!("SELECT {COLUMNS} FROM workers ORDER BY archived, lower(name)"), vec![])).await?;
-    Ok(Json(rows.iter().filter_map(worker).collect()))
+    let visible = visible_ids(&state, &user).await?;
+    Ok(Json(rows.iter().filter_map(worker).filter(|w| visible.as_ref().is_none_or(|v| v.contains(&w.id))).collect()))
 }
 
 /// Checks the form and returns the Service 5-style fields kept in `profile`.
@@ -162,6 +329,7 @@ fn today() -> String {
 /// `PUT /api/workers/{id}/status` — marks today's attendance and logs it.
 pub async fn set_status(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, headers: HeaderMap, Json(req): Json<WorkerStatusRequest>) -> AppResult<Json<Worker>> {
     can_read_workforce(&user)?;
+    require_visible(&state, &user, id).await?;
     let w = one(&state, id).await?;
     if w.status == req.status {
         return Ok(Json(w));
@@ -194,6 +362,7 @@ pub async fn set_status(State(state): State<AppState>, user: CurrentUser, Path(i
 /// area or department; each change goes in the assignment log.
 pub async fn reassign(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(req): Json<ReassignRequest>) -> AppResult<Json<Worker>> {
     can_read_workforce(&user)?;
+    require_visible(&state, &user, id).await?;
     let w = one(&state, id).await?;
     let changes = [("projectGroup", &w.project_group, req.project_group.trim()), ("area", &w.area, req.area.trim()), ("department", &w.department, req.department.trim())];
     if changes.iter().all(|(_, old, new)| old.as_str() == *new) {

@@ -63,6 +63,7 @@ test("attendance taps and Shift+R reassignments are logged like Service 5", asyn
 test("a group linked to a job feeds the Crew page roster", async ({ page, request }) => {
   const parking = await workItemByTitle(request, "Parking Conversion to Multi-Purpose Hall");
   await openAs(page, "OfficeAdmin", "/workforce");
+  await page.getByTestId("tab-Groups").click();
   const team = page.getByTestId("group-row").filter({ hasText: "Team A" });
   await expect(team).toContainText("2 present · 1 absent");
   await team.getByTestId("group-job").selectOption(parking.id);
@@ -153,7 +154,7 @@ test("live refresh: another open screen sees an attendance change without reload
   await b.close();
 });
 
-test("print set-ups: landscape attendance sheet and 4-up folio job orders", async ({ page }) => {
+test("print set-ups: landscape attendance sheet and 4-up folio job orders @safari", async ({ page }) => {
   await openAs(page, "OfficeAdmin", "/operations");
   await stubPrint(page);
   await page.getByTestId("tab-Attendance").click();

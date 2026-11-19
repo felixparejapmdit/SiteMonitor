@@ -9,6 +9,7 @@ pub mod home;
 pub mod people;
 pub mod clinic;
 pub mod personnel;
+pub mod workforce_more;
 pub mod workforce_ops;
 pub mod project_editor;
 pub mod settings;

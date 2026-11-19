@@ -71,6 +71,9 @@ test("the real service5.db imports completely, and importing again changes nothi
   expect(list.some((w: any) => w.status === "OnPass")).toBeTruthy(); // "Passes" in Service 5
   expect(new Set(list.map((w: any) => w.id)).size).toBe(174);
 
+  // Service 5's own daily snapshots inside service5.db become restorable snapshots (once).
+  const snaps = await (await request.get("/api/workforce/snapshots")).json();
+  expect(snaps.filter((s: any) => s.reason.startsWith("Service 5 daily snapshot")).length).toBeGreaterThan(0);
   const again = await (await importFile(request, "service5.db", readFileSync(DB_FILE))).json();
   expect(again.workers).toBe(174);
   expect((await workers(request)).length).toBe(174);

@@ -665,6 +665,15 @@ pub struct Worker {
     pub status: WorkerStatus,
     pub archived: bool,
     pub updated_at: DateTime<Utc>,
+    /// A photo is on file (served by `GET /api/workers/{id}/photo`).
+    #[serde(default)]
+    pub has_photo: bool,
+    /// Tomorrow's assignment (Service 5's encoder), "" when not set.
+    #[serde(default)]
+    pub tomorrow: String,
+    /// Where the person stays (Service 5 `workResidence` / `residence`).
+    #[serde(default)]
+    pub residence: String,
 }
 
 #[cfg(test)]

@@ -196,6 +196,17 @@ pub struct WorkGroup {
     pub work_item_id: Option<Uuid>,
 }
 
+/// `GET /api/workforce/summary` — the workforce dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct WorkforceSummary {
+    pub trades: Vec<(String, u32)>,
+    pub departments: Vec<(String, u32)>,
+    /// Last 14 days: (date, people marked absent, people marked on pass).
+    pub trend: Vec<(String, u32, u32)>,
+    /// This month: (name, "YYYY-MM-DD" birthday).
+    pub birthdays: Vec<(String, String)>,
+}
+
 /// `PUT /api/workforce/groups` — links a project group to a job (or unlinks it).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GroupLinkRequest {

@@ -131,3 +131,15 @@ with zero rows is rejected unless the caller passes an explicit typed confirmati
 | **4. Operations & print** | Overnight duty + rotation, Attendance generator + landscape sheet, OT calculator & entries, Visitations & groups, Update forms, ID cards, 4-up job orders | 1 |
 | **5. Clinic ledger** | Health events state machine, visit logs, vaccines/meds, contact tracing, clinical reports, audit | 1, permission decision |
 | **6. Sync & sidebar** | client_id + row LWW, unified sidebar (Estate Command / Workforce & Crew / Operations & Duty / System & Admin) with role scoping, full e2e incl. legacy import test | all |
+| **7. Gaps from 1–6** | Offline workforce saves (queued, sent on reconnect); Service 5's own daily snapshots inside `service5.db` become restorable snapshots; area → zone mapping so Site Monitors see only people working in their zones; worker photos | 1–6 |
+| **8. Full profile** | Profile editor (family, emergency contact, residence, skills); health fields only with clinic access; photo upload | 7 |
+| **9. Workforce extras** | Dashboard (counts, 14-day trend, trades, birthdays); Tomorrow encoder with whole-group fill; bulk update from pasted names / A#; grouped job orders per signatory | 7 |
+| **10. Operations & clinic extras** | Duty history with swaps; overtime from pasted names; visitation groups and ministers; pick lists; clinic medications, booster reminders, contact → episode; tomorrow / residential / family-roster print; print checks also in WebKit (Safari's engine) | 7–9 |
+
+### Status (2026-11-20)
+
+All ten phases are built and covered by `e2e/tests/08-*`, `09-*` and `10-*`. Known limits:
+
+- The PocketBase NAS maps and zones from Service 5 can't be imported: no export of them exists in `01_Rust_WC_DB`. Zones are drawn in Map Studio, and areas are mapped to them on the Areas & zones tab.
+- The dashboard has the main figures, not every Service 5 chart.
+- Print layout is checked in Chromium and WebKit (page size, layout, content). Real paper output and real Safari on iOS/macOS were not tested.
