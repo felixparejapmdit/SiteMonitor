@@ -13,11 +13,11 @@ use crate::services::sync::{self, ALL_SCOPES};
 use crate::state::{AppState, ToastTone};
 use crate::util;
 
-fn ws_url(user: uuid::Uuid) -> String {
+fn ws_url() -> String {
     let location = util::window().location();
     let protocol = if location.protocol().unwrap_or_default() == "https:" { "wss" } else { "ws" };
     let host = location.host().unwrap_or_else(|_| "localhost:8737".into());
-    format!("{protocol}://{host}/ws?user_id={user}")
+    format!("{protocol}://{host}/ws")
 }
 
 pub async fn live_loop(app: AppState) {
@@ -29,7 +29,7 @@ pub async fn live_loop(app: AppState) {
             TimeoutFuture::new(300).await;
             continue;
         };
-        if let Ok(ws) = WebSocket::open(&ws_url(user)) {
+        if let Ok(ws) = WebSocket::open(&ws_url()) {
             let (_sink, mut stream) = ws.split();
             loop {
                 let next = Box::pin(stream.next());
@@ -52,7 +52,7 @@ pub async fn live_loop(app: AppState) {
                     Either::Left((Some(Ok(Message::Bytes(_))), _)) => {}
                     Either::Left((Some(Err(_)), _)) | Either::Left((None, _)) => break,
                     Either::Right(_) => {
-                        // Role switched: reconnect as the new user.
+                        // Signed out or in as someone else: reconnect.
                         if app.user_id() != Some(user) {
                             break;
                         }

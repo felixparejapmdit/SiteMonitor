@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::{Duration, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TransactionTrait,
 };
 use shared::api::*;
@@ -31,6 +31,92 @@ pub async fn list(State(state): State<AppState>) -> AppResult<Json<AssetsRespons
         .map(convert::transfer)
         .collect();
     Ok(Json(AssetsResponse { assets, recent_transfers }))
+}
+
+/// Loads equipment that is still in use (retired equipment can't be moved or reported).
+async fn active_asset(state: &AppState, id: Uuid) -> AppResult<asset::Model> {
+    let row = Assets::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("equipment"))?;
+    if row.is_retired {
+        return Err(AppError::bad("This equipment has been retired. Bring it back into use first (Edit → In use)."));
+    }
+    Ok(row)
+}
+
+/// Checks the name and location from the equipment form.
+async fn check_form(state: &AppState, req: &SaveAssetRequest) -> AppResult<String> {
+    let name = req.name.trim().to_string();
+    if name.is_empty() || name.chars().count() > 80 {
+        return Err(AppError::bad("Please enter the equipment's name (up to 80 characters)."));
+    }
+    let area = SpatialAreas::find_by_id(req.current_area_id).one(&state.db).await?.ok_or_else(|| AppError::not_found("zone"))?;
+    if area.is_archived {
+        return Err(AppError::bad("That zone is archived. Pick an active location."));
+    }
+    Ok(name)
+}
+
+/// `POST /api/assets` — add equipment (Office Admin).
+pub async fn create(State(state): State<AppState>, user: CurrentUser, Json(req): Json<SaveAssetRequest>) -> AppResult<Json<Asset>> {
+    user.require(Permission::ManageEquipment)?;
+    let name = check_form(&state, &req).await?;
+    let saved = asset::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        name: Set(name),
+        mobility: Set(enc(&req.mobility)),
+        current_area_id: Set(req.current_area_id),
+        parent_asset_id: Set(None),
+        health: Set(enc(&AssetHealth::Operational)),
+        active_issue_report: Set(None),
+        impact_level: Set(enc(&ImpactLevel::NoImpact)),
+        repair_eta: Set(None),
+        is_retired: Set(false),
+    }
+    .insert(&state.db)
+    .await?;
+    state.hub.changed(&[DataScope::Assets, DataScope::Map]).await;
+    Ok(Json(convert::asset(saved)))
+}
+
+/// `PUT /api/assets/{id}` — rename, change type or home zone, retire or bring back (Office Admin).
+pub async fn update(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<SaveAssetRequest>,
+) -> AppResult<Json<Asset>> {
+    user.require(Permission::ManageEquipment)?;
+    let row = Assets::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("equipment"))?;
+    let name = check_form(&state, &req).await?;
+    let moving = row.current_area_id != req.current_area_id;
+    if moving && row.parent_asset_id.is_some() {
+        return Err(AppError::bad("This part is installed inside other equipment. Detach it first, then move it."));
+    }
+    let txn = state.db.begin().await?;
+    if req.is_retired && !row.is_retired {
+        let parts = Assets::find()
+            .filter(asset::Column::ParentAssetId.eq(id))
+            .filter(asset::Column::IsRetired.eq(false))
+            .count(&txn)
+            .await?;
+        if parts > 0 {
+            return Err(AppError::bad("Parts are still installed in this equipment. Detach or retire them first."));
+        }
+    }
+    if moving {
+        move_with_children(&txn, id, req.current_area_id, user.0.id).await?;
+    }
+    let mut a = Assets::find_by_id(id).one(&txn).await?.ok_or_else(|| AppError::not_found("equipment"))?.into_active_model();
+    a.name = Set(name);
+    a.mobility = Set(enc(&req.mobility));
+    a.is_retired = Set(req.is_retired);
+    if req.is_retired {
+        // A retired part no longer sits inside anything.
+        a.parent_asset_id = Set(None);
+    }
+    let saved = a.update(&txn).await?;
+    txn.commit().await?;
+    state.hub.changed(&[DataScope::Assets, DataScope::Map, DataScope::WorkItems]).await;
+    Ok(Json(convert::asset(saved)))
 }
 
 /// Moves an asset and every component nested inside it, logging each move.
@@ -68,12 +154,14 @@ pub async fn relocate(
     Path(id): Path<Uuid>,
     Json(req): Json<RelocateAssetRequest>,
 ) -> AppResult<Json<Asset>> {
-    user.require_staff("move equipment")?;
+    user.require(Permission::OperateEquipment)?;
     let dest = SpatialAreas::find_by_id(req.to_area_id).one(&state.db).await?.ok_or_else(|| AppError::not_found("destination zone"))?;
     if dest.is_archived {
         return Err(AppError::bad("That zone is archived. Pick an active location."));
     }
-    let row = Assets::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("equipment"))?;
+    let row = active_asset(&state, id).await?;
+    user.require_zone(&state.db, row.current_area_id).await?;
+    user.require_zone(&state.db, dest.id).await?;
     if row.parent_asset_id.is_some() {
         return Err(AppError::bad(
             "This part is installed inside other equipment. Detach it first, then move it.",
@@ -94,8 +182,9 @@ pub async fn link(
     Path(id): Path<Uuid>,
     Json(req): Json<LinkAssetRequest>,
 ) -> AppResult<Json<Asset>> {
-    user.require_staff("attach or detach parts")?;
-    let row = Assets::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("equipment"))?;
+    user.require(Permission::OperateEquipment)?;
+    let row = active_asset(&state, id).await?;
+    user.require_zone(&state.db, row.current_area_id).await?;
     let txn = state.db.begin().await?;
     match req.parent_asset_id {
         Some(parent_id) => {
@@ -110,6 +199,9 @@ pub async fn link(
                     return Err(AppError::bad("That would place the equipment inside one of its own parts."));
                 }
                 let p = Assets::find_by_id(c).one(&txn).await?.ok_or_else(|| AppError::not_found("parent equipment"))?;
+                if p.is_retired {
+                    return Err(AppError::bad("That equipment has been retired. Pick one that's still in use."));
+                }
                 if parent_area.is_none() {
                     parent_area = Some(p.current_area_id);
                 }
@@ -141,14 +233,15 @@ pub async fn report_issue(
     Path(id): Path<Uuid>,
     Json(req): Json<ReportIssueRequest>,
 ) -> AppResult<Json<Asset>> {
-    user.require_staff("report breakdowns")?;
+    user.require(Permission::OperateEquipment)?;
     if req.health == AssetHealth::Operational {
         return Err(AppError::bad("Choose \"Needs service\" or \"Broken down\" to report a problem."));
     }
     if req.note.trim().is_empty() {
         return Err(AppError::bad("Please describe what's wrong and what you've done about it."));
     }
-    let row = Assets::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("equipment"))?;
+    let row = active_asset(&state, id).await?;
+    user.require_zone(&state.db, row.current_area_id).await?;
     let asset_name = row.name.clone();
     let txn = state.db.begin().await?;
     let mut a = row.into_active_model();
@@ -216,8 +309,9 @@ pub async fn mark_repaired(
     user: CurrentUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Asset>> {
-    user.require_staff("mark equipment as repaired")?;
+    user.require(Permission::OperateEquipment)?;
     let row = Assets::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("equipment"))?;
+    user.require_zone(&state.db, row.current_area_id).await?;
     let was_stoppage = row.impact_level == enc(&ImpactLevel::FullWorkStoppage);
     let area = row.current_area_id;
     let name = row.name.clone();

@@ -4,10 +4,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::access::AccessOverrides;
 use crate::models::*;
 
-/// HTTP header the frontend uses to say which (dev-mode) user is acting.
-pub const USER_HEADER: &str = "x-user-id";
+/// Name of the HttpOnly session cookie set at sign-in.
+pub const SESSION_COOKIE: &str = "sm_session";
 
 /// Uniform error body returned by every failing endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -97,6 +98,21 @@ pub struct CompleteTaskRequest {
     pub note: Option<String>,
 }
 
+/// `POST /api/work-items/{id}/cancel`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CancelProjectRequest {
+    pub reason: String,
+}
+
+/// `POST /api/work-items/{id}/delay` — pushes the target date back and records why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LogDelayRequest {
+    pub category: DelayCategory,
+    pub days: u16,
+    pub title: String,
+    pub note: String,
+}
+
 /// Result of completing a phase (so the UI can celebrate the 99% lock).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProgressUpdate {
@@ -173,6 +189,52 @@ pub struct CreateDecisionRequest {
     pub mitigation_action_taken: String,
     /// Optional 16:9 field photo attached to the draft.
     pub photo_data_url: Option<String>,
+}
+
+/// What kind of thing happened on site (drives the feed's icon).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ActivityKind {
+    Milestone,
+    Delay,
+    Update,
+    Photo,
+}
+
+/// One line in the "What's happening now" feed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActivityItem {
+    pub id: Uuid,
+    pub kind: ActivityKind,
+    pub title: String,
+    pub detail: String,
+    pub work_item_id: Uuid,
+    pub image_url: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
+/// One-tap office decision on a field report.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReviewDecisionRequest {
+    pub action: ReviewAction,
+    /// Reason (decline) or what is missing (ask for details).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Changes a report that is still waiting for office review.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpdateDecisionRequest {
+    pub work_item_id: Uuid,
+    pub category: AlertCategory,
+    pub urgency: UrgencyLevel,
+    pub title: String,
+    pub issue_description: String,
+    pub mitigation_action_taken: String,
+    /// A new photo (`data:image/...`); `None` keeps the current one.
+    pub photo_data_url: Option<String>,
+    /// Take the photo off the report.
+    #[serde(default)]
+    pub remove_photo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -311,4 +373,130 @@ pub struct JobRunResult {
 pub struct HealthResponse {
     pub ok: bool,
     pub version: String,
+}
+
+// ----------------------------------------------------------------- people
+
+/// `POST /api/users` and `PUT /api/users/{id}` (Office Admin).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SaveUserRequest {
+    pub name: String,
+    pub role: Option<UserRole>,
+    pub phone: String,
+    pub email: String,
+    /// Zones a Site Monitor looks after (ignored for other roles).
+    pub assigned_area_ids: Vec<Uuid>,
+    pub is_active: bool,
+    /// New accounts only: the first password, which the person must change.
+    #[serde(default)]
+    pub initial_password: Option<String>,
+}
+
+// ----------------------------------------------------------------- sign-in
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+/// Returned by sign-in. Browsers use the cookie; `token` is for API clients
+/// (sent as `Authorization: Bearer <token>`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionResponse {
+    pub user: User,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResetPasswordResponse {
+    /// Shown to the admin once; the person must change it at next sign-in.
+    pub temporary_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DemoAccount {
+    pub name: String,
+    pub role: UserRole,
+    pub email: String,
+}
+
+/// What the sign-in page may show before anyone is signed in.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AuthOptions {
+    /// Only filled in demo mode (`SITEMONITOR_DEMO=1`).
+    pub demo_accounts: Vec<DemoAccount>,
+    pub demo_password: Option<String>,
+}
+
+// ----------------------------------------------------------------- access matrix
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AccessAuditEntry {
+    pub id: Uuid,
+    pub at: DateTime<Utc>,
+    pub actor_name: String,
+    pub target_name: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AccessMatrixResponse {
+    pub users: Vec<User>,
+    pub audit: Vec<AccessAuditEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AccessChange {
+    pub user_id: Uuid,
+    pub access: AccessOverrides,
+}
+
+/// Saves several people's access in one go (all or nothing).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SaveAccessRequest {
+    pub changes: Vec<AccessChange>,
+}
+
+// ----------------------------------------------------------------- projects
+
+/// One phase row in the project editor. `id` is `None` for a new phase;
+/// the list order becomes the phase order.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhaseInput {
+    pub id: Option<Uuid>,
+    pub phase_name: String,
+    pub weight_percentage: u8,
+}
+
+/// `POST /api/work-items` and `PUT /api/work-items/{id}` (Office Admin).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SaveWorkItemRequest {
+    pub area_id: Uuid,
+    pub stream: WorkStream,
+    pub title: String,
+    pub description: String,
+    /// Only Planning, In progress or Paused can be chosen by hand.
+    pub status: WorkStatus,
+    pub target_deadline: DateTime<Utc>,
+    pub personnel: ProjectPersonnel,
+    /// Construction projects only; weights must add up to 100.
+    pub phases: Vec<PhaseInput>,
+}
+
+// ----------------------------------------------------------------- equipment
+
+/// `POST /api/assets` and `PUT /api/assets/{id}` (Office Admin).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SaveAssetRequest {
+    pub name: String,
+    pub mobility: MobilityType,
+    pub current_area_id: Uuid,
+    pub is_retired: bool,
 }

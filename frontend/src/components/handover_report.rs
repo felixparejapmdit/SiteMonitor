@@ -28,14 +28,14 @@ pub fn BeforeAfterSlider(before: String, after: String) -> Element {
                 style: "clip-path: inset(0 {clip}% 0 0);",
                 draggable: "false",
             }
-            div { class: "absolute inset-y-0 w-0.5 bg-white shadow-[0_0_0_1px_rgba(0,0,0,.08)] pointer-events-none", style: "left:{p}%;",
-                div { class: "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white shadow-pop flex items-center justify-center text-ink",
+            div { class: "absolute inset-y-0 w-0.5 bg-surface shadow-[0_0_0_1px_rgba(0,0,0,.08)] pointer-events-none", style: "left:{p}%;",
+                div { class: "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-surface shadow-pop flex items-center justify-center text-ink",
                     Icon { name: "chevron-left", size: 14 }
                     Icon { name: "chevron-right", size: 14 }
                 }
             }
-            span { class: "absolute top-3 left-3 pill bg-white/90 text-ink pointer-events-none", "Before · Day 1" }
-            span { class: "absolute top-3 right-3 pill bg-white/90 text-ink pointer-events-none", "After · Completion" }
+            span { class: "absolute top-3 left-3 pill bg-surface/90 text-ink pointer-events-none", "Before · Day 1" }
+            span { class: "absolute top-3 right-3 pill bg-surface/90 text-ink pointer-events-none", "After · Completion" }
             input {
                 r#type: "range",
                 min: "0",
@@ -58,7 +58,7 @@ pub fn BeforeAfterSlider(before: String, after: String) -> Element {
 pub fn HandoverReport(detail: WorkItemDetail, report: ExecutiveHandoverReport) -> Element {
     let app = use_app();
     let nav = use_navigator();
-    let is_vip = app.is_vip();
+    let is_vip = app.can(Permission::SignOffProjects);
     let mut pin_mode = use_signal(|| false);
     let mut busy = use_signal(|| false);
     let item = detail.item.clone();
@@ -88,9 +88,9 @@ pub fn HandoverReport(detail: WorkItemDetail, report: ExecutiveHandoverReport) -
     let progress = item.calculated_progress;
 
     rsx! {
-        article { class: "max-w-doc mx-auto space-y-10", "data-testid": "handover-report",
+        article { class: "space-y-10", "data-testid": "handover-report",
             header { class: "space-y-3",
-                p { class: "eyebrow", "Executive Handover Report" }
+                p { class: "eyebrow", "Handover report" }
                 h1 { class: "doc-title", "{item.title}" }
                 div { class: "flex flex-wrap items-center gap-2",
                     if signed {

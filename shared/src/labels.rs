@@ -111,6 +111,7 @@ impl WorkStatus {
             WorkStatus::Halted => "Paused",
             WorkStatus::PendingSignOff => "Ready for your sign-off",
             WorkStatus::CompletedAndArchived => "Completed",
+            WorkStatus::Cancelled => "Cancelled",
         }
     }
     pub fn staff_label(self) -> &'static str {
@@ -125,7 +126,7 @@ impl WorkStatus {
             WorkStatus::InProgress => Tone::Green,
             WorkStatus::Halted => Tone::Red,
             WorkStatus::PendingSignOff => Tone::Amber,
-            WorkStatus::CompletedAndArchived => Tone::Gray,
+            WorkStatus::CompletedAndArchived | WorkStatus::Cancelled => Tone::Gray,
         }
     }
     pub fn is_active(self) -> bool {
@@ -178,13 +179,45 @@ impl DecisionStatus {
             DecisionStatus::ApprovedOptionA => "Approved — Option A",
             DecisionStatus::ApprovedOptionB => "Approved — Option B",
             DecisionStatus::AcknowledgedReceipt => "Seen by owner",
+            DecisionStatus::OnHold => "On hold",
+            DecisionStatus::NeedsDetails => "Needs more details",
+            DecisionStatus::OfficeApproved => "Approved",
+            DecisionStatus::OfficeDeclined => "Declined",
         }
     }
     pub fn tone(self) -> Tone {
         match self {
             DecisionStatus::DraftInAdminQueue => Tone::Gray,
-            DecisionStatus::PublishedPendingClient => Tone::Amber,
+            DecisionStatus::PublishedPendingClient | DecisionStatus::OnHold => Tone::Amber,
+            DecisionStatus::NeedsDetails => Tone::Blue,
+            DecisionStatus::OfficeDeclined => Tone::Red,
             _ => Tone::Green,
+        }
+    }
+    /// Only reports sent to the owner, and the owner's answers, are visible to them.
+    pub fn owner_can_see(self) -> bool {
+        matches!(
+            self,
+            DecisionStatus::PublishedPendingClient
+                | DecisionStatus::ApprovedOptionA
+                | DecisionStatus::ApprovedOptionB
+                | DecisionStatus::AcknowledgedReceipt
+        )
+    }
+    /// Still with the office: it can be approved, declined, held, edited or sent on.
+    pub fn is_open(self) -> bool {
+        matches!(self, DecisionStatus::DraftInAdminQueue | DecisionStatus::OnHold | DecisionStatus::NeedsDetails)
+    }
+    /// Where a review action leads from here, or `None` if it doesn't apply.
+    pub fn after_review(self, action: ReviewAction) -> Option<DecisionStatus> {
+        use DecisionStatus::*;
+        match (action, self) {
+            (ReviewAction::Approve, s) if s.is_open() => Some(OfficeApproved),
+            (ReviewAction::Decline, s) if s.is_open() => Some(OfficeDeclined),
+            (ReviewAction::Hold, DraftInAdminQueue | NeedsDetails) => Some(OnHold),
+            (ReviewAction::AskForDetails, DraftInAdminQueue | OnHold) => Some(NeedsDetails),
+            (ReviewAction::Reopen, OnHold | NeedsDetails | OfficeApproved | OfficeDeclined) => Some(DraftInAdminQueue),
+            _ => None,
         }
     }
     pub fn is_resolved(self) -> bool {
@@ -360,6 +393,20 @@ mod tests {
         let phases = vec![phase(40, true), phase(60, true)];
         assert_eq!(displayed_progress(weighted_progress(&phases), false), 99);
         assert_eq!(displayed_progress(weighted_progress(&phases), true), 100);
+    }
+
+    #[test]
+    fn review_actions_follow_the_rules() {
+        use DecisionStatus::*;
+        assert_eq!(DraftInAdminQueue.after_review(ReviewAction::Approve), Some(OfficeApproved));
+        assert_eq!(OnHold.after_review(ReviewAction::Decline), Some(OfficeDeclined));
+        assert_eq!(DraftInAdminQueue.after_review(ReviewAction::Hold), Some(OnHold));
+        assert_eq!(OnHold.after_review(ReviewAction::Hold), None);
+        assert_eq!(OfficeDeclined.after_review(ReviewAction::Reopen), Some(DraftInAdminQueue));
+        // Once it's with the owner, the office can't settle it any more.
+        assert_eq!(PublishedPendingClient.after_review(ReviewAction::Approve), None);
+        assert_eq!(ApprovedOptionA.after_review(ReviewAction::Reopen), None);
+        assert!(!OnHold.owner_can_see() && !OfficeApproved.owner_can_see() && PublishedPendingClient.owner_can_see());
     }
 
     #[test]

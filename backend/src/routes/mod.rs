@@ -6,53 +6,78 @@ pub mod decisions;
 pub mod estate;
 pub mod manpower;
 pub mod photos;
+pub mod settings;
+pub mod users;
 pub mod work_items;
 
 use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::middleware;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set};
 use shared::api::*;
 use shared::ws::DataScope;
 use shared::*;
 use uuid::Uuid;
 
 use crate::convert::{self, enc};
-use crate::entities::{notification, prelude::*};
+use crate::entities::{notification, prelude::*, site_photo, timeline_event_record};
 use crate::error::{AppError, AppResult};
 use crate::services::scheduler;
 use crate::state::{AppState, CurrentUser};
 
-pub fn api() -> Router<AppState> {
-    Router::new()
+pub fn api(state: AppState) -> Router<AppState> {
+    // Reachable without signing in.
+    let public = Router::new()
         .route("/health", get(health))
-        .route("/users", get(users))
+        .route("/auth/options", get(crate::auth::options))
+        .route("/auth/login", post(crate::auth::login))
+        .route("/auth/logout", post(crate::auth::logout))
+        .route("/auth/me", get(crate::auth::me));
+    // Everything else needs a session.
+    let private = Router::new()
+        .route("/auth/password", post(crate::auth::change_password))
+        .route("/users", get(users).post(users::create))
+        .route("/users/{id}", put(users::update))
+        .route("/users/{id}/reset-password", post(users::reset_password))
+        .route("/access", get(users::access_matrix).put(users::save_access))
+        .route("/settings", get(settings::get).put(settings::update))
+        .route("/settings/sample-data", post(settings::load_sample))
+        .route("/settings/clear-data", post(settings::clear_data))
         // Estate map
         .route("/estate/map", get(estate::get_map))
         .route("/estate/areas", post(estate::create_area))
         .route("/estate/areas/{id}", put(estate::update_area))
         .route("/estate/base-maps", post(estate::upload_base_map))
+        .route("/estate/base-maps/{id}", put(estate::update_base_map))
+        .route("/estate/base-maps/{id}/activate", post(estate::activate_base_map))
         // Work items & phases
-        .route("/work-items", get(work_items::list))
-        .route("/work-items/{id}", get(work_items::detail))
+        .route("/work-items", get(work_items::list).post(work_items::create))
+        .route("/work-items/{id}", get(work_items::detail).put(work_items::update).delete(work_items::remove))
+        .route("/work-items/{id}/cancel", post(work_items::cancel))
         .route("/work-items/{id}/sign-off", post(work_items::sign_off))
         .route("/work-items/{id}/complete-task", post(work_items::complete_task))
+        .route("/work-items/{id}/delay", post(work_items::log_delay))
         .route("/phases/{id}/complete", post(work_items::complete_phase))
         // Manpower
         .route("/manpower/reallocate", post(manpower::reallocate))
         // Assets
-        .route("/assets", get(assets::list))
+        .route("/assets", get(assets::list).post(assets::create))
+        .route("/assets/{id}", put(assets::update))
         .route("/assets/{id}/relocate", post(assets::relocate))
         .route("/assets/{id}/link", post(assets::link))
         .route("/assets/{id}/report-issue", post(assets::report_issue))
         .route("/assets/{id}/mark-repaired", post(assets::mark_repaired))
         // Decisions
         .route("/decisions", get(decisions::list).post(decisions::create))
+        .route("/decisions/{id}", put(decisions::update).delete(decisions::remove))
         .route("/decisions/{id}/publish", put(decisions::publish))
+        .route("/decisions/{id}/review", post(decisions::review))
         .route("/decisions/{id}/respond", post(decisions::respond))
         // Photos & call-outs
         .route("/photos", post(photos::upload))
+        .route("/photos/{id}", axum::routing::delete(photos::remove))
         .route("/photos/updates", get(photos::unacknowledged))
         .route("/callouts/open", get(photos::open_callouts))
         .route("/photos/{id}/acknowledge", post(photos::acknowledge))
@@ -63,22 +88,77 @@ pub fn api() -> Router<AppState> {
         .route("/agenda", get(agenda::list).post(agenda::create))
         .route("/agenda/quiet-day", post(agenda::quiet_day))
         .route("/agenda/{id}/reschedule", put(agenda::reschedule))
+        .route("/agenda/{id}", put(agenda::update).delete(agenda::remove))
         // Notifications & automation
+        .route("/activity", get(activity))
         .route("/notifications", get(notifications))
         .route("/notifications/{id}/dismiss", post(dismiss_notification))
         .route("/admin/jobs/{job}/run", post(run_job))
-        .layer(DefaultBodyLimit::max(25 * 1024 * 1024))
+        .route_layer(middleware::from_fn_with_state(state, crate::auth::guard));
+    // Full-resolution map pictures arrive base64-encoded (60 MB file ≈ 80 MB body).
+    public.merge(private).layer(DefaultBodyLimit::max(90 * 1024 * 1024))
 }
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true, version: env!("CARGO_PKG_VERSION").into() })
 }
 
-/// `GET /api/users` — powers the dev-mode role switcher.
+/// `GET /api/users` — everyone on the estate team (for pickers and contact cards).
 async fn users(State(state): State<AppState>) -> AppResult<Json<Vec<User>>> {
     let mut list: Vec<User> = Users::find().all(&state.db).await?.into_iter().map(convert::user).collect();
     list.sort_by_key(|u| (UserRole::ALL.iter().position(|r| *r == u.role), u.name.clone()));
     Ok(Json(list))
+}
+
+/// `GET /api/activity` — the latest happenings across the estate (project
+/// history and site photos), newest first, for the live feed.
+async fn activity(State(state): State<AppState>, _user: CurrentUser) -> AppResult<Json<Vec<ActivityItem>>> {
+    let now = Utc::now();
+    let events = TimelineEventRecords::find()
+        .filter(timeline_event_record::Column::Timestamp.lte(now))
+        .order_by_desc(timeline_event_record::Column::Timestamp)
+        .limit(30)
+        .all(&state.db)
+        .await?;
+    let photos = SitePhotos::find()
+        .filter(site_photo::Column::UploadedAt.lte(now))
+        // Field-report photos are private to the office and the reporter.
+        .filter(site_photo::Column::Caption.not_like("Field report:%"))
+        .order_by_desc(site_photo::Column::UploadedAt)
+        .limit(30)
+        .all(&state.db)
+        .await?;
+    let mut out: Vec<ActivityItem> = events
+        .into_iter()
+        .map(convert::timeline)
+        .map(|t| ActivityItem {
+            id: t.id,
+            kind: if t.days_delayed > 0 {
+                ActivityKind::Delay
+            } else if t.is_milestone {
+                ActivityKind::Milestone
+            } else {
+                ActivityKind::Update
+            },
+            title: t.title,
+            detail: t.description,
+            work_item_id: t.work_item_id,
+            image_url: None,
+            at: t.timestamp,
+        })
+        .collect();
+    out.extend(photos.into_iter().map(convert::photo).map(|p| ActivityItem {
+        id: p.id,
+        kind: ActivityKind::Photo,
+        title: if p.caption.trim().is_empty() { "New photo from the site".into() } else { format!("New photo: {}", p.caption.trim()) },
+        detail: String::new(),
+        work_item_id: p.work_item_id,
+        image_url: Some(p.image_url),
+        at: p.uploaded_at,
+    }));
+    out.sort_by_key(|a| std::cmp::Reverse(a.at));
+    out.truncate(30);
+    Ok(Json(out))
 }
 
 /// `GET /api/notifications` — visible, undismissed notices for my role.
@@ -118,7 +198,7 @@ async fn run_job(
     user: CurrentUser,
     Path(job): Path<String>,
 ) -> AppResult<Json<JobRunResult>> {
-    user.require_admin("run automations")?;
+    user.require(Permission::ManageSettings)?;
     let job = match job.as_str() {
         "midnight-roster-reset" => AutomationJob::MidnightRosterReset,
         "deadline-monitor" => AutomationJob::DeadlineMonitor,

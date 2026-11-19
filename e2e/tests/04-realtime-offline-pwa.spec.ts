@@ -3,8 +3,7 @@
  * the IndexedDB offline queue with automatic FIFO sync, and smoothness
  * checks (no console errors, no layout shift when data refreshes).
  */
-import { test, expect } from "@playwright/test";
-import { api, openAs, resetDatabase, toast, userFor, workItemByTitle } from "./helpers";
+import { api, expect, openAs, resetDatabase, test, toast, userFor, workItemByTitle } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 test.beforeAll(() => resetDatabase());
@@ -31,7 +30,7 @@ test("live push: staff resolve a note → the owner's pin turns green instantly"
   await openAs(vipPage, "VipClient");
   const parking = await workItemByTitle(vipPage.request, "Parking Conversion to Multi-Purpose Hall");
   await vipPage.goto(`/projects/${parking.id}`);
-  await expect(vipPage.locator("text=Live").first()).toBeVisible();
+  await expect(vipPage.locator("aside").getByText("Live", { exact: true })).toBeVisible();
   await expect(vipPage.getByTestId("pin-Open")).toHaveCount(1);
 
   await openAs(staffPage, "SiteMonitor", `/projects/${parking.id}`, "Jun");
@@ -54,7 +53,7 @@ test("live push: owner approves → staff alerted; drafts never reach the owner"
   const adminPage = await browser.newPage();
   await openAs(vipPage, "VipClient");
   await openAs(adminPage, "OfficeAdmin");
-  await expect(adminPage.locator("text=Live").first()).toBeVisible();
+  await expect(adminPage.locator("aside").getByText("Live", { exact: true })).toBeVisible();
 
   // A field draft is created: the owner must NOT be interrupted.
   const monitor = await userFor(vipPage.request, "SiteMonitor", "Jun");
@@ -73,19 +72,20 @@ test("live push: owner approves → staff alerted; drafts never reach the owner"
   await adminPage.close();
 });
 
-test("offline mode: staff updates queue in IndexedDB and sync when signal returns", async ({ browser }) => {
+test("offline mode: staff updates queue in IndexedDB and sync when signal returns", async ({ browser, request }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   const page = await context.newPage();
-  const backwash = await workItemByTitle(page.request, "Water Filtration Backwash");
-  await openAs(page, "SiteMonitor", `/projects/${backwash.id}`, "Ana");
+  // A routine job in Jun's own zone (Site Monitors only update work in their zones).
+  const backwash = await workItemByTitle(request, "Swimming Pool Cleanup");
+  await openAs(page, "SiteMonitor", `/projects/${backwash.id}`, "Jun");
   await expect(page.getByTestId("mark-completed")).toBeVisible();
 
   await context.setOffline(true);
-  await expect(page.getByTestId("offline-badge")).toContainText("Offline Mode — 0 Updates Queued");
+  await expect(page.getByTestId("offline-badge")).toContainText("You're offline — 0 updates saved on this device");
   await page.getByTestId("mark-completed").click();
   await page.getByTestId("confirm-mark-completed").click();
   await expect(toast(page).filter({ hasText: "Saved on this device" })).toBeVisible();
-  await expect(page.getByTestId("offline-badge")).toContainText("Offline Mode — 1 Update Queued");
+  await expect(page.getByTestId("offline-badge")).toContainText("You're offline — 1 update saved on this device");
   const queued = await page.evaluate(
     () =>
       new Promise<number>((resolve) => {
@@ -100,11 +100,11 @@ test("offline mode: staff updates queue in IndexedDB and sync when signal return
   expect(queued).toBe(1);
 
   await context.setOffline(false);
-  await expect(toast(page).filter({ hasText: "Synced 1 update saved offline" })).toBeVisible({ timeout: 15_000 });
+  await expect(toast(page).filter({ hasText: "Sent 1 update you saved offline" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("offline-badge")).toHaveCount(0);
   const vip = await userFor(page.request, "VipClient");
   const detail = await api(page.request, vip).get(`/work-items/${backwash.id}`);
-  expect(detail.timeline.filter((t: any) => t.title.startsWith("Water Filtration Backwash — Completed")).length).toBeGreaterThanOrEqual(2);
+  expect(detail.timeline.filter((t: any) => t.title.startsWith("Swimming Pool Cleanup — Completed")).length).toBeGreaterThanOrEqual(2);
   await context.close();
 });
 
@@ -138,10 +138,7 @@ test("smoothness: no console errors and no layout shift on background refresh", 
 test("mobile layout: bottom tabs for field staff", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
-  await openAs(page, "SiteMonitor", "/", "Jun").catch(async () => {
-    // The desktop tab bar is hidden on phones; the select is used instead.
-    await expect(page.getByTestId("role-select")).toBeVisible();
-  });
+  await openAs(page, "SiteMonitor", "/", "Jun");
   const tabs = page.getByRole("navigation", { name: "Main" }).last();
   await expect(tabs).toBeVisible();
   await expect(tabs.getByRole("link")).toHaveCount(5);

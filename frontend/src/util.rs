@@ -239,6 +239,21 @@ pub fn storage_set(key: &str, value: &str) {
     }
 }
 
+/// False on iPhone Safari, which can't show a page element full screen — the button is hidden there.
+pub fn can_fullscreen() -> bool {
+    document().fullscreen_enabled()
+}
+
+/// Shows the element full screen, or leaves full screen if something already is.
+pub fn toggle_fullscreen(id: &str) {
+    let doc = document();
+    if doc.fullscreen_element().is_some() {
+        doc.exit_fullscreen();
+    } else if let Some(el) = doc.get_element_by_id(id) {
+        let _ = el.request_fullscreen();
+    }
+}
+
 pub fn navigator_online() -> bool {
     window().navigator().on_line()
 }

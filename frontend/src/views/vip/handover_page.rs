@@ -11,11 +11,11 @@ use crate::Route;
 #[component]
 pub fn HandoverPage(id: Uuid) -> Element {
     let Some(detail) = use_detail(id) else {
-        return rsx! { div { class: "max-w-doc mx-auto", SkeletonPage {} } };
+        return rsx! { div { class: "w-full", SkeletonPage {} } };
     };
     rsx! {
         div { class: "rise-in",
-            div { class: "max-w-doc mx-auto mb-6",
+            div { class: "mb-6",
                 Link { to: Route::Project { id }, class: "inline-flex items-center gap-1 text-sm text-muted hover:text-ink transition-colors",
                     Icon { name: "chevron-left", size: 14 }
                     "Back to project"

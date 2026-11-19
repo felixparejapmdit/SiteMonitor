@@ -25,7 +25,8 @@ impl EstateSnapshot {
     pub async fn load<C: ConnectionTrait>(db: &C) -> AppResult<Self> {
         let areas = SpatialAreas::find().all(db).await?.into_iter().map(convert::area).collect();
         let items = WorkItems::find().all(db).await?.into_iter().map(convert::work_item).collect();
-        let assets = Assets::find().all(db).await?.into_iter().map(convert::asset).collect();
+        // Retired equipment no longer affects a zone's status.
+        let assets = Assets::find().all(db).await?.into_iter().map(convert::asset).filter(|a: &Asset| !a.is_retired).collect();
         let decisions = DecisionAlerts::find().all(db).await?.into_iter().map(convert::decision).collect();
 
         let photos: HashMap<Uuid, Uuid> = SitePhotos::find()

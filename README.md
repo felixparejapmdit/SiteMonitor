@@ -50,7 +50,19 @@ node scripts/build.mjs              # Tailwind CSS → Dioxus WASM bundle → re
 cargo run -p backend --release      # migrates, seeds a demo estate on first start
 ```
 
-Open **http://localhost:8737**. Use the dark bar at the top to switch between the **Estate Owner**, **Office Admin** and **Site Monitor** views.
+Open **http://localhost:8737** and sign in.
+
+### Signing in
+
+- With `SITEMONITOR_DEMO=1` (the Windows start script sets it) the sign-in page lists the demo accounts. They all use the password `SiteMonitor-demo`. Turn demo mode off (`SITEMONITOR_DEMO=0`) and change those passwords before real use.
+- Passwords are stored as Argon2 hashes. Sessions are server-side and last 14 days from last use. Browsers get an HttpOnly, SameSite=Lax cookie; API clients can send `Authorization: Bearer <token>` from the sign-in response. Behind HTTPS, set `SITEMONITOR_SECURE_COOKIES=1`.
+- After 5 wrong passwords for one email, sign-in pauses for 15 minutes.
+- The Office Admin adds people with a first password and can reset a password from **People**. Either way, the person must choose their own password at their next sign-in, and a reset signs them out everywhere.
+- Locked out? `cargo run -p backend --release -- set-password <email> <new password>`
+
+### Access
+
+**Access** (Office Admin) is a matrix of 18 permissions × people. Everyone starts with their role's defaults. The admin can add or remove single permissions for one person, review the changes, and save. Every change is logged, the server checks the matrix on every action, nobody can remove their own "Change access", and at least one active person always keeps it.
 
 On Windows you can also start the database and the app in the background with:
 
@@ -70,7 +82,7 @@ cargo run -p backend --release -- reset
 cargo test --workspace                       # unit tests (progress, 99% lock, cropper maths, conflicts…)
 cargo check --workspace                      # compiles shared, backend and frontend
 cd e2e && npm install && npx playwright install chromium
-npx playwright test                          # 37 end-to-end tests (resets the database itself)
+npx playwright test                          # 43 end-to-end tests (resets the database itself; needs SITEMONITOR_DEMO=1)
 ```
 
 The end-to-end suite covers every phase of `PLAN.md`:
@@ -78,6 +90,7 @@ The end-to-end suite covers every phase of `PLAN.md`:
 - the seed and API rules: weighted progress, the 99% handover lock, the Quiet Day engine, the manpower ledger, deadline shifts from breakdowns, cron jobs and role permissions;
 - the owner portal: Action Center, map drill-down and layers, documents, photo pins, agenda and sign-off;
 - the staff portal: crew board, equipment, phase updater, decision pipeline, Master Scheduler and Map Studio;
+- sign-in, first-password change, sign-out and the access matrix;
 - real-time pushes, offline queue and sync, the PWA manifest and service worker, and smoothness checks (no console errors, no layout shift on refresh).
 
 ## Automations

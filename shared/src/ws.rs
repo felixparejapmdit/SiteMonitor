@@ -19,6 +19,8 @@ pub enum DataScope {
     Agenda,
     Notifications,
     Photos,
+    Users,
+    Settings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -284,6 +284,7 @@ mod tests {
             active_issue_report: None,
             impact_level: ImpactLevel::NoImpact,
             repair_eta: None,
+            is_retired: false,
         }
     }
 

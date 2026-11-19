@@ -11,6 +11,12 @@ pub struct Model {
     pub phone: String,
     pub email: String,
     pub assigned_area_ids: Json,
+    pub is_active: bool,
+    /// Argon2 PHC string; never leaves the server.
+    pub password_hash: Option<String>,
+    pub must_change_password: bool,
+    pub permission_overrides: Json,
+    pub last_sign_in_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

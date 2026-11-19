@@ -21,6 +21,12 @@ pub fn Icon(name: &'static str, #[props(default = 16)] size: u32, #[props(defaul
         "x" => &["M6 6l12 12", "M18 6 6 18"],
         "plus" => &["M12 5v14", "M5 12h14"],
         "minus" => &["M5 12h14"],
+        "pause" => &["M9 5v14", "M15 5v14"],
+        "more" => &["M5 12h.01", "M12 12h.01", "M19 12h.01"],
+        "send" => &["M22 2 11 13", "M22 2l-7 20-4-9-9-4 20-7z"],
+        "log-out" => &["M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", "M16 17l5-5-5-5", "M21 12H9"],
+        "key" => &["M15 7a4 4 0 1 1-3.9 4.9L3 20v-3h3v-3h3l1.1-1.1A4 4 0 0 1 15 7z", "M16 8h.01"],
+        "shield" => &["M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z", "M9 12l2 2 4-4"],
         "phone" => &["M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"],
         "message" => &["M4 5h16v11H8l-4 4V5z"],
         "camera" => &["M4 8h3l2-3h6l2 3h3v11H4z", "M12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"],
@@ -50,11 +56,13 @@ pub fn Icon(name: &'static str, #[props(default = 16)] size: u32, #[props(defaul
         "flag" => &["M5 21V4", "M5 4h11l-2 4 2 4H5"],
         "image" => &["M4 5h16v14H4z", "M4 16l5-5 4 4 3-3 4 4", "M15 9h.01"],
         "hard-hat" => &["M3 18h18", "M5 18v-3a7 7 0 0 1 14 0v3", "M10 8V5h4v3"],
-        "moon" => &["M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"],
         "grip" => &["M9 6h.01", "M15 6h.01", "M9 12h.01", "M15 12h.01", "M9 18h.01", "M15 18h.01"],
         "undo" => &["M9 14 4 9l5-5", "M4 9h11a5 5 0 0 1 0 10h-3"],
         "eye" => &["M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z", "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
         "pen-tool" => &["M12 19l7-7 3 3-7 7-3-3z", "M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z", "M2 2l7.6 7.6", "M11 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"],
+        "settings" => &["M4 6h9", "M17 6h3", "M15 4v4", "M4 12h3", "M11 12h9", "M9 10v4", "M4 18h11", "M19 18h1", "M17 16v4"],
+        "trash" => &["M4 7h16", "M10 11v6", "M14 11v6", "M6 7l1 13h10l1-13", "M9 7V4h6v3"],
+        "chevron-up" => &["M6 15l6-6 6 6"],
         _ => &["M12 12h.01"],
     };
     rsx! {
@@ -91,7 +99,7 @@ pub fn Pill(tone: Tone, #[props(into)] text: String, #[props(default)] dot: bool
 }
 
 #[component]
-pub fn ProgressBar(value: u8, #[props(default)] tone: Option<Tone>) -> Element {
+pub fn ProgressBar(value: u8, #[props(default)] tone: Option<Tone>, #[props(default)] live: bool) -> Element {
     let color = match tone {
         Some(Tone::Amber) => "background:#d97706",
         Some(Tone::Green) => "background:#346538",
@@ -105,7 +113,7 @@ pub fn ProgressBar(value: u8, #[props(default)] tone: Option<Tone>) -> Element {
             "aria-valuenow": "{value}",
             "aria-valuemin": "0",
             "aria-valuemax": "100",
-            div { class: "progress-fill", style: "width:{value}%;{color}" }
+            div { class: if live { "progress-fill progress-live" } else { "progress-fill" }, style: "width:{value}%;{color}" }
         }
     }
 }
@@ -129,8 +137,8 @@ pub fn Modal(#[props(into)] title: String, on_close: EventHandler<()>, children:
                 class: "absolute inset-0 bg-[#0f0f0f]/30 fade-in",
                 onclick: move |_| on_close.call(()),
             }
-            div { class: "relative w-full {width} max-h-[92vh] overflow-y-auto bg-white rounded-t-2xl sm:rounded-xl shadow-pop scale-in",
-                div { class: "sticky top-0 z-10 flex items-center justify-between gap-4 px-5 h-14 bg-white/95 backdrop-blur border-b border-line",
+            div { class: "relative w-full {width} max-h-[92vh] overflow-y-auto bg-surface rounded-t-2xl sm:rounded-xl shadow-pop scale-in safe-bottom",
+                div { class: "sticky top-0 z-10 flex items-center justify-between gap-4 px-5 h-14 bg-surface/95 backdrop-blur border-b border-line",
                     h2 { class: "text-base font-semibold truncate", "{title}" }
                     button {
                         class: "btn-icon btn-ghost",
@@ -139,7 +147,7 @@ pub fn Modal(#[props(into)] title: String, on_close: EventHandler<()>, children:
                         Icon { name: "x" }
                     }
                 }
-                div { class: "p-5 safe-bottom", {children} }
+                div { class: "p-5", {children} }
             }
         }
     }
@@ -233,13 +241,13 @@ pub fn PhotoCapture(
                                 "Remove"
                             }
                         }
-                        span { class: "absolute top-2 left-2 pill bg-white/90 text-ink", "16:9" }
+                        span { class: "absolute top-2 left-2 pill bg-surface/90 text-ink", "16:9" }
                     }
                 },
                 None => rsx! {
                     label {
                         r#for: "{id}",
-                        class: "flex items-center justify-center gap-2 aspect-[16/6] rounded-lg border border-dashed border-[#d9d9d6] bg-sidebar text-sm text-muted cursor-pointer hover:bg-hover transition-colors",
+                        class: "flex items-center justify-center gap-2 aspect-[16/6] rounded-lg border border-dashed border-muted/30 bg-sidebar text-sm text-muted cursor-pointer hover:bg-hover transition-colors",
                         if busy() {
                             Spinner {}
                             "Preparing photo…"
@@ -264,9 +272,21 @@ pub fn Avatar(#[props(into)] name: String, #[props(default = 28)] size: u32) -> 
         .filter_map(|w| w.chars().next())
         .collect();
     let font = size as f32 * 0.4;
+    // Everyone gets their own colour, the same on every page.
+    const TINTS: [&str; 8] = [
+        "bg-emerald-100 text-emerald-800",
+        "bg-sky-100 text-sky-800",
+        "bg-amber-100 text-amber-800",
+        "bg-rose-100 text-rose-800",
+        "bg-violet-100 text-violet-800",
+        "bg-teal-100 text-teal-800",
+        "bg-indigo-100 text-indigo-800",
+        "bg-orange-100 text-orange-800",
+    ];
+    let tint = TINTS[name.bytes().fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize)) % TINTS.len()];
     rsx! {
         span {
-            class: "inline-flex items-center justify-center rounded-full bg-hover text-ink font-medium shrink-0",
+            class: "inline-flex items-center justify-center rounded-full font-semibold shrink-0 {tint}",
             style: "width:{size}px;height:{size}px;font-size:{font}px",
             "{initials}"
         }

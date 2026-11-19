@@ -115,6 +115,13 @@ pub async fn system_user<C: ConnectionTrait>(db: &C) -> AppResult<Uuid> {
     }
 }
 
+/// The estate settings, or the defaults if the office never saved any.
+pub async fn load_settings<C: ConnectionTrait>(db: &C) -> AppResult<EstateSettings> {
+    use crate::entities::estate_setting;
+    let row = estate_setting::Entity::find_by_id(1).one(db).await?;
+    Ok(row.and_then(|r| serde_json::from_value(r.data).ok()).unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

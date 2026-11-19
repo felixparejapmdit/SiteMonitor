@@ -35,7 +35,7 @@ pub fn ProgressUpdater(detail: WorkItemDetail) -> Element {
     let mut proof = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let item_id = detail.item.id;
-    let locked = matches!(detail.item.status, WorkStatus::PendingSignOff | WorkStatus::CompletedAndArchived);
+    let locked = matches!(detail.item.status, WorkStatus::PendingSignOff | WorkStatus::CompletedAndArchived | WorkStatus::Cancelled);
     let next_open = detail.phases.iter().find(|p| !p.is_completed).map(|p| p.id);
 
     let submit = move |phase: ProjectPhase| async move {
@@ -117,13 +117,13 @@ pub fn ProgressUpdater(detail: WorkItemDetail) -> Element {
                 div { class: "space-y-4",
                     p { class: "text-sm text-muted", "Take a photo of the finished work as proof. It is cropped to 16:9 automatically so the owner sees exactly what you see." }
                     PhotoCapture { id: "phase-proof", photo: proof, label: "Take proof photo" }
-                    div { class: "flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2",
+                    div { class: "modal-actions",
                         button { class: "btn-ghost", onclick: move |_| completing.set(None), "Cancel" }
                         {
                             let ph = phase.clone();
                             rsx! {
                                 button {
-                                    class: "btn-primary btn-lg",
+                                    class: "btn-primary",
                                     disabled: busy(),
                                     "data-testid": "confirm-complete-phase",
                                     onclick: move |_| submit(ph.clone()),
@@ -154,6 +154,9 @@ pub fn RoutineCompleter(item: WorkItem) -> Element {
             div { class: "card px-4 py-3 text-sm text-muted flex items-center gap-2", Icon { name: "check", class: "text-tag-green-text" } "This repair is finished." }
         };
     }
+    if item.status == WorkStatus::Cancelled {
+        return rsx! { div { class: "card px-4 py-3 text-sm text-muted", "This task was cancelled." } };
+    }
     rsx! {
         button {
             class: "btn-primary btn-lg w-full sm:w-auto",
@@ -170,10 +173,10 @@ pub fn RoutineCompleter(item: WorkItem) -> Element {
                         label { class: "label", r#for: "routine-note", "Note for the record (optional)" }
                         textarea { id: "routine-note", class: "field", rows: "2", placeholder: "e.g. Chemicals balanced, filter basket emptied", value: "{note}", oninput: move |e| note.set(e.value()) }
                     }
-                    div { class: "flex justify-end gap-2",
+                    div { class: "modal-actions",
                         button { class: "btn-ghost", onclick: move |_| open.set(false), "Cancel" }
                         button {
-                            class: "btn-primary btn-lg",
+                            class: "btn-primary",
                             disabled: busy(),
                             "data-testid": "confirm-mark-completed",
                             onclick: move |_| async move {
@@ -224,7 +227,7 @@ pub fn PhotoUploader(work_item_id: Uuid) -> Element {
                         label { class: "label", r#for: "photo-caption", "What does it show?" }
                         input { id: "photo-caption", class: "field", placeholder: "e.g. Paving laid along the drop-off", value: "{caption}", oninput: move |e| caption.set(e.value()) }
                     }
-                    div { class: "flex justify-end gap-2",
+                    div { class: "modal-actions",
                         button { class: "btn-ghost", onclick: move |_| open.set(false), "Cancel" }
                         button {
                             class: "btn-primary",

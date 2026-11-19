@@ -149,7 +149,7 @@ fn DecisionCard(decision: DecisionAlert, held: Signal<HashSet<Uuid>>) -> Element
     rsx! {
         Fold { folded: folded(),
             article {
-                class: if approved().is_some() { "card p-5 border-[#cfe0cc] bg-[#f7fbf6] transition-colors duration-500" } else { "card p-5 transition-colors duration-500" },
+                class: if approved().is_some() { "card p-5 border-tag-green-text/25 bg-tag-green-bg/40 transition-colors duration-500" } else { "card p-5 transition-colors duration-500" },
                 "data-testid": "decision-card",
                 if let Some(label) = approved() {
                     div { class: "flex items-center gap-3 text-tag-green-text fade-in",
@@ -162,11 +162,14 @@ fn DecisionCard(decision: DecisionAlert, held: Signal<HashSet<Uuid>>) -> Element
                 } else {
                     div { class: "flex flex-wrap items-center gap-2 mb-2",
                         Pill { tone: Tone::Amber, text: if has_options { "Decision needed".to_string() } else { "New update".to_string() } }
-                        Pill { tone: Tone::Gray, text: decision.category.label().to_string() }
+                        Pill { tone: Tone::Gray, text: app.settings.read().category_label(decision.category) }
                         if decision.urgency != UrgencyLevel::Standard {
                             Pill { tone: decision.urgency.tone(), text: decision.urgency.label().to_string() }
                         }
                         span { class: "text-xs text-muted ml-auto", "{place} · {util::relative(decision.created_at)}" }
+                    }
+                    if let Some(src) = decision.photo_url.clone() {
+                        img { src: "{src}", alt: "Photo from the site", class: "w-full aspect-video object-cover rounded-lg border border-line mb-3", "data-testid": "decision-photo" }
                     }
                     h3 { class: "text-lg font-semibold leading-snug", "{decision.title}" }
                     p { class: "text-[15px] leading-relaxed mt-1.5", "{decision.issue_description}" }
@@ -207,7 +210,7 @@ fn DecisionCard(decision: DecisionAlert, held: Signal<HashSet<Uuid>>) -> Element
                                 "data-testid": "acknowledge",
                                 onclick: move |_| respond(DecisionResponse::AcknowledgeReceipt, "Acknowledged".to_string()),
                                 Icon { name: "check" }
-                                "Acknowledge Receipt"
+                                "Got it"
                             }
                         }
                         Link { to: Route::Project { id: decision.work_item_id }, class: "btn-ghost sm:ml-auto", "View project" }
@@ -273,7 +276,7 @@ fn PhotoUpdateCard(update: PhotoUpdate, held: Signal<HashSet<Uuid>>) -> Element 
                                 }
                             },
                             Icon { name: "check" }
-                            "Acknowledge Receipt"
+                            "Got it"
                         }
                         Link { to: Route::Project { id: update.photo.work_item_id }, class: "btn-ghost h-8", "Open" }
                     }
@@ -332,7 +335,7 @@ fn NoticeCard(notice: Notification, held: Signal<HashSet<Uuid>>) -> Element {
                         }
                     },
                     Icon { name: "check" }
-                    "Acknowledge Receipt"
+                    "Got it"
                 }
             }
         }

@@ -32,6 +32,30 @@ pub struct User {
     pub phone: String,
     pub email: String,
     pub assigned_area_ids: Vec<Uuid>,
+    /// Deactivated people keep their history but can no longer sign in or be chosen.
+    #[serde(default = "active_default")]
+    pub is_active: bool,
+    /// The Office Admin's departures from the role's default permissions.
+    #[serde(default)]
+    pub access: crate::access::AccessOverrides,
+    /// What this person may do (role defaults + granted - revoked).
+    #[serde(default)]
+    pub permissions: Vec<crate::access::Permission>,
+    /// Set after an admin creates the account or resets its password.
+    #[serde(default)]
+    pub must_change_password: bool,
+    #[serde(default)]
+    pub last_sign_in_at: Option<DateTime<Utc>>,
+}
+
+impl User {
+    pub fn can(&self, p: crate::access::Permission) -> bool {
+        self.permissions.contains(&p)
+    }
+}
+
+fn active_default() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +94,67 @@ pub struct BaseMapVersion {
     pub orthographic_image_url: String,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
+    /// Zoom tiles cut from an uploaded picture (`None` for drawings, which stay sharp anyway).
+    #[serde(default)]
+    pub tiles: Option<MapTiles>,
+}
+
+/// A big map picture cut into square tiles at every zoom level, so only the
+/// part on screen is loaded, at the sharpness the zoom needs.
+/// Level `max_level` is full size; each level below is half as big; level 0 fits one tile.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MapTiles {
+    pub width: u32,
+    pub height: u32,
+    pub tile_size: u32,
+    pub max_level: u32,
+    /// Folder URL: tiles are `{base_url}/{level}/{x}_{y}.jpg`, the overview is `{base_url}/preview.jpg`.
+    pub base_url: String,
+}
+
+impl MapTiles {
+    /// Width of the overview picture (`preview.jpg`); closer views use tiles.
+    pub const PREVIEW_WIDTH: u32 = 2048;
+
+    pub fn levels_for(width: u32, height: u32, tile_size: u32) -> u32 {
+        let mut level = 0;
+        while (width.max(height) >> level) > tile_size {
+            level += 1;
+        }
+        level
+    }
+
+    /// Picture size in pixels at `level`.
+    pub fn level_size(&self, level: u32) -> (u32, u32) {
+        let d = 1u32 << (self.max_level - level.min(self.max_level));
+        (self.width.div_ceil(d), self.height.div_ceil(d))
+    }
+
+    /// Columns and rows of tiles at `level`.
+    pub fn grid(&self, level: u32) -> (u32, u32) {
+        let (w, h) = self.level_size(level);
+        (w.div_ceil(self.tile_size), h.div_ceil(self.tile_size))
+    }
+
+    /// The smallest level that is at least `needed_px` wide on screen.
+    pub fn level_for(&self, needed_px: f64) -> u32 {
+        (0..=self.max_level).find(|l| self.level_size(*l).0 as f64 >= needed_px).unwrap_or(self.max_level)
+    }
+
+    pub fn tile_url(&self, level: u32, x: u32, y: u32) -> String {
+        format!("{}/{level}/{x}_{y}.jpg", self.base_url)
+    }
+
+    pub fn preview_url(&self) -> String {
+        format!("{}/preview.jpg", self.base_url)
+    }
+}
+
+impl BaseMapVersion {
+    /// A light picture for thumbnails and the zoomed-out view.
+    pub fn preview_url(&self) -> String {
+        self.tiles.as_ref().map(|t| t.preview_url()).unwrap_or_else(|| self.orthographic_image_url.clone())
+    }
 }
 
 /// Normalized 0.0 – 100.0 percentage coordinates relative to the base map.
@@ -116,6 +201,8 @@ pub enum WorkStatus {
     /// Held at 99% until the VIP Client signs off.
     PendingSignOff,
     CompletedAndArchived,
+    /// Stopped for good by the office; kept in History with its reason.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -209,6 +296,24 @@ pub enum DecisionStatus {
     ApprovedOptionA,
     ApprovedOptionB,
     AcknowledgedReceipt,
+    // The office settles a field report itself (the owner never sees these):
+    /// Parked for later.
+    OnHold,
+    /// Sent back to the reporter, who edits it and it returns to the office.
+    NeedsDetails,
+    OfficeApproved,
+    OfficeDeclined,
+}
+
+/// What the office can do with a field report in one tap.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReviewAction {
+    Approve,
+    Decline,
+    Hold,
+    AskForDetails,
+    /// Back to "to review".
+    Reopen,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -228,6 +333,15 @@ pub struct DecisionAlert {
     pub status: DecisionStatus,
     pub created_at: DateTime<Utc>,
     pub resolved_at: Option<DateTime<Utc>>,
+    /// The 16:9 field photo sent with the report.
+    #[serde(default)]
+    pub photo_url: Option<String>,
+    /// Who wrote the report (they may edit it until the office sends it on).
+    #[serde(default)]
+    pub reported_by: Option<Uuid>,
+    /// The office's reason when it declines a report or asks for more details.
+    #[serde(default)]
+    pub office_note: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +385,9 @@ pub struct Asset {
     pub active_issue_report: Option<String>,
     pub impact_level: ImpactLevel,
     pub repair_eta: Option<DateTime<Utc>>,
+    /// Retired equipment leaves the active list but stays in past records.
+    #[serde(default)]
+    pub is_retired: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -439,4 +556,77 @@ pub struct EquipmentReservation {
     pub id: Uuid,
     pub asset_id: Uuid,
     pub agenda_item_id: Uuid,
+}
+
+// ---------------------------------------------------------------------------
+// Estate settings (editable by the Office Admin)
+// ---------------------------------------------------------------------------
+
+/// One settings record for the whole estate. Missing fields fall back to the defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct EstateSettings {
+    pub estate_name: String,
+    /// Local "HH:MM" times for the automatic jobs.
+    pub roster_reset_time: String,
+    pub roster_prompt_time: String,
+    pub deadline_check_time: String,
+    pub digest_time: String,
+    /// Quick reasons offered when moving workers between jobs.
+    pub crew_move_reasons: Vec<String>,
+    /// Custom wording for issue categories; blank or missing uses the built-in label.
+    pub category_labels: std::collections::HashMap<AlertCategory, String>,
+    /// Custom wording for schedule event types.
+    pub event_type_labels: std::collections::HashMap<AgendaEventType, String>,
+}
+
+impl Default for EstateSettings {
+    fn default() -> Self {
+        Self {
+            estate_name: "Ashford Estate".into(),
+            roster_reset_time: "00:00".into(),
+            roster_prompt_time: "07:30".into(),
+            deadline_check_time: "07:00".into(),
+            digest_time: "17:00".into(),
+            crew_move_reasons: [
+                "Accelerating leveling before rain",
+                "Urgent repair needs extra hands",
+                "Materials just arrived",
+                "Finished early here",
+                "Rain \u{2014} moving to indoor work",
+                "Owner requested priority",
+            ]
+            .map(String::from)
+            .to_vec(),
+            category_labels: Default::default(),
+            event_type_labels: Default::default(),
+        }
+    }
+}
+
+impl EstateSettings {
+    pub fn category_label(&self, c: AlertCategory) -> String {
+        self.category_labels.get(&c).map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or(c.label()).to_string()
+    }
+    pub fn event_type_label(&self, k: AgendaEventType) -> String {
+        self.event_type_labels.get(&k).map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or(k.label()).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tile_tests {
+    use super::MapTiles;
+
+    #[test]
+    fn tile_levels_halve_down_to_one_tile() {
+        let t = MapTiles { width: 6000, height: 4000, tile_size: 512, max_level: MapTiles::levels_for(6000, 4000, 512), base_url: "/m".into() };
+        assert_eq!(t.max_level, 4); // 6000 -> 3000 -> 1500 -> 750 -> 375
+        assert_eq!(t.level_size(4), (6000, 4000));
+        assert_eq!(t.level_size(0), (375, 250));
+        assert_eq!(t.grid(0), (1, 1));
+        assert_eq!(t.grid(4), (12, 8));
+        assert_eq!(t.level_for(1400.0), 2); // 1500 wide is the first that's enough
+        assert_eq!(t.level_for(99_999.0), 4);
+        assert_eq!(t.tile_url(2, 1, 0), "/m/2/1_0.jpg");
+    }
 }

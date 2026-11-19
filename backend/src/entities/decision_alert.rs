@@ -18,6 +18,9 @@ pub struct Model {
     pub status: String,
     pub created_at: DateTimeUtc,
     pub resolved_at: Option<DateTimeUtc>,
+    pub photo_url: Option<String>,
+    pub reported_by: Option<Uuid>,
+    pub office_note: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

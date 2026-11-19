@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { APIRequestContext, Page, expect } from "@playwright/test";
+import { APIRequestContext, Page, expect, request as pwRequest, test as base } from "@playwright/test";
+
+export { expect };
 
 const ROOT = join(__dirname, "..", "..");
 
@@ -20,36 +22,86 @@ export type Role = "VipClient" | "OfficeAdmin" | "SiteMonitor";
 export interface User {
   id: string;
   name: string;
+  email: string;
   role: Role;
   assigned_area_ids: string[];
+  permissions: string[];
+  /** Session token for API calls as this person (Authorization: Bearer). */
+  token: string;
 }
 
-export async function users(request: APIRequestContext): Promise<User[]> {
-  const res = await request.get("/api/users");
-  expect(res.ok()).toBeTruthy();
-  return res.json();
+export const BASE_URL = `http://localhost:${process.env.SITEMONITOR_PORT ?? 8737}`;
+/** Password of the seeded demo accounts (server runs with SITEMONITOR_DEMO=1). */
+export const DEMO_PASSWORD = "SiteMonitor-demo";
+
+interface DemoAccount {
+  name: string;
+  role: Role;
+  email: string;
 }
 
-export async function userFor(request: APIRequestContext, role: Role, firstName?: string): Promise<User> {
-  const list = await users(request);
-  const u = list.find((x) => x.role === role && (!firstName || x.name.startsWith(firstName)));
-  if (!u) throw new Error(`no ${role} user`);
-  return u;
+async function demoAccount(role: Role, firstName?: string): Promise<DemoAccount> {
+  const ctx = await pwRequest.newContext({ baseURL: BASE_URL });
+  const res = await ctx.get("/api/auth/options");
+  const opts = await res.json();
+  await ctx.dispose();
+  const a = (opts.demo_accounts as DemoAccount[]).find((x) => x.role === role && (!firstName || x.name.startsWith(firstName)));
+  if (!a) throw new Error(`no ${role} demo account (is the server running with SITEMONITOR_DEMO=1?)`);
+  return a;
 }
 
-/** Opens the app already signed in as the given role (dev-mode switcher). */
+/** Signs in on a separate connection and returns the person with a session token. */
+export async function signIn(email: string, password = DEMO_PASSWORD): Promise<User> {
+  const ctx = await pwRequest.newContext({ baseURL: BASE_URL });
+  const res = await ctx.post("/api/auth/login", { data: { email, password } });
+  expect(res.ok(), `sign-in as ${email} → ${res.status()} ${await res.text()}`).toBeTruthy();
+  const body = await res.json();
+  await ctx.dispose();
+  return { ...body.user, token: body.token };
+}
+
+export async function userFor(_request: APIRequestContext, role: Role, firstName?: string): Promise<User> {
+  return signIn((await demoAccount(role, firstName)).email);
+}
+
+/** Signs a browser page in (sets the HttpOnly session cookie for its context). */
+export async function signInPage(page: Page, role: Role, firstName?: string) {
+  const a = await demoAccount(role, firstName);
+  const res = await page.request.post("/api/auth/login", { data: { email: a.email, password: DEMO_PASSWORD } });
+  expect(res.ok(), `sign-in as ${a.email} → ${res.status()}`).toBeTruthy();
+  const body = await res.json();
+  return { ...body.user, token: body.token } as User;
+}
+
+/** Opens the app signed in as the given role. */
 export async function openAs(page: Page, role: Role, path = "/", firstName?: string) {
-  const u = await userFor(page.request, role, firstName);
-  await page.addInitScript((id) => window.localStorage.setItem("sitemonitor.user", id), u.id);
+  const u = await signInPage(page, role, firstName);
   await page.goto(path);
   await expect(page.locator("body.app-ready")).toHaveCount(1, { timeout: 30_000 });
   await expect(page.locator("main")).toBeVisible();
   return u;
 }
 
+/**
+ * `request` and `page` start signed in as the Office Admin so read-only API
+ * calls work; `openAs` / `api(request, user)` act as someone else.
+ */
+export const test = base.extend({
+  request: async ({ playwright, baseURL }, use) => {
+    const admin = await userFor(undefined as unknown as APIRequestContext, "OfficeAdmin");
+    const ctx = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { authorization: `Bearer ${admin.token}` } });
+    await use(ctx);
+    await ctx.dispose();
+  },
+  page: async ({ page }, use) => {
+    await signInPage(page, "OfficeAdmin");
+    await use(page);
+  },
+});
+
 /** Authenticated API helper acting as `user`. */
 export function api(request: APIRequestContext, user: User) {
-  const headers = { "x-user-id": user.id };
+  const headers = { authorization: `Bearer ${user.token}` };
   return {
     get: async (path: string) => {
       const r = await request.get(`/api${path}`, { headers });

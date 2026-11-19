@@ -22,9 +22,13 @@ pub async fn reallocate(
     user: CurrentUser,
     Json(req): Json<ReallocateRequest>,
 ) -> AppResult<Json<Vec<WorkItem>>> {
-    user.require_staff("move crew between jobs")?;
+    user.require(Permission::ManageCrew)?;
     if req.allocations.is_empty() && req.transfers.is_empty() {
         return Err(AppError::bad("Nothing to save — change at least one crew number."));
+    }
+    let jobs = req.allocations.iter().map(|a| a.work_item_id);
+    for job in jobs.chain(req.transfers.iter().flat_map(|t| [t.source_work_item_id, t.destination_work_item_id])) {
+        user.require_job(&state.db, job).await?;
     }
     let txn = state.db.begin().await?;
     let mut rows: HashMap<Uuid, work_item::Model> =

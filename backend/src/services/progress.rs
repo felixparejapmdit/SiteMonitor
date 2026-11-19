@@ -34,6 +34,9 @@ pub async fn complete_phase(
     if item.status == WorkStatus::CompletedAndArchived {
         return Err(AppError::bad("This project is already completed and archived."));
     }
+    if item.status == WorkStatus::Cancelled {
+        return Err(AppError::bad("This project was cancelled, so its phases can't change."));
+    }
 
     if !phase.is_completed {
         let phase_name = phase.phase_name.clone();
@@ -127,6 +130,9 @@ pub async fn complete_task(
     let item = convert::work_item(row.clone());
     if item.stream == WorkStream::CapitalProject {
         return Err(AppError::bad("Construction projects are completed phase by phase."));
+    }
+    if !item.status.is_active() {
+        return Err(AppError::bad("This task is closed, so it can't be marked done."));
     }
     let txn = state.db.begin().await?;
     if let Some(url) = &proof_photo_url {
@@ -242,7 +248,7 @@ pub async fn compile_handover<C: sea_orm::ConnectionTrait>(db: &C, work_item_id:
         .await?
         .into_iter()
         .map(convert::asset)
-        .filter(|a| a.mobility == MobilityType::FixedInfrastructure && zone.contains(&a.current_area_id))
+        .filter(|a| a.mobility == MobilityType::FixedInfrastructure && zone.contains(&a.current_area_id) && !a.is_retired)
         .collect();
 
     let existing = ExecutiveHandoverReports::find()

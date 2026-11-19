@@ -1,10 +1,12 @@
 //! Automated background jobs (Phase 2 §3.3), run in the estate's local time:
 //!
-//! 1. 00:00 — Midnight crew roster reset (+ 07:30 roster prompt push).
-//! 2. 07:00 — Dual-warning deadline monitor (7 days & 48 hours).
-//! 3. 17:00 — VIP daily digest.
+//! 1. Crew roster reset (default 00:00) + roster prompt push (default 07:30).
+//! 2. Dual-warning deadline monitor, 7 days & 48 hours (default 07:00).
+//! 3. VIP daily digest (default 17:00).
+//!
+//! The times live in the estate settings and can be changed by the office.
 
-use chrono::{DateTime, Local, NaiveTime, Utc};
+use chrono::{DateTime, Local, NaiveTime, Timelike, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set, TransactionTrait};
 use shared::api::{AutomationJob, JobRunResult};
 use shared::ws::{DataScope, WsEvent};
@@ -15,52 +17,49 @@ use uuid::Uuid;
 use crate::convert::{self, enc};
 use crate::entities::{manpower_ledger_entry, notification, prelude::*, site_photo, timeline_event_record};
 use crate::error::AppResult;
-use crate::services::{create_notice, system_user, NewNotice};
+use crate::services::{create_notice, load_settings, system_user, NewNotice};
 use crate::state::AppState;
 
-/// Starts the cron scheduler. Jobs keep running for the life of the server.
+/// Starts the scheduler: one tick a minute compares the local time with the
+/// times saved in the estate settings, so the office can change them live.
 pub async fn start(state: AppState) -> anyhow::Result<JobScheduler> {
     let sched = JobScheduler::new().await?;
-
-    let s = state.clone();
     sched
-        .add(Job::new_async_tz("0 0 0 * * *", Local, move |_id, _l| {
-            let s = s.clone();
-            Box::pin(async move { log_run(run(&s, AutomationJob::MidnightRosterReset).await) })
+        .add(Job::new_async_tz("0 * * * * *", Local, move |_id, _l| {
+            let s = state.clone();
+            Box::pin(async move { tick(&s).await })
         })?)
         .await?;
-
-    let s = state.clone();
-    sched
-        .add(Job::new_async_tz("0 30 7 * * *", Local, move |_id, _l| {
-            let s = s.clone();
-            Box::pin(async move {
-                if let Err(e) = push_roster_prompt(&s).await {
-                    tracing::warn!(error = %e, "roster prompt push failed");
-                }
-            })
-        })?)
-        .await?;
-
-    let s = state.clone();
-    sched
-        .add(Job::new_async_tz("0 0 7 * * *", Local, move |_id, _l| {
-            let s = s.clone();
-            Box::pin(async move { log_run(run(&s, AutomationJob::DeadlineMonitor).await) })
-        })?)
-        .await?;
-
-    let s = state;
-    sched
-        .add(Job::new_async_tz("0 0 17 * * *", Local, move |_id, _l| {
-            let s = s.clone();
-            Box::pin(async move { log_run(run(&s, AutomationJob::VipDailyDigest).await) })
-        })?)
-        .await?;
-
     sched.start().await?;
-    tracing::info!("automation scheduler started (00:00 roster reset, 07:00 deadline monitor, 07:30 roster prompt, 17:00 VIP digest)");
+    tracing::info!("automation scheduler started (job times come from the estate settings)");
     Ok(sched)
+}
+
+async fn tick(state: &AppState) {
+    let settings = match load_settings(&state.db).await {
+        Ok(s) => s,
+        Err(e) => return tracing::warn!(error = %e, "couldn't read estate settings; skipping automation tick"),
+    };
+    let now = Local::now().format("%H:%M").to_string();
+    if now == settings.roster_reset_time {
+        log_run(run(state, AutomationJob::MidnightRosterReset).await);
+    }
+    if now == settings.roster_prompt_time {
+        if let Err(e) = push_roster_prompt(state).await {
+            tracing::warn!(error = %e, "roster prompt push failed");
+        }
+    }
+    if now == settings.deadline_check_time {
+        log_run(run(state, AutomationJob::DeadlineMonitor).await);
+    }
+    if now == settings.digest_time {
+        log_run(run(state, AutomationJob::VipDailyDigest).await);
+    }
+}
+
+/// Parses a saved "HH:MM" into (hour, minute).
+fn hm(t: &str) -> (u32, u32) {
+    NaiveTime::parse_from_str(t, "%H:%M").map(|t| (t.hour(), t.minute())).unwrap_or((7, 30))
 }
 
 fn log_run(result: AppResult<JobRunResult>) {
@@ -95,6 +94,8 @@ fn today_at(h: u32, m: u32) -> DateTime<Utc> {
 /// 1. Clears yesterday's crew so they never become "ghost workers" and
 ///    queues the 07:30 "Allocate Today's Crew" prompt for the Office Admin.
 async fn midnight_roster_reset(state: &AppState) -> AppResult<String> {
+    let prompt_time = load_settings(&state.db).await?.roster_prompt_time;
+    let (ph, pm) = hm(&prompt_time);
     let txn = state.db.begin().await?;
     let logger = system_user(&txn).await?;
     let mut cleared = 0;
@@ -140,17 +141,17 @@ async fn midnight_roster_reset(state: &AppState) -> AppResult<String> {
             title: "Morning Roster Reset: Allocate Today's Crew".into(),
             body: "Last night's crew numbers were cleared. Set how many workers are on each job today.".into(),
             lines: vec![],
-            visible_from: today_at(7, 30),
+            visible_from: today_at(ph, pm),
             dedupe_key: Some(format!("roster:{date}")),
         },
     )
     .await?;
     txn.commit().await?;
     state.hub.changed(&[DataScope::WorkItems, DataScope::Notifications, DataScope::Map]).await;
-    Ok(format!("Cleared {cleared} workers from yesterday; morning roster prompt queued for 7:30 AM."))
+    Ok(format!("Cleared {cleared} workers from yesterday; morning roster prompt queued for {prompt_time}."))
 }
 
-/// 07:30 — nudge connected admins in real time.
+/// Roster prompt time — nudge connected admins in real time.
 async fn push_roster_prompt(state: &AppState) -> AppResult<()> {
     let prompt = Notifications::find()
         .filter(notification::Column::Kind.eq(enc(&NotificationKind::MorningRosterPrompt)))

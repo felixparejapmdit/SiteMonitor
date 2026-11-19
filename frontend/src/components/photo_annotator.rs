@@ -49,8 +49,8 @@ pub fn PhotoAnnotator(
     owner_hint: Option<String>,
 ) -> Element {
     let app = use_app();
-    let is_vip = app.is_vip();
-    let is_staff = app.is_staff();
+    let is_vip = app.can(Permission::CommentOnPhotos);
+    let is_staff = app.can(Permission::ManagePhotoNotes);
     let mut draft = use_signal(|| None::<(f32, f32)>);
     let mut comment = use_signal(String::new);
     let mut selected = use_signal(|| None::<Uuid>);
@@ -187,7 +187,7 @@ pub fn PhotoAnnotator(
                     textarea {
                         class: "field",
                         rows: "3",
-                        placeholder: "Add a call-out note for the site team...",
+                        placeholder: "Write a note for the site team…",
                         "data-testid": "callout-text",
                         autofocus: true,
                         value: "{comment}",

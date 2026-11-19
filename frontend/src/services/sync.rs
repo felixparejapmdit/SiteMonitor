@@ -13,7 +13,7 @@ use crate::services::offline_queue::{self, OfflineMutation};
 use crate::state::{AppState, ToastTone};
 use crate::util;
 
-pub const ALL_SCOPES: [DataScope; 7] = [
+pub const ALL_SCOPES: [DataScope; 9] = [
     DataScope::Map,
     DataScope::WorkItems,
     DataScope::Assets,
@@ -21,6 +21,8 @@ pub const ALL_SCOPES: [DataScope; 7] = [
     DataScope::Agenda,
     DataScope::Notifications,
     DataScope::Photos,
+    DataScope::Settings,
+    DataScope::Users,
 ];
 
 /// Fetches one slice of data into the cache. Failures keep the old data.
@@ -61,8 +63,11 @@ pub async fn load(app: AppState, scope: DataScope) {
             }
         }
         DataScope::Decisions => {
-            if let Ok(v) = api::get("/decisions").await {
+            if let Ok(v) = api::get::<Vec<shared::DecisionAlert>>("/decisions").await {
                 if decisions.peek().as_ref() != Some(&v) {
+                    if let Some(old) = decisions.peek().as_ref() {
+                        tell_reporter(app, old, &v);
+                    }
                     decisions.set(Some(v));
                 }
             }
@@ -95,6 +100,28 @@ pub async fn load(app: AppState, scope: DataScope) {
             }
             detail_epoch += 1;
         }
+        DataScope::Settings => {
+            if let Ok(v) = api::get::<shared::EstateSettings>("/settings").await {
+                let mut settings = app.settings;
+                if *settings.peek() != v {
+                    settings.set(v);
+                }
+            }
+        }
+        DataScope::Users => {
+            if let Ok(v) = api::get::<Vec<shared::User>>("/users").await {
+                let mut users = app.users;
+                let mut current = app.current_user;
+                // Keep the acting user's name/role in step with edits made by the office.
+                let me = current.peek().as_ref().and_then(|c| v.iter().find(|u| u.id == c.id).cloned());
+                if me.is_some() && *current.peek() != me {
+                    current.set(me);
+                }
+                if *users.peek() != v {
+                    users.set(v);
+                }
+            }
+        }
     }
 }
 
@@ -103,13 +130,33 @@ pub async fn load_many(app: AppState, scopes: &[DataScope]) {
     join_all(scopes.iter().map(|s| load(app, *s))).await;
 }
 
+/// Tells the person who wrote a report what the office (or the owner) did with it,
+/// the moment it happens.
+fn tell_reporter(app: AppState, old: &[shared::DecisionAlert], new: &[shared::DecisionAlert]) {
+    use shared::DecisionStatus::*;
+    let Some(me) = app.user_id() else { return };
+    for d in new.iter().filter(|d| d.reported_by == Some(me)) {
+        let Some(before) = old.iter().find(|o| o.id == d.id) else { continue };
+        if before.status == d.status {
+            continue;
+        }
+        let title = format!("\u{201c}{}\u{201d}", d.title);
+        let note = d.office_note.clone().map(|n| format!("{title}: {n}"));
+        match d.status {
+            OfficeApproved => app.toast(ToastTone::Success, "The office approved your report", Some(title)),
+            OfficeDeclined => app.toast(ToastTone::Warning, "The office declined your report", note.or(Some(title))),
+            OnHold => app.toast(ToastTone::Info, "The office put your report on hold", Some(title)),
+            NeedsDetails => app.toast(ToastTone::Warning, "The office needs more details", note.or(Some(title))),
+            PublishedPendingClient => app.toast(ToastTone::Info, "Your report was sent to the owner", Some(title)),
+            ApprovedOptionA | ApprovedOptionB | AcknowledgedReceipt => app.toast(ToastTone::Info, "The owner answered your report", Some(title)),
+            DraftInAdminQueue => {}
+        }
+    }
+}
+
 /// Fire-and-forget refresh (silent, keeps showing cached data meanwhile).
 pub fn reload(app: AppState, scopes: Vec<DataScope>) {
     spawn(async move { load_many(app, &scopes).await });
-}
-
-pub fn reload_all(app: AppState) {
-    reload(app, ALL_SCOPES.to_vec());
 }
 
 /// Result of a write that may have been queued for later.
@@ -136,7 +183,7 @@ pub async fn mutate<B: Serialize, T: DeserializeOwned>(
     if staff && !*app.is_online.peek() {
         return queue(app, label, method, path, body).await;
     }
-    match api::send_raw(method, &path, Some(&body), None).await {
+    match api::send_raw(method, &path, Some(&body)).await {
         Ok(text) => match serde_json::from_str(&text) {
             Ok(v) => Outcome::Saved(v),
             Err(_) => Outcome::Failed("Saved, but the reply was unexpected. Please refresh.".into()),
@@ -185,7 +232,11 @@ pub async fn flush(app: AppState) -> bool {
     let mut network_ok = true;
     if let Ok(list) = offline_queue::list().await {
         for m in list {
-            match api::send_raw(&m.method, &m.path, Some(&m.body), Some(m.user_id)).await {
+            // Each person's queued work is only sent from their own session.
+            if Some(m.user_id) != app.user_id() {
+                continue;
+            }
+            match api::send_raw(&m.method, &m.path, Some(&m.body)).await {
                 Ok(_) => {
                     let _ = offline_queue::remove(m.key).await;
                     delivered += 1;
@@ -194,6 +245,7 @@ pub async fn flush(app: AppState) -> bool {
                     network_ok = false;
                     break;
                 }
+                Err(ApiFail::Server(401, _)) => break,
                 Err(ApiFail::Server(_, msg)) => {
                     let _ = offline_queue::remove(m.key).await;
                     app.toast(ToastTone::Error, format!("Couldn't sync \u{201c}{}\u{201d}", m.label), Some(msg));
@@ -207,7 +259,7 @@ pub async fn flush(app: AppState) -> bool {
     if delivered > 0 {
         app.toast(
             ToastTone::Success,
-            format!("Synced {} saved offline", util::plural(delivered, "update")),
+            format!("Sent {} you saved offline", util::plural(delivered, "update")),
             Some("Everything you did without signal is now with the team.".into()),
         );
         load_many(app, &ALL_SCOPES).await;

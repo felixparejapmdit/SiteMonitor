@@ -22,6 +22,8 @@ export default defineConfig({
     cwd: "..",
     url: `http://localhost:${PORT}/api/health`,
     reuseExistingServer: true,
+    // Demo mode exposes the seeded accounts the tests sign in with.
+    env: { SITEMONITOR_DEMO: "1" },
     timeout: 300_000,
   },
 });

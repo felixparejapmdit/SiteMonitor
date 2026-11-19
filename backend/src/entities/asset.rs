@@ -14,6 +14,7 @@ pub struct Model {
     pub active_issue_report: Option<String>,
     pub impact_level: String,
     pub repair_eta: Option<DateTimeUtc>,
+    pub is_retired: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
