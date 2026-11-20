@@ -152,7 +152,7 @@ pub fn SettingsView() -> Element {
                     div { class: "flex flex-wrap items-center gap-x-6 gap-y-3 py-3",
                         div { class: "flex-1 min-w-[16rem]",
                             p { class: "text-sm font-medium", "Clear data" }
-                            p { class: "text-sm text-muted", "Removes the map picture and every zone, project, report, photo, piece of equipment and schedule entry, so you can start fresh." }
+                            p { class: "text-sm text-muted", "Removes the whole estate (map, zones, projects, reports, photos, equipment, schedule) and the whole workforce (personnel, duty, overtime, visitations, signatories, clinic), so you can start fresh. Sign-in accounts stay." }
                         }
                         button { class: "btn-secondary text-tag-red-text", "data-testid": "clear-data", onclick: move |_| confirm.set(Some(Reset::Clear)),
                             Icon { name: "trash" }
@@ -203,12 +203,12 @@ fn ConfirmReset(kind: Reset, on_close: EventHandler<()>) -> Element {
             "Sample data loaded",
         ),
         Reset::Clear => (
-            "Clear all estate data?",
-            "This removes the map picture and every zone, project, report, photo, piece of equipment and schedule entry. People, their sign-ins and settings stay.",
+            "Clear all data?",
+            "This removes everything operational: the map picture and every zone, project, report, photo, piece of equipment and schedule entry, and the whole workforce (personnel, groups, duty, attendance, overtime, visitations, signatories, clinic records and snapshots). Sign-in accounts and settings stay.",
             "CLEAR",
             "Clear everything",
             "/settings/clear-data",
-            "All estate data cleared",
+            "All data cleared",
         ),
     };
     let ready = typed().trim().eq_ignore_ascii_case(word) && !busy();

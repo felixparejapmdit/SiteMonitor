@@ -11,9 +11,10 @@ const ROOT = join(__dirname, "..", "..");
 export function resetDatabase() {
   const exe = join(ROOT, "target", "release", process.platform === "win32" ? "backend.exe" : "backend");
   if (existsSync(exe)) {
-    execFileSync(exe, ["reset"], { cwd: ROOT, stdio: "pipe" });
+    // The suite works on the sample estate (a fresh install starts empty).
+    execFileSync(exe, ["reset-sample"], { cwd: ROOT, stdio: "pipe" });
   } else {
-    execFileSync("cargo", ["run", "-p", "backend", "--release", "--", "reset"], { cwd: ROOT, stdio: "pipe" });
+    execFileSync("cargo", ["run", "-p", "backend", "--release", "--", "reset-sample"], { cwd: ROOT, stdio: "pipe" });
   }
 }
 
@@ -187,4 +188,10 @@ export async function setClinic(on: boolean) {
   const res = await ctx.put("/api/settings", { data: { ...settings, clinic_enabled: on } });
   if (!res.ok()) throw new Error(`could not switch the clinic module: ${await res.text()}`);
   await ctx.dispose();
+}
+
+/** The default state of a fresh install: sign-in accounts only, empty estate and workforce. */
+export function resetDatabaseEmpty() {
+  const exe = join(ROOT, "target", "release", process.platform === "win32" ? "backend.exe" : "backend");
+  execFileSync(existsSync(exe) ? exe : "cargo", existsSync(exe) ? ["reset"] : ["run", "-p", "backend", "--release", "--", "reset"], { cwd: ROOT, stdio: "pipe" });
 }

@@ -5,7 +5,7 @@
  * that is linked to the sample estate.
  */
 import { Page } from "@playwright/test";
-import { Role, expect, openAs, resetDatabase, signInPage, test, workItemByTitle } from "./helpers";
+import { Role, expect, openAs, resetDatabase, signInPage, test, workItemByTitle, setClinic } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(10 * 60_000);
@@ -134,9 +134,11 @@ test("Load sample data brings a workforce linked to the sample estate", async ({
   const walk = (n: any) => { flat.push(n.area); n.children.forEach(walk); };
   map.areas.forEach(walk);
   for (const z of await (await request.get("/api/workforce/records/area_zones")).json()) expect(flat.some((a) => a.id === z.zone_id), z.id).toBeTruthy();
+  await setClinic(true); // clinic records come with the sample; reading them needs the module on
   for (const c of ["duty_schedules", "ot_entries", "visitations", "signatories", "health_events", "attendance_log"]) {
     expect((await (await request.get(`/api/workforce/records/${c}`)).json()).length, c).toBeGreaterThan(0);
   }
+  await setClinic(false);
   const snaps = await (await request.get("/api/workforce/snapshots")).json();
   expect(snaps.some((s: any) => s.reason === "before loading sample data")).toBeTruthy();
 

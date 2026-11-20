@@ -59,7 +59,7 @@ pub async fn seed_if_empty(db: &DatabaseConnection) -> anyhow::Result<bool> {
     if user::Entity::find().count(db).await? > 0 {
         return Ok(false);
     }
-    seed(db).await?;
+    seed_empty(db).await?;
     Ok(true)
 }
 
@@ -69,10 +69,22 @@ const ESTATE_TABLES: &str = "equipment_reservations, asset_transfer_logs, photo_
      executive_handover_reports, estate_agenda_items, notifications, manpower_ledger_entries, timeline_event_records, \
      project_phases, work_items, assets, spatial_areas, base_map_versions";
 
-/// Settings → "Clear data": an empty estate on a blank map, ready to set up.
+/// The workforce merged from Service 5: people, every list (duty, attendance,
+/// overtime, visitations, signatories, clinic, pick lists) and its snapshots.
+const WORKFORCE_TABLES: &str = "workforce_records, workforce_snapshots, workers";
+
+/// Settings → "Clear data": every operational record goes, the estate and the
+/// workforce alike, leaving a blank map. Sign-in accounts and settings stay.
 pub async fn clear(db: &DatabaseConnection) -> anyhow::Result<()> {
     let txn = db.begin().await?;
     clear_estate(&txn).await?;
+    txn.execute_unprepared(&format!("TRUNCATE {WORKFORCE_TABLES}")).await?;
+    blank_map(&txn).await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+async fn blank_map(txn: &DatabaseTransaction) -> anyhow::Result<()> {
     base_map_version::ActiveModel {
         id: Set(Uuid::new_v4()),
         version_name: Set("Blank map".into()),
@@ -81,9 +93,8 @@ pub async fn clear(db: &DatabaseConnection) -> anyhow::Result<()> {
         created_at: Set(Utc::now()),
         tiles: Set(None),
     }
-    .insert(&txn)
+    .insert(txn)
     .await?;
-    txn.commit().await?;
     Ok(())
 }
 
@@ -353,8 +364,25 @@ impl Ctx<'_> {
 }
 
 /// An empty database: the sample estate plus its four demo accounts.
+/// A fresh install: the sign-in accounts and an empty estate on a blank map
+/// (sample data is one click away in Settings → Estate data).
+pub async fn seed_empty(db: &DatabaseConnection) -> anyhow::Result<()> {
+    let txn = db.begin().await?;
+    accounts(&txn).await?;
+    blank_map(&txn).await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+/// The sign-in accounts plus the sample estate (`backend reset-sample`; the test suite uses it).
 pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     let txn = db.begin().await?;
+    let [_vip, admin, monitor, monitor2] = accounts(&txn).await?;
+    sample_estate(db, txn, Team { admin, monitor, monitor2 }).await
+}
+
+/// The base sign-in accounts: owner, office admin and two site monitors.
+async fn accounts(txn: &DatabaseTransaction) -> anyhow::Result<[user::Model; 4]> {
     // Demo accounts share one password (shown on the sign-in page in demo mode).
     let demo_hash = crate::auth::hash_password(crate::auth::DEMO_PASSWORD)?;
     let mut people = Vec::new();
@@ -377,10 +405,9 @@ pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             permission_overrides: Set(serde_json::json!({})),
             last_sign_in_at: Set(None),
         };
-        people.push(person.insert(&txn).await?);
+        people.push(person.insert(txn).await?);
     }
-    let [_vip, admin, monitor, monitor2]: [user::Model; 4] = people.try_into().map_err(|_| anyhow::anyhow!("expected four demo accounts"))?;
-    sample_estate(db, txn, Team { admin, monitor, monitor2 }).await
+    people.try_into().map_err(|_| anyhow::anyhow!("expected four demo accounts"))
 }
 
 async fn sample_estate(db: &DatabaseConnection, txn: DatabaseTransaction, team: Team) -> anyhow::Result<()> {

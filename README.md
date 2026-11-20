@@ -70,10 +70,13 @@ On Windows you can also start the database and the app in the background with:
 powershell -ExecutionPolicy Bypass -File scripts/start-windows.ps1
 ```
 
-To reset the demo data at any time:
+A fresh install starts **empty**: only the sign-in accounts, a blank map and no workforce. In the app, Settings → Estate data → **Load sample data** fills every module at once (estate, projects, photos, equipment, schedule, and a linked workforce with duty, overtime, visitations, signatories and clinic records), and **Clear data** empties them all again, keeping the sign-in accounts and settings.
+
+From the command line (this replaces everything, sign-in accounts included):
 
 ```bash
-cargo run -p backend --release -- reset
+cargo run -p backend --release -- reset          # empty, like a fresh install
+cargo run -p backend --release -- reset-sample   # with the sample estate (used by the tests)
 ```
 
 #### Workforce modules and the Clinic switch

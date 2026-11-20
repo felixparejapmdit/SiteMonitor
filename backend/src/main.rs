@@ -58,10 +58,18 @@ async fn main() -> anyhow::Result<()> {
 
     let command = std::env::args().nth(1).unwrap_or_default();
     match command.as_str() {
+        // An empty estate with just the sign-in accounts (the default state).
         "reset" => {
             Migrator::fresh(&db).await?;
+            seed::seed_empty(&db).await?;
+            tracing::info!("database reset: sign-in accounts and an empty estate");
+            return Ok(());
+        }
+        // The same accounts plus the sample estate (demos and the test suite).
+        "reset-sample" => {
+            Migrator::fresh(&db).await?;
             seed::seed(&db).await?;
-            tracing::info!("database reset and re-seeded");
+            tracing::info!("database reset with the sample estate");
             return Ok(());
         }
         "set-password" => {
