@@ -143,7 +143,7 @@ test("Personnel page: counts, search, Ctrl+K, add and edit a worker", async ({ p
 
 test("snapshots: take one, change something, restore it back", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/settings");
-  await page.getByTestId("tab-Workforce data").click();
+  await page.getByTestId("tab-Daily Snapshot").click();
   await page.getByTestId("take-snapshot").click();
   await expect(page.getByText("Snapshot saved").first()).toBeVisible();
   const target = (await workers(request)).find((w: any) => w.a_number === "PW-002");
@@ -151,7 +151,7 @@ test("snapshots: take one, change something, restore it back", async ({ page, re
   expect((await workers(request)).find((w: any) => w.a_number === "PW-002").name).toBe("Renamed Volunteer");
 
   await page.reload();
-  await page.getByTestId("tab-Workforce data").click();
+  await page.getByTestId("tab-Daily Snapshot").click();
   const newest = page.getByTestId("snapshot-row").filter({ hasText: "manual" }).first();
   await newest.getByTestId("restore-snapshot").click();
   await newest.getByTestId("restore-confirm").click();

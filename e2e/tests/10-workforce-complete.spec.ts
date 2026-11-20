@@ -101,7 +101,7 @@ test("dashboard, tomorrow's assignments, and bulk update by pasted names", async
   await expect(page.getByText("Hall Worker One").first()).toBeVisible(); // this month's birthday
 
   await page.goto("/operations");
-  await page.getByTestId("tab-Tomorrow").click();
+  await page.getByTestId("tab-Encoder").click();
   const group = page.getByTestId("tomorrow-group").filter({ hasText: "Team H" });
   await group.getByTestId("tomorrow-fill-text").fill("Pour hall footing");
   await group.getByTestId("tomorrow-fill").click();
@@ -109,7 +109,7 @@ test("dashboard, tomorrow's assignments, and bulk update by pasted names", async
   await expect(page.getByText("Tomorrow's assignments saved").first()).toBeVisible();
   expect((await workers(request)).filter((w: any) => w.tomorrow === "Pour hall footing").length).toBe(2);
 
-  await page.getByTestId("tab-Bulk update").click();
+  await page.getByTestId("tab-Bulk Update").click();
   await page.getByTestId("bulk-text").fill("203\nNobody Here");
   await page.getByTestId("bulk-action").selectOption("Absent");
   await page.getByTestId("bulk-apply").click();
@@ -119,14 +119,16 @@ test("dashboard, tomorrow's assignments, and bulk update by pasted names", async
 
 test("pick lists, visitation groups and ministers, duty swaps", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/operations");
-  await page.getByTestId("tab-Pick lists").click();
+  await page.getByTestId("tab-Pick Lists").click();
   await page.getByTestId("picklist-woodlandShops").fill("Electrical Shop\nCarpentry Shop");
   await page.getByTestId("picklist-save").click();
   await expect(page.getByText("Pick lists saved").first()).toBeVisible();
   const lists = (await records(request, "custom_datalists"))[0];
   expect(lists.woodlandShops).toEqual(["Electrical Shop", "Carpentry Shop"]);
 
-  await page.getByTestId("tab-Visitation groups").click();
+  await page.goto("/workforce");
+  await page.getByTestId("tab-Visitations").click();
+  await page.getByTestId("visit-view-Groups").click();
   await page.getByTestId("minister-add").click();
   await page.getByTestId("rf-name").fill("Bro. Reyes");
   await page.getByTestId("rf-save").click();
@@ -134,7 +136,7 @@ test("pick lists, visitation groups and ministers, duty swaps", async ({ page, r
   await page.getByTestId("rf-name").fill("Bunk House Group");
   await page.getByTestId("rf-save").click();
   await expect(page.getByTestId("record-row").filter({ hasText: "Bunk House Group" })).toBeVisible();
-  await page.getByTestId("tab-Visitations").click();
+  await page.getByTestId("visit-view-Schedule").click();
   await page.getByTestId("visit-add").click();
   await expect(page.getByTestId("rf-ministerName").locator("option", { hasText: "Bro. Reyes" })).toHaveCount(1);
   await page.keyboard.press("Escape");
@@ -142,10 +144,11 @@ test("pick lists, visitation groups and ministers, duty swaps", async ({ page, r
   // Only present people can be swapped in; 202 went on pass in the offline test.
   const two = (await workers(request)).find((w: any) => w.a_number === "202");
   expect((await request.put(`/api/workers/${two.id}/status`, { data: { status: "Present", reason: "" } })).ok()).toBeTruthy();
-  await page.getByTestId("tab-Overnight duty").click();
+  await page.goto("/operations");
+  await page.getByTestId("tab-Overnight Duty").click();
   await page.getByTestId("duty-generate").click();
   await expect(page.getByText("Duty roster made").first()).toBeVisible();
-  await page.getByTestId("tab-Duty history").click();
+  await page.getByTestId("tab-Duty History").click();
   await page.getByTestId("duty-swap").first().selectOption("202");
   await expect(page.getByText("Swapped").first()).toBeVisible();
   const day = await page.evaluate(() => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10); });
@@ -155,7 +158,7 @@ test("pick lists, visitation groups and ministers, duty swaps", async ({ page, r
 
 test("overtime from a pasted list of names", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/operations");
-  await page.getByTestId("tab-Overtime").click();
+  await page.getByTestId("tab-OT Entries").click();
   await page.getByTestId("ot-paste-open").click();
   await page.getByTestId("otp-title").fill("Night pour");
   await page.getByTestId("otp-names").fill("hall worker one\nWorker Two Hall\nStranger");

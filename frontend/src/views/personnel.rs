@@ -312,12 +312,12 @@ pub fn PersonnelView() -> Element {
 }
 
 const COLS_KEY: &str = "sm-personnel-cols";
-const EXTRA: &[(&str, &str)] =
+pub const EXTRA: &[(&str, &str)] =
     &[("task", "Task"), ("project", "Project"), ("remarks", "Remarks"), ("medical", "Medical"), ("spouse", "Spouse"), ("residence", "Residence"), ("housing", "Housing")];
 /// Service 5's archive reasons.
-const ARCHIVE_CATEGORIES: &[&str] = &["Retired", "Dismissed", "Deceased"];
+pub const ARCHIVE_CATEGORIES: &[&str] = &["Retired", "Dismissed", "Deceased"];
 
-fn extra_value(w: &Worker, k: &str) -> String {
+pub fn extra_value(w: &Worker, k: &str) -> String {
     match k {
         "task" => w.task.clone(),
         "project" => w.project.clone(),
@@ -336,7 +336,7 @@ pub fn csv_cell(v: &str) -> String {
 }
 
 #[component]
-fn FilterSelect(id: &'static str, label: &'static str, all: &'static str, options: Vec<String>, value: String, on_change: EventHandler<String>) -> Element {
+pub fn FilterSelect(id: &'static str, label: &'static str, all: &'static str, options: Vec<String>, value: String, on_change: EventHandler<String>) -> Element {
     rsx! {
         select { id: "{id}", class: "field w-auto max-w-[14rem]", "aria-label": "{label}", "data-testid": "{id}", onchange: move |e| on_change.call(e.value()),
             option { value: "", selected: value.is_empty(), "{all}" }
@@ -376,17 +376,19 @@ fn PrintList(workers: Vec<Worker>, cols: Vec<String>) -> Element {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Bulk {
+pub enum Bulk {
     Status(WorkerStatus),
     Reassign,
     Archive,
     Restore,
     Delete,
+    /// Set one field to the same value for everyone ticked (Service 5 Bulk Edit).
+    Edit,
 }
 
 /// Actions for the ticked people (Service 5's selection tray).
 #[component]
-fn BulkBar(count: usize, archived_view: bool, on_pick: EventHandler<Bulk>, on_clear: EventHandler<()>) -> Element {
+pub fn BulkBar(count: usize, archived_view: bool, on_pick: EventHandler<Bulk>, on_clear: EventHandler<()>) -> Element {
     rsx! {
         div { class: "card px-4 py-2.5 flex flex-wrap items-center gap-2 no-print scale-in", "data-testid": "bulk-bar",
             span { class: "text-sm font-medium mr-2", "{count} selected" }
@@ -405,7 +407,7 @@ fn BulkBar(count: usize, archived_view: bool, on_pick: EventHandler<Bulk>, on_cl
     }
 }
 
-fn save_request(w: &Worker, archived: bool) -> SaveWorkerRequest {
+pub fn save_request(w: &Worker, archived: bool) -> SaveWorkerRequest {
     SaveWorkerRequest {
         a_number: w.a_number.clone(),
         name: w.name.clone(),
@@ -421,13 +423,15 @@ fn save_request(w: &Worker, archived: bool) -> SaveWorkerRequest {
 }
 
 #[component]
-fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>) -> Element {
+pub fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>) -> Element {
     let app = use_app();
     let mut busy = use_signal(|| false);
     let mut category = use_signal(|| "Retired".to_string());
     let mut reason = use_signal(String::new);
     let mut group = use_signal(String::new);
     let mut area = use_signal(String::new);
+    let mut field = use_signal(|| "specificTask".to_string());
+    let mut value = use_signal(String::new);
     let n = workers.len();
     let names = workers.iter().take(8).map(|w| w.name.clone()).collect::<Vec<_>>().join(", ") + if n > 8 { " …" } else { "" };
     let (title, button, danger) = match kind {
@@ -436,6 +440,7 @@ fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>) -> 
         Bulk::Archive => (format!("Archive {}", util::plural(n, "person")), "Archive".to_string(), false),
         Bulk::Restore => (format!("Restore {}", util::plural(n, "person")), "Restore to active".to_string(), false),
         Bulk::Delete => (format!("Delete {} for good?", util::plural(n, "person")), format!("Delete {} for good", util::plural(n, "person")), true),
+        Bulk::Edit => (format!("Edit {}", util::plural(n, "person")), "Apply to all".to_string(), false),
     };
     let run = move |_| {
         let workers = workers.clone();
@@ -466,6 +471,20 @@ fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>) -> 
                             Err(e) => Err(e),
                         }
                     }
+                    Bulk::Edit => match field().as_str() {
+                        // Area and department are assignments, so they go through reassign (logged).
+                        f @ ("area" | "department") => {
+                            let v = value().trim().to_string();
+                            let req = ReassignRequest {
+                                project_group: w.project_group.clone(),
+                                area: if f == "area" { v.clone() } else { w.area.clone() },
+                                department: if f == "department" { v } else { w.department.clone() },
+                                reason: reason(),
+                            };
+                            api::put::<_, Worker>(&format!("/workers/{}/reassign", w.id), &req).await.map(|_| ())
+                        }
+                        f => api::put::<_, Worker>(&format!("/workers/{}/profile", w.id), &serde_json::json!({ f: value().trim() })).await.map(|_| ()),
+                    },
                     Bulk::Delete => Ok(()),
                 };
                 if let Err(e) = r {
@@ -506,6 +525,19 @@ fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>) -> 
                             div { label { class: "label", r#for: "ba-area", "New area" } input { id: "ba-area", class: "field", "data-testid": "bulk-area", placeholder: "Leave blank to keep", value: "{area}", oninput: move |e| area.set(e.value()) } }
                         }
                     },
+                    Bulk::Edit => rsx! {
+                        div { class: "grid sm:grid-cols-2 gap-3",
+                            div {
+                                label { class: "label", r#for: "be-field", "Field" }
+                                select { id: "be-field", class: "field", "data-testid": "bulk-field", onchange: move |e| field.set(e.value()),
+                                    for (k, l) in [("specificTask", "Specific task"), ("project", "Project"), ("absentReason", "Remarks / reason"), ("area", "Area"), ("department", "Department"), ("visitationHousing", "Housing group")] {
+                                        option { key: "{k}", value: "{k}", selected: field() == k, "{l}" }
+                                    }
+                                }
+                            }
+                            div { label { class: "label", r#for: "be-value", "New value" } input { id: "be-value", class: "field", "data-testid": "bulk-value", value: "{value}", oninput: move |e| value.set(e.value()) } }
+                        }
+                    },
                     Bulk::Delete => rsx! {
                         p { class: "text-sm rounded-md bg-tag-red-bg text-tag-red-text px-3 py-2",
                             "This erases their personal, family, health and assignment records. A snapshot is taken first, so it can be restored from Settings → Workforce data." }
@@ -532,7 +564,7 @@ fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>) -> 
 
 /// Service 5's "Start New Day".
 #[component]
-fn StartDayModal(on_close: EventHandler<()>) -> Element {
+pub fn StartDayModal(on_close: EventHandler<()>) -> Element {
     let app = use_app();
     let mut busy = use_signal(|| false);
     let go = move |_| async move {
@@ -563,7 +595,7 @@ fn StartDayModal(on_close: EventHandler<()>) -> Element {
 }
 
 #[component]
-fn WorkerModal(worker: Option<Worker>, on_close: EventHandler<()>) -> Element {
+pub fn WorkerModal(worker: Option<Worker>, on_close: EventHandler<()>) -> Element {
     let app = use_app();
     let id = worker.as_ref().map(|w| w.id);
     let start = worker.map(|w| SaveWorkerRequest {
@@ -646,7 +678,8 @@ fn WorkerModal(worker: Option<Worker>, on_close: EventHandler<()>) -> Element {
 /// Settings → Workforce data: import any Service 5 backup, download a backup,
 /// take and restore snapshots.
 #[component]
-pub fn WorkforceData() -> Element {
+pub fn WorkforceData(#[props(default = "all")] part: &'static str) -> Element {
+    let (show_backup, show_restore, show_snaps) = (matches!(part, "all" | "backup"), matches!(part, "all" | "restore"), matches!(part, "all" | "snapshots"));
     let app = use_app();
     let mut snapshots = use_resource(|| async { api::get::<Vec<WorkforceSnapshotInfo>>("/workforce/snapshots").await.unwrap_or_default() });
     let mut passphrase = use_signal(String::new);
@@ -705,31 +738,32 @@ pub fn WorkforceData() -> Element {
     let list = snapshots.read().clone().unwrap_or_default();
     rsx! {
         div { class: "space-y-5", "data-testid": "workforce-data",
-            div { class: "space-y-3",
-                p { class: "text-sm font-medium", "Import a Service 5 backup" }
-                p { class: "text-sm text-muted", "Any Service 5 JSON backup (old or new), an encrypted .agwcz backup, a service5.db file, or a backup downloaded here. A snapshot is taken first, so an import can always be undone. For service5.db, close Service 5 first so its latest changes are saved into the file." }
+            if show_backup || show_restore { div { class: "space-y-3",
+                if show_restore { p { class: "text-sm font-medium", "Import a Service 5 backup" } }
+                if !show_restore { p { class: "text-sm font-medium", "Download a workforce backup" } p { class: "text-sm text-muted", "Every person and list (including the clinic), encrypted with the passphrase below." } }
+                if show_restore { p { class: "text-sm text-muted", "Any Service 5 JSON backup (old or new), an encrypted .agwcz backup, a service5.db file, or a backup downloaded here. A snapshot is taken first, so an import can always be undone. For service5.db, close Service 5 first so its latest changes are saved into the file." } }
                 div { class: "grid sm:grid-cols-2 gap-3 max-w-xl",
                     div {
                         label { class: "label", r#for: "workforce-pass", "Backup passphrase (opens or encrypts a backup)" }
                         input { id: "workforce-pass", r#type: "password", class: "field", "data-testid": "workforce-passphrase", autocomplete: "off", value: "{passphrase}", oninput: move |e| passphrase.set(e.value()) }
                     }
-                    label { class: "flex items-start gap-2 text-sm self-end pb-2",
+                    if show_restore { label { class: "flex items-start gap-2 text-sm self-end pb-2",
                         input { r#type: "checkbox", class: "w-4 h-4 mt-0.5 accent-[#064e3b]", "data-testid": "workforce-replace", checked: replace(), onchange: move |e| replace.set(e.checked()) }
                         span { "Replace instead of merge" span { class: "block text-xs text-muted", "Parts that are empty in the file never wipe your data." } }
-                    }
+                    } }
                 }
                 input { id: "workforce-file", r#type: "file", class: "hidden", accept: ".json,.agwcz,.db,application/json", "data-testid": "workforce-file", onchange: import }
                 div { class: "flex flex-wrap gap-2",
-                    label { r#for: "workforce-file", class: "btn-primary cursor-pointer", "data-testid": "workforce-import",
+                    if show_restore { label { r#for: "workforce-file", class: "btn-primary cursor-pointer", "data-testid": "workforce-import",
                         if busy() == Some("import") { Spinner {} } else { Icon { name: "upload" } }
                         "Choose backup file"
-                    }
-                    button { class: "btn-secondary", "data-testid": "workforce-export", disabled: busy().is_some(), onclick: download,
+                    } }
+                    if show_backup { button { class: "btn-secondary", "data-testid": "workforce-export", disabled: busy().is_some(), onclick: download,
                         if busy() == Some("export") { Spinner {} } else { Icon { name: "archive" } }
                         "Download backup"
-                    }
+                    } }
                 }
-                crate::views::workforce_extra::BackupPicker {
+                if show_backup { crate::views::workforce_extra::BackupPicker {
                     on_save: move |lists: String| async move {
                         if passphrase().chars().count() < 8 {
                             return app.error("Type a passphrase of at least 8 characters first: the backup is encrypted with it.");
@@ -739,7 +773,7 @@ pub fn WorkforceData() -> Element {
                             Err(e) => app.error(e.message()),
                         }
                     }
-                }
+                } }
                 if let Some(r) = report() {
                     div { class: "rounded-md bg-tag-green-bg text-tag-green-text text-sm px-4 py-3 space-y-1", "data-testid": "import-report",
                         p { class: "font-medium", "{r.detected}: {util::plural(r.workers, \"worker\")} imported" }
@@ -751,8 +785,8 @@ pub fn WorkforceData() -> Element {
                         }
                     }
                 }
-            }
-            div { class: "space-y-3 border-t border-line pt-4",
+            } }
+            if show_snaps { div { class: "space-y-3",
                 div { class: "flex flex-wrap items-center justify-between gap-2",
                     div {
                         p { class: "text-sm font-medium", "Snapshots" }
@@ -795,7 +829,7 @@ pub fn WorkforceData() -> Element {
                         }
                     }
                 }
-            }
+            } }
         }
     }
 }

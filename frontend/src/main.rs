@@ -54,6 +54,8 @@ pub enum Route {
         Studio {},
         #[route("/people")]
         People {},
+        #[route("/assignments")]
+        Assignments {},
         #[route("/personnel")]
         Personnel {},
         #[route("/workforce")]
@@ -253,11 +255,12 @@ fn nav_for(app: AppState) -> Vec<NavItem> {
             const CREW: &str = "Workforce & crew";
             v.push(item(Route::Crew {}, "Crew", "hard-hat", CREW, Hue::Sky));
             if app.can(Permission::ManageWorkforce) || app.can(Permission::ManageCrew) {
+                v.push(item(Route::Assignments {}, "Assignments", "check", CREW, Hue::Emerald));
                 v.push(item(Route::Personnel {}, "Personnel", "users", CREW, Hue::Teal));
             }
             if app.can(Permission::ManageWorkforce) {
-                v.push(item(Route::Workforce {}, "Groups & records", "layers", CREW, Hue::Indigo));
-                v.push(item(Route::Operations {}, "Duty & operations", "clock", "Operations & duty", Hue::Blue));
+                v.push(item(Route::Workforce {}, "Workforce records", "layers", CREW, Hue::Indigo));
+                v.push(item(Route::Operations {}, "Operations", "clock", "Operations & duty", Hue::Blue));
             }
             if app.can(Permission::ManageClinic) {
                 v.push(item(Route::Clinic {}, "Clinic ledger", "info", "Operations & duty", Hue::Rose));
@@ -880,6 +883,15 @@ fn Personnel() -> Element {
         return rsx! { components::ui::EmptyState { icon: "users", title: "You don't have access to Personnel", body: "Ask the Office Admin to give you \u{201c}Manage workers & volunteers\u{201d}." } };
     }
     rsx! { views::personnel::PersonnelView {} }
+}
+
+#[component]
+fn Assignments() -> Element {
+    let app = use_app();
+    if !app.can(Permission::ManageWorkforce) && !app.can(Permission::ManageCrew) {
+        return no_access("users", "Assignments", "Manage workers & volunteers");
+    }
+    rsx! { views::assignments::AssignmentsView {} }
 }
 
 fn no_access(icon: &'static str, page: &str, permission: &str) -> Element {

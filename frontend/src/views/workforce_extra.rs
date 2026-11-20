@@ -188,7 +188,7 @@ pub fn HousingTables() -> Element {
 /// Service 5's "Bulk assign groups": tick the project groups one signatory signs
 /// for. A group has one signatory, so it leaves anyone else's list.
 #[component]
-pub fn SignatoryAssign(on_close: EventHandler<()>) -> Element {
+pub fn SignatoryAssign(on_close: EventHandler<()>, #[props(default)] preselect: String) -> Element {
     let app = use_app();
     let sigs = use_records("signatories");
     let workers = use_workers();
@@ -196,6 +196,13 @@ pub fn SignatoryAssign(on_close: EventHandler<()>) -> Element {
     let mut ticked = use_signal(HashSet::<String>::new);
     let mut busy = use_signal(|| false);
     let list = sigs.read().clone().unwrap_or_default();
+    // Opened from one signatory's card: start on that signatory and its groups.
+    if !preselect.is_empty() && who.peek().is_empty() {
+        if let Some(v) = list.iter().find(|v| s(v, "id") == preselect) {
+            ticked.set(v["projectGroups"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect());
+            who.set(preselect.clone());
+        }
+    }
     let mut groups: Vec<String> = active(&workers).into_iter().map(|w| w.project_group).filter(|g| !g.is_empty()).collect();
     for v in &list {
         groups.extend(v["projectGroups"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)));
@@ -252,7 +259,7 @@ pub fn SignatoryAssign(on_close: EventHandler<()>) -> Element {
                     label { class: "label", r#for: "sa-who", "Signatory" }
                     select { id: "sa-who", class: "field", "data-testid": "sig-assign-who", onchange: pick,
                         option { value: "", "Choose…" }
-                        for v in sigs.read().clone().unwrap_or_default() { option { key: "{s(&v, \"id\")}", value: "{s(&v, \"id\")}", {s(&v, "name")} } }
+                        for v in sigs.read().clone().unwrap_or_default() { option { key: "{s(&v, \"id\")}", value: "{s(&v, \"id\")}", selected: s(&v, "id") == who(), {s(&v, "name")} } }
                     }
                 }
                 if !who().is_empty() {
@@ -681,18 +688,41 @@ pub fn VisitationsHub() -> Element {
     let print_rows = |rows: &[Value]| -> Vec<(String, Vec<String>)> { rows.iter().map(|v| (s(v, "id"), vec![s(v, "date"), who(v), s(v, "ministerName"), s(v, "status"), s(v, "notes")])).collect() };
     let p_sched = print_rows(&scheduled);
     let p_last7 = print_rows(&last7);
+    // Service 5's minister summary: visits per minister by status, and the latest one.
+    let mut per_minister: BTreeMap<String, (usize, usize, usize, String)> = BTreeMap::new();
+    for v in &list {
+        let m = if s(v, "ministerName").is_empty() { "Not set".to_string() } else { s(v, "ministerName") };
+        let e = per_minister.entry(m).or_default();
+        match s(v, "status").as_str() {
+            "completed" => {
+                e.0 += 1;
+                if s(v, "date") > e.3 {
+                    e.3 = s(v, "date");
+                }
+            }
+            "scheduled" => e.1 += 1,
+            _ => e.2 += 1,
+        }
+    }
+    let minister_rows: Vec<(String, Vec<String>)> =
+        per_minister.into_iter().map(|(m, (d, sc, c, last))| (m.clone(), vec![m, d.to_string(), sc.to_string(), c.to_string(), last])).collect();
     let mut printing = use_signal(|| "");
     rsx! {
         div { class: "flex flex-wrap items-center gap-3 no-print",
-            Segmented { options: vec!["Schedule", "History", "Coverage"], current: view, testid: "visit-view" }
+            Segmented { options: vec!["Schedule", "History", "Coverage", "Groups"], current: view, testid: "visit-view" }
             if can_edit {
                 button { class: "btn-primary ml-auto", "data-testid": "visit-add", onclick: move |_| editing.set(Some((new_id("visit"), json!({ "date": today(), "status": "scheduled", "createdAt": chrono::Utc::now().to_rfc3339() })))), Icon { name: "plus" } "Schedule a visit" }
                 button { class: "btn-secondary", "data-testid": "visit-past", onclick: move |_| editing.set(Some((new_id("visit"), json!({ "date": today(), "status": "completed", "completedAt": chrono::Utc::now().to_rfc3339(), "createdAt": chrono::Utc::now().to_rfc3339() })))), "Record a past visit" }
             }
             button { class: "btn-secondary", "data-testid": "visit-print-scheduled", onclick: move |_| { printing.set("scheduled"); print_with("size: A4; margin: 10mm"); }, Icon { name: "archive" } "Print scheduled" }
             button { class: "btn-secondary", "data-testid": "visit-print-week", onclick: move |_| { printing.set("week"); print_with("size: A4; margin: 10mm"); }, Icon { name: "archive" } "Print last 7 days" }
+            button { class: "btn-secondary", "data-testid": "visit-print-ministers", onclick: move |_| { printing.set("ministers"); print_with("size: A4; margin: 10mm"); }, Icon { name: "archive" } "Minister summary" }
         }
-        if view() != "Coverage" {
+        if view() == "Groups" {
+            crate::views::workforce_more::VisitGroupsTab {}
+            VisitGroupMembers {}
+        }
+        if view() == "Schedule" || view() == "History" {
             div { class: "flex flex-wrap gap-2 no-print",
                 input { class: "field w-auto min-w-[14rem]", "aria-label": "Search visits", "data-testid": "visit-search", placeholder: "Search person, minister, notes", value: "{q}", oninput: move |e| q.set(e.value()) }
                 select { class: "field w-auto", "aria-label": "Minister", "data-testid": "visit-minister", onchange: move |e| minister.set(e.value()),
@@ -734,6 +764,7 @@ pub fn VisitationsHub() -> Element {
                         on_edit: move |id: String| { if can_edit { if let Some(v) = list.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) } } } }
                 }
             },
+            "Groups" => rsx! {},
             _ => rsx! {
                 div { class: "no-print space-y-4", "data-testid": "visit-coverage",
                     p { class: "text-sm", "{visited} of {people.len()} people have had a visit." }
@@ -752,8 +783,13 @@ pub fn VisitationsHub() -> Element {
             },
         }
         div { class: "print-only space-y-2",
-            p { class: "font-semibold", if printing() == "week" { "Visits in the last 7 days" } else { "Scheduled visits" } }
-            Table { head: vec!["Date", "Person", "Minister", "Status", "Notes"], rows: if printing() == "week" { p_last7 } else { p_sched } }
+            if printing() == "ministers" {
+                p { class: "font-semibold", "Visits by minister" }
+                Table { head: vec!["Minister", "Done", "Scheduled", "Cancelled", "Last visit"], rows: minister_rows }
+            } else {
+                p { class: "font-semibold", if printing() == "week" { "Visits in the last 7 days" } else { "Scheduled visits" } }
+                Table { head: vec!["Date", "Person", "Minister", "Status", "Notes"], rows: if printing() == "week" { p_last7 } else { p_sched } }
+            }
         }
         if let Some((id, v)) = editing() {
             RecordModal { title: "Visitation".to_string(), list: "visitations", id, fields, initial: v, on_close: move |_| editing.set(None),

@@ -5,6 +5,7 @@ pub mod admin_map_studio;
 pub mod auth;
 pub mod agenda_view;
 pub mod archive;
+pub mod assignments;
 pub mod home;
 pub mod people;
 pub mod clinic;
@@ -12,6 +13,7 @@ pub mod personnel;
 pub mod workforce_more;
 pub mod workforce_ops;
 pub mod workforce_print;
+pub mod workforce_pages;
 pub mod workforce_extra;
 pub mod project_editor;
 pub mod settings;
@@ -24,20 +26,22 @@ use crate::state::AppState;
 
 /// The tabs inside each tabbed page. The page's tab bar and the sidebar's
 /// sub-items list the same tabs and share the open one (`ui::PAGE_TABS`).
-pub const WORKFORCE_TABS: &[&str] = &["Dashboard", "Groups", "Areas & zones", "Departments", "Org chart", "Dependability", "History"];
-pub const OPERATIONS_TABS: &[&str] =
-    &["Overnight duty", "Duty history", "Tomorrow", "Attendance", "Overtime", "Visitations", "Visitation groups", "Signatories", "Bulk update", "Pick lists", "Print"];
+/// Named after the Service 5 pages they replace.
+pub const WORKFORCE_TABS: &[&str] =
+    &["Dashboard", "Departments", "ID Cards", "Project Groups", "Visitations", "Reassign Volunteers", "Attendance Gen", "Update Forms", "Archived Personnel", "Areas & zones"];
+pub const OPERATIONS_TABS: &[&str] = &[
+    "Overnight Duty", "Duty History", "Encoder", "Monthly Attendance", "OT Calculator", "OT Entries", "Org Chart", "History Log", "Dependability", "Signatories",
+    "Bulk Update", "Pick Lists", "Print",
+];
 pub const CLINIC_TABS: &[&str] = &["Health episodes", "Clearance", "Clinic visits", "Vaccines", "Medications", "Contact tracing", "Audit trail"];
 
 pub fn settings_tabs(app: AppState) -> Vec<&'static str> {
     let mut t = vec!["General", "Crew", "Issues", "Schedule"];
+    // Service 5's Admin & tools: Backup DB, Restore DB, Daily Snapshot.
     if app.can(Permission::ManageWorkforce) {
-        t.push("Workforce data");
+        t.extend(["Backup DB", "Restore DB", "Daily Snapshot"]);
     }
     t.push("Estate data");
-    if app.can(Permission::ManageWorkforce) && app.can(Permission::ManageClinic) {
-        t.push("Backup & restore");
-    }
     t
 }
 

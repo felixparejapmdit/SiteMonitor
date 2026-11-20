@@ -83,7 +83,7 @@ test("only someone with settings, workforce and clinic access can make or restor
 
 test("Settings → Backup & restore downloads an encrypted package", async ({ page }) => {
   await openAs(page, "OfficeAdmin", "/settings");
-  await page.getByTestId("tab-Backup & restore").click();
+  await page.getByTestId("tab-Backup DB").click();
   await expect(page.getByTestId("pkg-make")).toBeDisabled();
   await page.getByTestId("pkg-pass").fill(PASS);
   await page.getByTestId("pkg-pass2").fill(PASS);
@@ -93,6 +93,7 @@ test("Settings → Backup & restore downloads an encrypted package", async ({ pa
   expect(d.suggestedFilename()).toMatch(/^sitemonitor-.*\.smpkg$/);
   const text = Buffer.concat(await (await d.createReadStream()).toArray()).toString();
   expect(JSON.parse(text)._isAgwcEncrypted).toBe(true);
+  await page.getByTestId("tab-Restore DB").click();
   await expect(page.getByTestId("pkg-restore")).toBeDisabled(); // needs a file, its passphrase and RESTORE
 });
 

@@ -144,7 +144,7 @@ test("job orders skip people who are off or turned off; update forms and the lis
 });
 
 test("visitations: schedule, mark done, coverage; visitation group members and the monthly sheet", async ({ page, request }) => {
-  await openAs(page, "OfficeAdmin", "/operations");
+  await openAs(page, "OfficeAdmin", "/workforce");
   await page.getByTestId("tab-Visitations").click();
   await page.getByTestId("visit-add").click();
   await page.getByTestId("rf-aNumber").selectOption("301");
@@ -159,7 +159,7 @@ test("visitations: schedule, mark done, coverage; visitation group members and t
   await expect(page.getByTestId("visit-unvisited")).toContainText("Ben NoJO");
   await expect(page.getByTestId("visit-unvisited")).not.toContainText("Ana Present");
 
-  await page.getByTestId("tab-Visitation groups").click();
+  await page.getByTestId("visit-view-Groups").click();
   await page.getByText(/Not in any group/).click();
   await page.locator("label", { hasText: "Ben NoJO" }).getByTestId("vgroup-unassigned").check();
   await page.getByTestId("vgroup-assign").click();
@@ -174,7 +174,7 @@ test("visitations: schedule, mark done, coverage; visitation group members and t
 
 test("overtime: copy the day before, then the calculator summary", async ({ page }) => {
   await openAs(page, "OfficeAdmin", "/operations");
-  await page.getByTestId("tab-Overtime").click();
+  await page.getByTestId("tab-OT Entries").click();
   await expect(page.getByTestId("ot-total")).toContainText("0 entries");
   await page.getByTestId("ot-copy-yesterday").click();
   await expect(page.getByText(/1 entry copied from/).first()).toBeVisible();
@@ -182,7 +182,7 @@ test("overtime: copy the day before, then the calculator summary", async ({ page
   await page.getByTestId("ot-prev").click();
   await expect(page.getByTestId("ot-total")).toContainText("₱160.00");
 
-  await page.getByTestId("ot-view-Summary").click();
+  await page.getByTestId("tab-OT Calculator").click();
   await page.getByTestId("ots-from").fill(iso(-3));
   await expect(page.getByTestId("ots-total")).toContainText("₱160.00");
   await expect(page.getByTestId("record-row").filter({ hasText: "Ana Present" })).toContainText("₱160.00");
@@ -192,7 +192,7 @@ test("overtime: copy the day before, then the calculator summary", async ({ page
 
 test("project groups: create with members and a signatory, change log; signatory bulk assignment", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/workforce");
-  await page.getByTestId("tab-Groups").click();
+  await page.getByTestId("tab-Project Groups").click();
   await page.getByTestId("group-create").click();
   await page.getByTestId("gm-name").fill("Team Z");
   await page.getByTestId("gm-area").fill("Garden");
@@ -219,8 +219,8 @@ test("project groups: create with members and a signatory, change log; signatory
 });
 
 test("dossier, project history, selective backup, and the medical column stays with the clinic", async ({ page, request }) => {
-  await openAs(page, "OfficeAdmin", "/workforce");
-  await page.getByTestId("tab-History").click();
+  await openAs(page, "OfficeAdmin", "/operations");
+  await page.getByTestId("tab-History Log").click();
   await page.getByTestId("history-view-Person dossier").click();
   await page.getByTestId("dossier-who").selectOption("302");
   await expect(page.getByTestId("dossier")).toContainText("Ben NoJO");

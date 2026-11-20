@@ -304,17 +304,20 @@ pub fn WorkforceView() -> Element {
         div { class: "space-y-5 rise-in",
             header { class: "space-y-1",
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Workforce" }
-                p { class: "text-[15px] text-muted", "Project groups and the jobs they work on, departments, the org chart, dependability and the change history." }
+                p { class: "text-[15px] text-muted", "The workforce dashboard, departments, ID cards, project groups, visitations, reassignments, attendance lists, update forms and archived personnel." }
             }
             PageTabs { page: "workforce", tabs: crate::views::WORKFORCE_TABS.to_vec() }
             match tab {
-                "Dashboard" => rsx! { crate::views::workforce_more::DashboardTab {} crate::views::workforce_extra::DashboardMore {} },
-                "Groups" => rsx! { GroupsTab {} },
-                "Areas & zones" => rsx! { crate::views::workforce_more::AreasTab {} },
+                "Dashboard" => rsx! { crate::views::workforce_more::DashboardTab {} crate::views::workforce_pages::DashboardCharts {} crate::views::workforce_extra::DashboardMore {} },
                 "Departments" => rsx! { DepartmentsTab {} crate::views::workforce_extra::HousingTables {} },
-                "Org chart" => rsx! { PrintButton { label: "Print org chart" } OrgChartTab {} },
-                "Dependability" => rsx! { PrintButton { label: "Print dependability roster" } DependabilityTab {} },
-                _ => rsx! { HistoryHub {} },
+                "ID Cards" => rsx! { crate::views::workforce_print::PrintTab { initial: "id" } },
+                "Project Groups" => rsx! { GroupsTab {} },
+                "Visitations" => rsx! { crate::views::workforce_extra::VisitationsHub {} },
+                "Reassign Volunteers" => rsx! { crate::views::workforce_pages::ReallocationPanel {} },
+                "Attendance Gen" => rsx! { crate::views::workforce_print::PrintTab { initial: "list" } },
+                "Update Forms" => rsx! { crate::views::workforce_print::PrintTab { initial: "forms" } },
+                "Archived Personnel" => rsx! { crate::views::assignments::AssignmentsView { initial_status: "archived" } },
+                _ => rsx! { crate::views::workforce_more::AreasTab {} },
             }
         }
     }
@@ -444,6 +447,7 @@ fn OrgChartTab() -> Element {
                 {
                     people.sort_by_key(|w| (rank(&w.group_role), w.name.to_lowercase()));
                     let leaders: Vec<Worker> = people.iter().filter(|w| rank(&w.group_role) < 9).cloned().collect();
+                    let everyone = people.clone();
                     let members = people.len() - leaders.len();
                     rsx! {
                         section { key: "{name}", class: "card p-4 space-y-2",
@@ -452,6 +456,7 @@ fn OrgChartTab() -> Element {
                                 p { key: "{l.id}", class: "text-sm", span { class: "pill bg-accent-soft text-accent-ink mr-2", "{l.group_role}" } "{l.name}" }
                             }
                             p { class: "text-sm text-muted", "{util::plural(members, \"member\")}" }
+                            crate::views::workforce_pages::OrgMembers { people: everyone }
                         }
                     }
                 }
@@ -554,22 +559,24 @@ pub fn OperationsView() -> Element {
     rsx! {
         div { class: "space-y-5 rise-in",
             header { class: "space-y-1 no-print",
-                h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Operations & duty" }
-                p { class: "text-[15px] text-muted", "Overnight duty, the monthly attendance sheet, overtime, visitations, signatories and printing." }
+                h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Operations" }
+                p { class: "text-[15px] text-muted", "Overnight duty, the encoder, attendance, overtime, the org chart, history, dependability, signatories and printing." }
             }
             PageTabs { page: "operations", tabs: crate::views::OPERATIONS_TABS.to_vec() }
             match tab {
-                "Overnight duty" => rsx! { DutyTab {} },
-                "Duty history" => rsx! { crate::views::workforce_extra::DutyMonth {} crate::views::workforce_more::DutyHistoryTab {} },
-                "Tomorrow" => rsx! { crate::views::workforce_more::TomorrowTab {} },
-                "Visitation groups" => rsx! { crate::views::workforce_more::VisitGroupsTab {} crate::views::workforce_extra::VisitGroupMembers {} },
-                "Bulk update" => rsx! { crate::views::workforce_more::BulkTab {} },
-                "Pick lists" => rsx! { crate::views::workforce_more::PickListsTab {} },
-                "Attendance" => rsx! { AttendanceTab {} },
-                "Overtime" => rsx! { OvertimeTab {} },
-                "Visitations" => rsx! { crate::views::workforce_extra::VisitationsHub {} },
-                "Signatories" => rsx! { SignatoriesTab {} },
-                _ => rsx! { crate::views::workforce_print::PrintTab {} },
+                "Overnight Duty" => rsx! { DutyTab {} crate::views::workforce_pages::DutyOverrides {} },
+                "Duty History" => rsx! { crate::views::workforce_extra::DutyMonth {} crate::views::workforce_more::DutyHistoryTab {} },
+                "Encoder" => rsx! { crate::views::workforce_more::TomorrowTab {} },
+                "Monthly Attendance" => rsx! { AttendanceTab {} },
+                "OT Calculator" => rsx! { crate::views::workforce_extra::OtSummary {} },
+                "OT Entries" => rsx! { OvertimeTab {} },
+                "Org Chart" => rsx! { PrintButton { label: "Print org chart" } OrgChartTab {} },
+                "History Log" => rsx! { HistoryHub {} },
+                "Dependability" => rsx! { PrintButton { label: "Print dependability roster" } DependabilityTab {} },
+                "Signatories" => rsx! { crate::views::workforce_pages::SignatoriesBoard {} },
+                "Bulk Update" => rsx! { crate::views::workforce_more::BulkTab {} },
+                "Pick Lists" => rsx! { crate::views::workforce_more::PickListsTab {} },
+                _ => rsx! { crate::views::workforce_print::PrintTab { initial: "id" } },
             }
         }
     }
@@ -860,7 +867,6 @@ fn OvertimeTab() -> Element {
     let workers = use_workers();
     let mut editing = use_signal(|| None::<(String, Value)>);
     let mut pasting = use_signal(|| false);
-    let view = use_signal(|| "Entries");
     let mut day = use_signal(today);
     let mut every_day = use_signal(|| false);
     let people = workers.read().clone().unwrap_or_default();
@@ -901,12 +907,6 @@ fn OvertimeTab() -> Element {
             }
         }
     };
-    if view() == "Summary" {
-        return rsx! {
-            crate::views::workforce_extra::Segmented { options: vec!["Entries", "Summary"], current: view, testid: "ot-view" }
-            crate::views::workforce_extra::OtSummary {}
-        };
-    }
     let rows: Vec<(String, Vec<String>)> = sorted
         .iter()
         .map(|e| {
@@ -926,7 +926,6 @@ fn OvertimeTab() -> Element {
     ];
     rsx! {
         div { class: "flex flex-wrap items-center gap-2 no-print",
-            crate::views::workforce_extra::Segmented { options: vec!["Entries", "Summary"], current: view, testid: "ot-view" }
             button { class: "btn-icon btn-ghost", "aria-label": "Previous day", "data-testid": "ot-prev", onclick: move |_| step(-1), Icon { name: "chevron-left" } }
             input { r#type: "date", class: "field w-auto", "aria-label": "Day", "data-testid": "ot-day", value: "{day}", oninput: move |e| day.set(e.value()) }
             button { class: "btn-icon btn-ghost", "aria-label": "Next day", "data-testid": "ot-next", onclick: move |_| step(1), Icon { name: "chevron-right" } }
@@ -948,6 +947,7 @@ fn OvertimeTab() -> Element {
             }
         }
         if pasting() { crate::views::workforce_more::OtPaste { on_close: move |_| pasting.set(false) } }
+        if app.can(Permission::ManageWorkforce) && !every_day() { crate::views::workforce_pages::OtEncoder { day: day() } }
         p { class: "font-semibold print-only", "Overtime schedule {day}" }
         Table { head: vec!["Date", "Work", "Who", "Kind", "Hours", "Rate", "Pay"], rows, on_edit: move |id: String| {
             if let Some(v) = sorted.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) }
@@ -964,47 +964,6 @@ fn OvertimeTab() -> Element {
                     next["computedPay"] = json!(pay);
                     let id = s(&saved, "id");
                     spawn(async move { let _ = save_record(app, "ot_entries", &id, &next).await; });
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn SignatoriesTab() -> Element {
-    let app = use_app();
-    let sigs = use_records("signatories");
-    let mut editing = use_signal(|| None::<(String, Value)>);
-    let list = sigs.read().clone().unwrap_or_default();
-    let join = |v: &Value, k: &str| v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_else(|| s(v, k));
-    let rows: Vec<(String, Vec<String>)> = list.iter().map(|v| (s(v, "id"), vec![s(v, "name"), join(v, "trades"), join(v, "projectGroups"), s(v, "signatureDate")])).collect();
-    let fields = vec![f("name", "Name", Kind::Text), f("trades", "Trades (comma separated)", Kind::Text), f("projectGroups", "Project groups (comma separated)", Kind::Text), f("signatureDate", "Signed", Kind::Date)];
-    let mut assigning = use_signal(|| false);
-    rsx! {
-        if assigning() { crate::views::workforce_extra::SignatoryAssign { on_close: move |_| assigning.set(false) } }
-        div { class: "flex justify-end gap-2",
-            if app.can(Permission::ManageWorkforce) {
-                button { class: "btn-secondary", "data-testid": "sig-assign-open", onclick: move |_| assigning.set(true), "Assign groups" }
-                button { class: "btn-primary", "data-testid": "sig-add", onclick: move |_| editing.set(Some((new_id("sig"), json!({ "signatureDate": today() })))), Icon { name: "plus" } "Add signatory" }
-            }
-        }
-        Table { head: vec!["Name", "Trades", "Project groups", "Signed"], rows, on_edit: move |id: String| {
-            if let Some(v) = list.iter().find(|e| s(e, "id") == id) {
-                let mut v = v.clone();
-                for k in ["trades", "projectGroups"] { v[k] = json!(join(&v, k)); }
-                editing.set(Some((id, v)));
-            }
-        } }
-        if let Some((id, v)) = editing() {
-            RecordModal { title: "Signatory".to_string(), list: "signatories", id, fields, initial: v, on_close: move |_| editing.set(None),
-                on_saved: move |saved: Value| {
-                    // Service 5 keeps trades and groups as lists.
-                    let mut next = saved.clone();
-                    for k in ["trades", "projectGroups"] {
-                        next[k] = json!(s(&saved, k).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect::<Vec<_>>());
-                    }
-                    let id = s(&saved, "id");
-                    spawn(async move { let _ = save_record(app, "signatories", &id, &next).await; });
                 }
             }
         }

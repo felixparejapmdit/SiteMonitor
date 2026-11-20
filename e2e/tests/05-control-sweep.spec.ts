@@ -28,7 +28,7 @@ async function pagesFor(page: Page, role: Role): Promise<string[]> {
   const hall = await areaId(page, "Multi-Purpose Hall (Parking Conversion)");
   const shared = ["/", "/agenda", "/archive", `/projects/${parking}`, `/projects/${pool}`, `/zones/${hall}`, `/handover/${gazebo}`];
   if (role === "VipClient") return shared;
-  const staff = [...shared, "/crew", "/equipment", "/decisions", "/personnel"];
+  const staff = [...shared, "/crew", "/equipment", "/decisions", "/assignments", "/personnel"];
   return role === "OfficeAdmin" ? [...staff, "/map-studio", "/access", "/people", "/settings", "/workforce", "/operations", "/clinic"] : staff;
 }
 

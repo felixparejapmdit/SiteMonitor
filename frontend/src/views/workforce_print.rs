@@ -15,6 +15,9 @@ use crate::components::ui::{EmptyState, Icon};
 use crate::util;
 use crate::views::workforce_ops::{print_with, s, today, use_records, use_workers, Table};
 
+/// Another page (e.g. Assignments) asks the Print tab to open a report, for some people.
+pub static PRINT_REQUEST: GlobalSignal<Option<(&'static str, Vec<Uuid>)>> = Signal::global(|| None);
+
 /// Why someone gets no job order for a date (Service 5's `checkJobOrderEligibility`).
 pub fn no_job_order(w: &Worker, tomorrow: bool) -> Option<&'static str> {
     if w.archived {
@@ -40,11 +43,12 @@ fn age(birthday: &str) -> String {
 }
 
 #[component]
-pub fn PrintTab() -> Element {
+pub fn PrintTab(#[props(default = "id")] initial: &'static str) -> Element {
     let workers = use_workers();
     let sigs = use_records("signatories");
-    let mut kind = use_signal(|| "id");
+    let mut kind = use_signal(|| initial);
     let mut group = use_signal(String::new);
+    let mut trade = use_signal(String::new);
     let mut by = use_signal(|| "group");
     let mut date = use_signal(today);
     let mut default_sig = use_signal(String::new);
@@ -53,6 +57,15 @@ pub fn PrintTab() -> Element {
     let mut picked = use_signal(HashSet::<Uuid>::new);
     let mut only_picked = use_signal(|| false);
     let mut title = use_signal(String::new);
+    use_hook(move || {
+        if let Some((k, ids)) = PRINT_REQUEST.write().take() {
+            kind.set(k);
+            if !ids.is_empty() {
+                picked.set(ids.into_iter().collect());
+                only_picked.set(true);
+            }
+        }
+    });
     let profiles = use_resource(move || async move {
         if matches!(kind(), "family" | "forms") { api::get::<Vec<Value>>("/workforce/family-roster").await.unwrap_or_default() } else { vec![] }
     });
@@ -62,7 +75,10 @@ pub fn PrintTab() -> Element {
     let mut groups: Vec<String> = people.iter().map(|w| w.project_group.clone()).filter(|g| !g.is_empty()).collect();
     groups.sort();
     groups.dedup();
-    let mut chosen: Vec<Worker> = people.into_iter().filter(|w| group().is_empty() || w.project_group == group()).collect();
+    let mut trades: Vec<String> = people.iter().map(|w| w.trade.clone()).filter(|t| !t.is_empty()).collect();
+    trades.sort();
+    trades.dedup();
+    let mut chosen: Vec<Worker> = people.into_iter().filter(|w| (group().is_empty() || w.project_group == group()) && (trade().is_empty() || w.trade == trade())).collect();
     if only_picked() && !picked().is_empty() {
         chosen.retain(|w| picked().contains(&w.id));
     }
@@ -141,7 +157,14 @@ pub fn PrintTab() -> Element {
         "lg" => "grid grid-cols-1 sm:grid-cols-2 gap-4 print-grid-ids",
         _ => "grid grid-cols-2 sm:grid-cols-3 gap-4 print-grid-ids",
     };
-    let profile_list: Vec<Value> = profiles.read().clone().unwrap_or_default().into_iter().filter(|p| group().is_empty() || s(p, "group") == group()).collect();
+    let profile_list: Vec<Value> = profiles
+        .read()
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| group().is_empty() || s(p, "group") == group())
+        .filter(|p| !only_picked() || picked().is_empty() || Uuid::parse_str(&s(p, "id")).is_ok_and(|id| picked().contains(&id)))
+        .collect();
     let n_picked = picked().len();
     rsx! {
         div { class: "flex flex-wrap items-end gap-3 no-print",
@@ -165,6 +188,15 @@ pub fn PrintTab() -> Element {
                 select { id: "print-group", class: "field", "data-testid": "print-group", onchange: move |e| group.set(e.value()),
                     option { value: "", "Everyone" }
                     for g in groups { option { key: "{g}", value: "{g}", "{g}" } }
+                }
+            }
+            if matches!(k, "id" | "list") {
+                div {
+                    label { class: "label", r#for: "print-trade", "Trade" }
+                    select { id: "print-trade", class: "field", "data-testid": "print-trade", onchange: move |e| trade.set(e.value()),
+                        option { value: "", "All trades" }
+                        for t in trades { option { key: "{t}", value: "{t}", "{t}" } }
+                    }
                 }
             }
             if !matches!(k, "id" | "residential" | "forms" | "family") {
@@ -213,7 +245,7 @@ pub fn PrintTab() -> Element {
                     }
                 }
             }
-            if matches!(k, "id" | "list") && n_picked > 0 {
+            if matches!(k, "id" | "list" | "family" | "forms") && n_picked > 0 {
                 label { class: "flex items-center gap-2 text-sm h-10",
                     input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "print-only-picked", checked: only_picked(), onchange: move |e| only_picked.set(e.checked()) }
                     "Only the {n_picked} ticked"
@@ -282,6 +314,26 @@ pub fn PrintTab() -> Element {
                 if sections.is_empty() {
                     div { class: "card", EmptyState { icon: "archive", title: "Nothing to print", body: "No people match." } }
                 }
+                {
+                    let csv_rows: Vec<Worker> = sections.iter().flat_map(|(_, l)| l.clone()).collect();
+                    let list_title = if title().trim().is_empty() { "list".to_string() } else { title().trim().to_string() };
+                    rsx! {
+                        div { class: "flex justify-end no-print",
+                            button { class: "btn-secondary", "data-testid": "print-list-csv",
+                                onclick: move |_| {
+                                    let mut out = String::from("#,Name,A#,Trade,Project group,Residence\n");
+                                    for (i, w) in csv_rows.iter().enumerate() {
+                                        let cells = [(i + 1).to_string(), w.name.clone(), w.a_number.clone(), w.trade.clone(), w.project_group.clone(), w.residence.clone()];
+                                        out += &cells.iter().map(|c| crate::views::personnel::csv_cell(c)).collect::<Vec<_>>().join(",");
+                                        out.push('\n');
+                                    }
+                                    crate::views::personnel::save_file(&format!("{list_title}.csv"), &out);
+                                },
+                                Icon { name: "archive" } "Download CSV"
+                            }
+                        }
+                    }
+                }
                 div { class: "print-sheet space-y-4", "data-testid": "print-list",
                     p { class: "font-semibold", {if title().trim().is_empty() { "List & attendance".to_string() } else { title() }} " — {date_label}" }
                     for (key, list) in sections {
@@ -290,6 +342,7 @@ pub fn PrintTab() -> Element {
                             table { class: "w-full text-xs border-collapse",
                                 thead {
                                     tr { class: "text-left border-b",
+                                        th { class: "p-1 w-6 no-print", "" }
                                         th { class: "p-1 w-6", "#" }
                                         th { class: "p-1", "Name" }
                                         th { class: "p-1", "A#" }
@@ -301,6 +354,10 @@ pub fn PrintTab() -> Element {
                                 tbody {
                                     for (i, w) in list.iter().enumerate() {
                                         tr { key: "{w.id}", class: "border-b", "data-testid": "list-row",
+                                            td { class: "p-1 no-print",
+                                                input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "aria-label": "Tick {w.name}", "data-testid": "list-pick", checked: picked().contains(&w.id),
+                                                    onchange: { let id = w.id; move |e: FormEvent| { if e.checked() { picked.write().insert(id); } else { picked.write().remove(&id); } } } }
+                                            }
                                             td { class: "p-1", "{i + 1}" }
                                             td { class: "p-1", "{w.name}" }
                                             td { class: "p-1", "{w.a_number}" }

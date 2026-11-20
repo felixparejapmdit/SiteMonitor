@@ -14,18 +14,18 @@ test("a tabbed page's tabs are sidebar sub-items, and the two stay in step", asy
   await openAs(page, "OfficeAdmin", "/operations");
   const sidebar = page.getByTestId("sidebar");
   // The open page's tabs are listed under it, with the open tab marked.
-  await expect(sidebar.getByTestId("nav-tab-Overnight duty")).toHaveClass(/active/);
+  await expect(sidebar.getByTestId("nav-tab-Overnight Duty")).toHaveClass(/active/);
   await page.screenshot({ path: shots("operations"), clip: { x: 0, y: 0, width: 1440, height: 900 } });
 
   // Sidebar → page.
-  await sidebar.getByTestId("nav-tab-Overtime").click();
-  await expect(page.getByTestId("tab-Overtime")).toHaveAttribute("aria-selected", "true");
+  await sidebar.getByTestId("nav-tab-OT Entries").click();
+  await expect(page.getByTestId("tab-OT Entries")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("ot-total")).toBeVisible();
 
   // Page → sidebar.
-  await page.getByTestId("tab-Visitations").click();
-  await expect(sidebar.getByTestId("nav-tab-Visitations")).toHaveClass(/active/);
-  await expect(sidebar.getByTestId("nav-tab-Overtime")).not.toHaveClass(/active/);
+  await page.getByTestId("tab-Signatories").click();
+  await expect(sidebar.getByTestId("nav-tab-Signatories")).toHaveClass(/active/);
+  await expect(sidebar.getByTestId("nav-tab-OT Entries")).not.toHaveClass(/active/);
 
   // Another page's tabs, straight from the sidebar.
   const settings = sidebar.locator("li", { has: page.getByRole("link", { name: "Settings" }) }).first();

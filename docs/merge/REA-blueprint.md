@@ -173,3 +173,30 @@ Left out on purpose:
 - Excel (.xlsx) export: CSV opens in Excel.
 - Restore conflict review: imports merge newest-wins, and every import, Start New Day and delete takes a snapshot that can be restored.
 - Stale-task alerts on the dashboard: Service 5 marks a task stale from `taskStartedAt`; that date is kept with the record but no alert is shown yet.
+
+## 8. Service 5 sidebar → SiteMonitor (page by page, 2026-11-20)
+
+| Service 5 page | In SiteMonitor | Added in this pass |
+|---|---|---|
+| Dashboard | Workforce records → Dashboard | Status donut and area / department panels that open the roster behind each number |
+| Assignments | Workforce & crew → Assignments | The full table: task / personnel / all-columns views, Start New Day, Encoder, Print Reports, Add Volunteer, Reassign, Bulk Edit, Bulk Group, Archive, Delete, Generate Forms, every filter, Hide assigned, Columns, Cards, Wrap cells, sorting, paging, "Recording for" a past day |
+| Departments | Workforce records → Departments | — (departments, residences, housing) |
+| ID Cards | Workforce records → ID Cards | Trade filter |
+| Project Groups | Workforce records → Project Groups | — |
+| Visitations | Workforce records → Visitations | Groups view inside the page; minister summary print |
+| Reassign Volunteers | Workforce records → Reassign Volunteers | New: move several people to a project / area with a reason, logged, with the printable reallocation notice |
+| Attendance Gen | Workforce records → Attendance Gen | Trade filter, tick rows, CSV download |
+| Update Forms | Workforce records → Update Forms | — |
+| Archived Personnel | Workforce records → Archived Personnel | The Assignments table filtered to archived (restore, delete) |
+| Overnight Duty | Operations → Overnight Duty / Duty History | Replace, remove or assign someone on a night, with the override reason logged |
+| OT Calculator | Operations → OT Calculator | Its own page (per volunteer, by area, daily, matrix, print) |
+| OT Entries | Operations → OT Entries | Quick encoder row (rate from the person), copy to the next day |
+| Org Chart | Operations → Org Chart | Change a member's role, remove from the group |
+| History Log | Operations → History Log | — (change log, project roster history, dossier) |
+| Dependability | Operations → Dependability | — |
+| Signatories | Operations → Signatories | Rebuilt as Service 5's cards: coverage stats, signature PNG (change / remove), mapped groups with volunteer counts, unbind / unbind all, assign / manage groups, add / remove |
+| Backup DB | Settings → Backup DB | Encrypted database package and encrypted workforce backup |
+| Restore DB | Settings → Restore DB | Package restore and Service 5 / workforce import |
+| Daily Snapshot | Settings → Daily Snapshot | — (snapshots, restore) |
+
+Not carried over: Signatories "Reset defaults" (restores two real people hard-coded in Service 5; putting them in this repository would break the no-personal-data rule).

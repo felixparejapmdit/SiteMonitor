@@ -83,11 +83,11 @@ test("phone: the slide-out menu has the sidebar's categories and tabs, and close
 
   // A tab picked in the menu opens that tab on the page.
   await page.getByTestId("menu-open").click();
-  const ops = drawer.locator("li", { has: page.getByRole("link", { name: "Duty & operations" }) }).first();
+  const ops = drawer.locator("li", { has: page.getByRole("link", { name: "Operations", exact: true }) }).first();
   await ops.getByTestId("nav-expand").click();
-  await ops.getByTestId("nav-tab-Overtime").click();
+  await ops.getByTestId("nav-tab-OT Entries").click();
   await expect(page).toHaveURL(/\/operations$/);
-  await expect(page.getByTestId("tab-Overtime")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("tab-OT Entries")).toHaveAttribute("aria-selected", "true");
   await expect(drawer).toHaveCount(0);
   expect(problems, problems.join("\n")).toEqual([]);
   await ctx.close();

@@ -63,7 +63,7 @@ test("attendance taps and Shift+R reassignments are logged like Service 5", asyn
 test("a group linked to a job feeds the Crew page roster", async ({ page, request }) => {
   const parking = await workItemByTitle(request, "Parking Conversion to Multi-Purpose Hall");
   await openAs(page, "OfficeAdmin", "/workforce");
-  await page.getByTestId("tab-Groups").click();
+  await page.getByTestId("tab-Project Groups").click();
   const team = page.getByTestId("group-row").filter({ hasText: "Team A" });
   await expect(team).toContainText("2 present · 1 absent");
   await team.getByTestId("group-job").selectOption(parking.id);
@@ -95,7 +95,7 @@ test("overnight duty rotates through present people; overtime pay is hours × ra
   const area = (await records(request, "duty_areas")).find((a: any) => a.id === "gate");
   expect(area.lastRotationIndex).toBe(0);
 
-  await page.getByTestId("tab-Overtime").click();
+  await page.getByTestId("tab-OT Entries").click();
   await page.getByTestId("ot-add").click();
   await page.getByTestId("rf-title").fill("Concrete pour after hours");
   await page.getByTestId("rf-volunteerId").selectOption("101");
@@ -133,12 +133,12 @@ test("one unified sidebar: each role sees only its sections", async ({ browser }
     return t.toLowerCase();
   };
   const admin = await sidebarText("OfficeAdmin");
-  for (const s of ["estate command", "workforce & crew", "operations & duty", "system & admin", "personnel", "clinic ledger", "duty & operations"]) expect(admin, s).toContain(s);
+  for (const s of ["estate command", "workforce & crew", "operations & duty", "system & admin", "personnel", "clinic ledger", "operations"]) expect(admin, s).toContain(s);
   const vip = await sidebarText("VipClient");
   for (const s of ["personnel", "clinic", "operations", "workforce", "settings"]) expect(vip, s).not.toContain(s);
   const monitor = await sidebarText("SiteMonitor", "Jun");
   expect(monitor).toContain("personnel");
-  for (const s of ["clinic", "duty & operations", "groups & records", "settings"]) expect(monitor, s).not.toContain(s);
+  for (const s of ["clinic", "workforce records", "signatories", "settings"]) expect(monitor, s).not.toContain(s);
 });
 
 test("live refresh: another open screen sees an attendance change without reloading", async ({ browser }) => {
@@ -157,7 +157,7 @@ test("live refresh: another open screen sees an attendance change without reload
 test("print set-ups: landscape attendance sheet and 4-up folio job orders @safari", async ({ page }) => {
   await openAs(page, "OfficeAdmin", "/operations");
   await stubPrint(page);
-  await page.getByTestId("tab-Attendance").click();
+  await page.getByTestId("tab-Monthly Attendance").click();
   await expect(page.getByTestId("attendance-sheet")).toContainText("Pedro Leader");
   await page.getByTestId("print-attendance").click();
   await expect.poll(() => page.evaluate(() => document.getElementById("print-page")?.textContent)).toContain("landscape");

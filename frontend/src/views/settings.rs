@@ -110,17 +110,32 @@ pub fn SettingsView() -> Element {
             }
 
             }
-            if tab == "Workforce data" {
-                Section { title: "Workforce data", hint: "Personnel records merged from Service 5 DB: import its backups, download a backup, and go back to an earlier snapshot.",
-                    crate::views::personnel::WorkforceData {}
+            if tab == "Backup DB" {
+                if app.can(Permission::ManageClinic) {
+                    Section { title: "Back up the whole database", hint: "Estate, projects, personnel, clinic and photos as one encrypted package. Share the package and its passphrase directly with your team, never through GitHub.",
+                        BackupRestore { part: "backup" }
+                    }
+                }
+                Section { title: "Workforce backup", hint: "Personnel records only (Service 5 format), encrypted.",
+                    crate::views::personnel::WorkforceData { part: "backup" }
+                }
+            }
+            if tab == "Restore DB" {
+                if app.can(Permission::ManageClinic) {
+                    Section { title: "Restore a database package", hint: "Replaces this estate, its personnel and photos with a package made on another machine. Sign-in accounts here are kept.",
+                        BackupRestore { part: "restore" }
+                    }
+                }
+                Section { title: "Import a workforce backup", hint: "Service 5 backups (any version, encrypted or not, or its service5.db) and workforce backups made here.",
+                    crate::views::personnel::WorkforceData { part: "restore" }
+                }
+            }
+            if tab == "Daily Snapshot" {
+                Section { title: "Daily snapshots", hint: "The workforce is saved every night, before every import, restore, Start New Day and delete. Go back to any of them.",
+                    crate::views::personnel::WorkforceData { part: "snapshots" }
                 }
             }
 
-            if tab == "Backup & restore" {
-                Section { title: "Backup & restore", hint: "Move the whole SiteMonitor (estate, projects, personnel, clinic, photos) to another machine, or keep a copy, as one encrypted package. Share the package and its passphrase directly with your team, never through GitHub.",
-                    BackupRestore {}
-                }
-            }
             if tab == "Estate data" {
             Section { title: "Estate data", hint: "Try SiteMonitor with a ready-made estate, or wipe it and set up your own. People, their sign-ins and these settings are always kept.",
                 div { class: "divide-y divide-line border-y border-line", "data-testid": "estate-data",
@@ -262,7 +277,7 @@ fn TimeField(id: &'static str, label: &'static str, hint: &'static str, value: S
 
 /// Encrypted database packages: download one, or restore one made elsewhere.
 #[component]
-fn BackupRestore() -> Element {
+fn BackupRestore(part: &'static str) -> Element {
     let app = use_app();
     let mut pass = use_signal(String::new);
     let mut pass2 = use_signal(String::new);
@@ -303,8 +318,8 @@ fn BackupRestore() -> Element {
         busy.set(None);
     };
     rsx! {
-        div { class: "grid lg:grid-cols-2 gap-6", "data-testid": "backup-restore",
-            div { class: "space-y-3",
+        div { class: "space-y-6", "data-testid": "backup-restore",
+            if part == "backup" { div { class: "space-y-3 max-w-xl",
                 p { class: "text-sm font-medium", "Make an encrypted package" }
                 p { class: "text-sm text-muted", "Everything in one .smpkg file, encrypted with AES-256-GCM. Without the passphrase nobody can open it, so keep the passphrase safe and send it separately from the file." }
                 div { class: "grid sm:grid-cols-2 gap-3",
@@ -324,8 +339,8 @@ fn BackupRestore() -> Element {
                     if busy() == Some("make") { Spinner {} } else { Icon { name: "archive" } }
                     "Download encrypted package"
                 }
-            }
-            div { class: "space-y-3",
+            } }
+            if part == "restore" { div { class: "space-y-3 max-w-xl",
                 p { class: "text-sm font-medium", "Restore a package" }
                 p { class: "text-sm text-muted", "Replaces this estate, its personnel and photos with the package. Sign-in accounts here are kept. A workforce snapshot is taken first." }
                 input { id: "package-file", r#type: "file", class: "field py-1.5", accept: ".smpkg,.agwcz,application/json", "data-testid": "pkg-file" }
@@ -345,9 +360,9 @@ fn BackupRestore() -> Element {
                     "Restore package"
                 }
                 if let Some(r) = result() {
-                    p { class: "text-sm text-tag-green-text", "data-testid": "pkg-result", "Restored: {r[\"workers\"]} people, {r[\"files\"]} files, {r[\"accounts_added\"]} accounts added." }
+                    p { class: "text-sm text-tag-green-text", "data-testid": "pkg-result-line", "Restored: {r[\"workers\"]} people, {r[\"files\"]} files, {r[\"accounts_added\"]} accounts added." }
                 }
-            }
+            } }
         }
     }
 }
