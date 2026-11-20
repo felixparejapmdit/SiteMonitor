@@ -18,7 +18,7 @@ pub fn ToastHost() -> Element {
                     key: "{t.id}",
                     class: if t.leaving { "toast leaving pointer-events-auto" } else { "toast pointer-events-auto" },
                     "data-testid": "toast",
-                    div { class: "flex items-start gap-3 w-full sm:w-[360px] bg-white rounded-lg shadow-pop px-4 py-3",
+                    div { class: "flex items-start gap-3 w-full sm:w-[360px] bg-surface rounded-lg shadow-pop px-4 py-3",
                         span {
                             class: match t.tone {
                                 ToastTone::Success => "mt-0.5 text-tag-green-text",

@@ -50,7 +50,19 @@ node scripts/build.mjs              # Tailwind CSS → Dioxus WASM bundle → re
 cargo run -p backend --release      # migrates, seeds a demo estate on first start
 ```
 
-Open **http://localhost:8737**. Use the dark bar at the top to switch between the **Estate Owner**, **Office Admin** and **Site Monitor** views.
+Open **http://localhost:8737** and sign in.
+
+### Signing in
+
+- With `SITEMONITOR_DEMO=1` (the Windows start script sets it) the sign-in page lists the demo accounts. They all use the password `SiteMonitor-demo`. Turn demo mode off (`SITEMONITOR_DEMO=0`) and change those passwords before real use.
+- Passwords are stored as Argon2 hashes. Sessions are server-side and last 14 days from last use. Browsers get an HttpOnly, SameSite=Lax cookie; API clients can send `Authorization: Bearer <token>` from the sign-in response. Behind HTTPS, set `SITEMONITOR_SECURE_COOKIES=1`.
+- After 5 wrong passwords for one email, sign-in pauses for 15 minutes.
+- The Office Admin adds people with a first password and can reset a password from **People**. Either way, the person must choose their own password at their next sign-in, and a reset signs them out everywhere.
+- Locked out? `cargo run -p backend --release -- set-password <email> <new password>`
+
+### Access
+
+**Access** (Office Admin) is a matrix of 27 permissions × people. Everyone starts with their role's defaults. The admin can add or remove single permissions for one person, review the changes, and save. Every change is logged, the server checks the matrix on every action, nobody can remove their own "Change access", and at least one active person always keeps it.
 
 On Windows you can also start the database and the app in the background with:
 
@@ -64,13 +76,19 @@ To reset the demo data at any time:
 cargo run -p backend --release -- reset
 ```
 
+#### Workforce modules and the Clinic switch
+
+The modules merged from Service 5 DB each have their own permission in the Access matrix (group "Workforce (Service 5)"): Assignments, personnel & project groups; Workforce reports; Overnight duty; Overtime; Visitations; Signatories; Print centre; Backup, restore & snapshots; and Clinic ledger. A page or tab only shows for people who hold its permission, and the server checks the same permission.
+
+The **Clinic module is switched off** for everyone by default (Access → Modules). While it is off nobody has clinic access, whatever their permissions say, and the Clinic ledger page is hidden; its code, routes and records are kept, and each person's clinic permission is preserved. Switching it on (Access → Modules → Switch on) brings it all back.
+
 ## Tests
 
 ```bash
 cargo test --workspace                       # unit tests (progress, 99% lock, cropper maths, conflicts…)
 cargo check --workspace                      # compiles shared, backend and frontend
 cd e2e && npm install && npx playwright install chromium
-npx playwright test                          # 37 end-to-end tests (resets the database itself)
+npx playwright test                          # 43 end-to-end tests (resets the database itself; needs SITEMONITOR_DEMO=1)
 ```
 
 The end-to-end suite covers every phase of `PLAN.md`:
@@ -78,7 +96,19 @@ The end-to-end suite covers every phase of `PLAN.md`:
 - the seed and API rules: weighted progress, the 99% handover lock, the Quiet Day engine, the manpower ledger, deadline shifts from breakdowns, cron jobs and role permissions;
 - the owner portal: Action Center, map drill-down and layers, documents, photo pins, agenda and sign-off;
 - the staff portal: crew board, equipment, phase updater, decision pipeline, Master Scheduler and Map Studio;
+- sign-in, first-password change, sign-out and the access matrix;
 - real-time pushes, offline queue and sync, the PWA manifest and service worker, and smoothness checks (no console errors, no layout shift on refresh).
+
+## Data privacy
+
+Real operational and personnel data never goes into Git.
+
+- **Encrypted at rest.** Every personnel record (workers and volunteers, all workforce lists including the clinic, and workforce snapshots) is stored encrypted with AES-256-GCM. The key is `data/keys/personnel.key` (created on first start) or the `SITEMONITOR_DATA_KEY` environment variable. **Back the key up** somewhere safe and private: without it the personnel data cannot be read. `backend audit-data` reports any personnel data still readable without the key (all counts should be 0). Data stored before encryption was on is encrypted automatically at start-up.
+- **Login accounts are separate.** Sign-in accounts live in their own table, are not encrypted, and are never wiped by Load sample data, Clear data or a restore, so a fresh clone is usable straight away.
+- **Exports are encrypted.** Workforce backups (Settings → Workforce data) and whole-database packages (Settings → Backup & restore) are always encrypted with a passphrase (PBKDF2-HMAC-SHA256, 600,000 rounds, AES-256-GCM).
+- **Sharing a database.** To move SiteMonitor to another machine, make a package in Settings → Backup & restore, send the `.smpkg` file and its passphrase to the other person separately (never through GitHub), and restore it there. Estate, projects, personnel, clinic records and photos come across; their local sign-in accounts are kept.
+- **On the device.** Saves queued while offline are encrypted in the browser (WebCrypto AES-256-GCM, key kept on the device and not exportable). Browsers only offer WebCrypto over HTTPS or on `localhost`; on a plain-HTTP LAN address the queue is stored unencrypted, so serve SiteMonitor over HTTPS (for example behind a reverse proxy) when phones use it.
+- **Git hygiene.** `.gitignore` excludes `data/` (database files, uploads, keys, backups), every database and dump format, backup and package files, snapshots, uploads, keys and `.env` files.
 
 ## Automations
 

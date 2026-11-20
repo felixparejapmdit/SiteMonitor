@@ -5,6 +5,7 @@ pub mod base_map_version;
 pub mod decision_alert;
 pub mod equipment_reservation;
 pub mod estate_agenda_item;
+pub mod estate_setting;
 pub mod executive_handover_report;
 pub mod manpower_ledger_entry;
 pub mod notification;

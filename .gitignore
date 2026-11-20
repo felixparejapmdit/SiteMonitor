@@ -16,3 +16,39 @@ e2e/test-results/
 e2e/playwright-report/
 .playwright-mcp/
 *.png.tmp
+
+# ---- Privacy: never commit operational or personnel data ----
+# Databases and dumps
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sql
+*.dump
+# Backups and exports (workforce / full database packages, Service 5 backups)
+*.bak
+*.enc
+*.agwcz
+*.smpkg
+backups/
+**/backups/
+snapshots/
+**/snapshots/
+*backup*.json
+*-workforce-*.json
+sitemonitor-*.json
+personnel*.csv
+# Uploaded photos, maps and other media
+uploads/
+**/uploads/
+# Keys and secrets
+*.key
+*.pem
+keys/
+.env
+.env.*
+!.env.example
+# Local tooling
+.serena/
+PLAN_MERGE_SERVICE5.md

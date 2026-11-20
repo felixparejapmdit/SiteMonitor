@@ -67,9 +67,9 @@ pub async fn crop_from_input(input_id: &str) -> Result<Option<String>, String> {
     result.map(Some)
 }
 
-/// Reads a base-map render without cropping (keeps its aspect ratio),
-/// downscaled to `max_width` and compressed as JPEG.
-pub async fn image_from_input(input_id: &str, max_width: f64) -> Result<Option<String>, String> {
+/// Reads the chosen map picture exactly as it is (no shrinking): the server
+/// cuts big pictures into zoom tiles, so full sharpness is kept.
+pub async fn file_as_data_url(input_id: &str, max_bytes: f64) -> Result<Option<String>, String> {
     let input: HtmlInputElement = crate::util::document()
         .get_element_by_id(input_id)
         .and_then(|e| e.dyn_into().ok())
@@ -77,36 +77,41 @@ pub async fn image_from_input(input_id: &str, max_width: f64) -> Result<Option<S
     let Some(file) = input.files().and_then(|f| f.get(0)) else {
         return Ok(None);
     };
-    let url = Url::create_object_url_with_blob(&file).map_err(|_| "Could not read the image.".to_string())?;
-    let result = async {
-        let (img, loaded) = load_image(&url)?;
-        loaded.await.map_err(|_| "That file doesn't look like an image.".to_string())?;
-        let (w, h) = (img.natural_width() as f64, img.natural_height() as f64);
-        let scale = (max_width / w).min(1.0);
-        let (ow, oh) = ((w * scale).round() as u32, (h * scale).round() as u32);
-        let canvas: HtmlCanvasElement = crate::util::document()
-            .create_element("canvas")
-            .map_err(|_| "Canvas unavailable".to_string())?
-            .dyn_into()
-            .map_err(|_| "Canvas unavailable".to_string())?;
-        canvas.set_width(ow);
-        canvas.set_height(oh);
-        let ctx: CanvasRenderingContext2d = canvas
-            .get_context("2d")
-            .ok()
-            .flatten()
-            .and_then(|c| c.dyn_into().ok())
-            .ok_or("Canvas unavailable")?;
-        ctx.draw_image_with_html_image_element_and_dw_and_dh(&img, 0.0, 0.0, ow as f64, oh as f64)
-            .map_err(|_| "Could not process the image.".to_string())?;
-        canvas
-            .to_data_url_with_type_and_encoder_options("image/jpeg", &JsValue::from_f64(0.9))
-            .map_err(|_| "Could not compress the image.".to_string())
-    }
-    .await;
-    let _ = Url::revoke_object_url(&url);
     input.set_value("");
-    result.map(Some)
+    if !matches!(file.type_().as_str(), "image/jpeg" | "image/png" | "image/webp") {
+        return Err("Please choose a JPEG, PNG or WebP picture.".into());
+    }
+    if file.size() > max_bytes {
+        return Err("That picture is larger than 60 MB. Please save a smaller copy and try again.".into());
+    }
+    read_data_url(&file).await.map(Some).map_err(|_| "Could not read the picture.".to_string())
+}
+
+/// The chosen file (a backup), up to `max_bytes`; it is uploaded as-is.
+pub fn backup_file(input_id: &str, max_bytes: f64) -> Result<Option<web_sys::File>, String> {
+    let input: HtmlInputElement = crate::util::document()
+        .get_element_by_id(input_id)
+        .and_then(|e| e.dyn_into().ok())
+        .ok_or("The file input is missing.")?;
+    let Some(file) = input.files().and_then(|f| f.get(0)) else {
+        return Ok(None);
+    };
+    input.set_value("");
+    if file.size() > max_bytes {
+        return Err(format!("That file is larger than {} MB.", (max_bytes / 1_048_576.0).round()));
+    }
+    Ok(Some(file))
+}
+
+async fn read_data_url(file: &web_sys::File) -> Result<String, ()> {
+    let reader = web_sys::FileReader::new().map_err(|_| ())?;
+    let promise = js_sys::Promise::new(&mut |resolve, reject| {
+        reader.set_onload(Some(&resolve));
+        reader.set_onerror(Some(&reject));
+    });
+    reader.read_as_data_url(file).map_err(|_| ())?;
+    JsFuture::from(promise).await.map_err(|_| ())?;
+    reader.result().ok().and_then(|v| v.as_string()).ok_or(())
 }
 
 /// Crops any image URL to a 16:9 data URL.

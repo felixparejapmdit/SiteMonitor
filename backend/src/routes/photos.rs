@@ -21,8 +21,9 @@ pub async fn upload(
     user: CurrentUser,
     Json(req): Json<UploadPhotoRequest>,
 ) -> AppResult<Json<SitePhoto>> {
-    user.require_staff("upload site photos")?;
+    user.require(Permission::UploadPhotos)?;
     let item = WorkItems::find_by_id(req.work_item_id).one(&state.db).await?.ok_or_else(|| AppError::not_found("project"))?;
+    user.require_zone(&state.db, item.area_id).await?;
     let url = media::save_data_url(&state.upload_dir, "photos", &req.image_data_url).await?;
     let txn = state.db.begin().await?;
     let row = site_photo::ActiveModel {
@@ -45,6 +46,39 @@ pub async fn upload(
     txn.commit().await?;
     state.hub.changed(&[DataScope::Photos, DataScope::WorkItems]).await;
     Ok(Json(convert::photo(row)))
+}
+
+/// `DELETE /api/photos/{id}` — the person who took it, or the office, can remove
+/// a photo (its owner notes go with it).
+pub async fn remove(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<axum::http::StatusCode> {
+    use sea_orm::ModelTrait;
+    let row = SitePhotos::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("photo"))?;
+    if !user.0.can(Permission::ManageProjects) {
+        user.require(Permission::UploadPhotos)?;
+        if row.uploaded_by != user.0.id {
+            return Err(AppError::forbidden("Only the person who took this photo, or the office, can remove it."));
+        }
+        user.require_zone(&state.db, row.area_id).await?;
+    }
+    let url = row.image_url.clone();
+    let txn = state.db.begin().await?;
+    if let Some(item) = WorkItems::find_by_id(row.work_item_id).one(&txn).await? {
+        if item.before_photo_url.as_deref() == Some(url.as_str()) {
+            let mut a = item.into_active_model();
+            a.before_photo_url = Set(None);
+            a.update(&txn).await?;
+        }
+    }
+    row.delete(&txn).await?;
+    txn.commit().await?;
+    // Seed pictures are shared app files; only uploads are removed from disk.
+    if let Some(rel) = url.strip_prefix("/uploads/") {
+        if !rel.contains("..") {
+            let _ = tokio::fs::remove_file(state.upload_dir.join(rel)).await;
+        }
+    }
+    state.hub.changed(&[DataScope::Photos, DataScope::WorkItems]).await;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// `GET /api/photos/updates` — photos the owner hasn't acknowledged yet.
@@ -88,7 +122,7 @@ pub async fn open_callouts(State(state): State<AppState>) -> AppResult<Json<Vec<
 
 /// `POST /api/photos/{id}/acknowledge` — the owner clears a photo update.
 pub async fn acknowledge(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<SitePhoto>> {
-    user.require_vip("acknowledge photo updates")?;
+    user.require(Permission::CommentOnPhotos)?;
     let row = SitePhotos::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("photo"))?;
     let mut a = row.into_active_model();
     a.client_acknowledged = Set(true);
@@ -104,7 +138,7 @@ pub async fn create_callout(
     Path(id): Path<Uuid>,
     Json(req): Json<CreateCallOutRequest>,
 ) -> AppResult<Json<PhotoCallOut>> {
-    user.require_vip("add photo notes")?;
+    user.require(Permission::CommentOnPhotos)?;
     if req.comment.trim().is_empty() {
         return Err(AppError::bad("Please write a short note for the site team."));
     }
@@ -169,7 +203,7 @@ pub async fn create_callout(
 
 /// `PUT /api/callouts/{id}/review` — staff say "we're looking at it".
 pub async fn review_callout(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<PhotoCallOut>> {
-    user.require_staff("update photo notes")?;
+    user.require(Permission::ManagePhotoNotes)?;
     let row = PhotoCallOuts::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("photo note"))?;
     let current: CallOutStatus = convert::dec(&row.status);
     if current == CallOutStatus::Resolved {
@@ -189,7 +223,7 @@ pub async fn resolve_callout(
     Path(id): Path<Uuid>,
     Json(req): Json<ResolveCallOutRequest>,
 ) -> AppResult<Json<PhotoCallOut>> {
-    user.require_staff("resolve photo notes")?;
+    user.require(Permission::ManagePhotoNotes)?;
     if req.reply.trim().is_empty() {
         return Err(AppError::bad("Please tell the owner what was done."));
     }

@@ -3,8 +3,7 @@
  * automated business rule (weighted progress, 99% lock, quiet day engine,
  * manpower ledger, breakdown deadline shifts, crons, role permissions).
  */
-import { test, expect } from "@playwright/test";
-import { api, resetDatabase, userFor, workItemByTitle } from "./helpers";
+import { api, expect, resetDatabase, test, userFor, workItemByTitle } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 test.beforeAll(() => resetDatabase());
@@ -47,15 +46,17 @@ test("computed polygon health rolls up the infinite nesting tree", async ({ requ
   expect(find(map.areas, "Power House").executive_summary).toContain("Battery array");
 });
 
-test("role-based access: the owner cannot do staff work", async ({ request }) => {
+test("role-based access: the owner cannot do staff work", async ({ request, playwright, baseURL }) => {
   const vip = await userFor(request, "VipClient");
   const wall = await workItemByTitle(request, "Retaining Wall Leveling");
   const detail = await api(request, vip).get(`/work-items/${wall.id}`);
   const res = await api(request, vip).post(`/phases/${detail.phases[3].id}/complete`, {});
   expect(res.status()).toBe(403);
-  expect((await res.json()).message).toContain("Switch role");
-  const anon = await request.post(`/api/phases/${detail.phases[3].id}/complete`, { data: {} });
+  expect((await res.json()).message).toContain("Ask the Office Admin");
+  const anonCtx = await playwright.request.newContext({ baseURL });
+  const anon = await anonCtx.post(`/api/phases/${detail.phases[3].id}/complete`, { data: {} });
   expect(anon.status()).toBe(401);
+  await anonCtx.dispose();
 });
 
 test("weighted progress + the 99% handover lock + owner sign-off", async ({ request }) => {

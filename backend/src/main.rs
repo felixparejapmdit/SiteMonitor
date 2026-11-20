@@ -3,8 +3,10 @@
 //! ```text
 //! backend            # migrate, seed if empty, start crons, serve on PORT
 //! backend reset      # drop everything, re-create the schema and re-seed
+//! backend set-password <email> <password>   # recover an account
 //! ```
 
+mod auth;
 mod convert;
 mod entities;
 mod error;
@@ -62,23 +64,48 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("database reset and re-seeded");
             return Ok(());
         }
+        "set-password" => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let [email, password] = args.as_slice() else { anyhow::bail!("usage: backend set-password <email> <password>") };
+            Migrator::up(&db, None).await?;
+            auth::set_password_cli(&db, email, password).await?;
+            println!("Password set for {email}.");
+            return Ok(());
+        }
+        "audit-data" => {
+            // Counts personnel data readable without the key (should all be 0).
+            Migrator::up(&db, None).await?;
+            println!("{}", services::workforce::plain_counts(&db).await?);
+            return Ok(());
+        }
         "" | "serve" => {}
         other => anyhow::bail!("unknown command `{other}` (use `serve` or `reset`)"),
     }
 
     Migrator::up(&db, None).await?;
+    // Personnel data is encrypted at rest; the key lives outside the database (and outside Git).
+    let key_file = PathBuf::from(std::env::var("DATA_KEY_FILE").unwrap_or_else(|_| "data/keys/personnel.key".into()));
+    services::vault::init(&key_file)?;
+    let sealed = services::workforce::seal_existing(&db).await?;
+    if sealed > 0 {
+        tracing::info!(records = sealed, "encrypted personnel data stored before encryption was on");
+    }
     if seed::seed_if_empty(&db).await? {
         tracing::info!("seeded a fresh estate");
     }
+    // Modules switched off in settings (e.g. the clinic) take their permissions with them.
+    convert::CLINIC_ON.store(services::load_settings(&db).await?.clinic_enabled, std::sync::atomic::Ordering::Relaxed);
+    auth::ensure_passwords(&db).await?;
 
-    let state = AppState { db, hub: ws::Hub::default(), upload_dir: upload_dir.clone() };
+    let state = AppState { db, hub: ws::Hub::default(), upload_dir: upload_dir.clone(), throttle: Default::default() };
     let _scheduler = services::scheduler::start(state.clone()).await?;
+    tokio::spawn(routes::estate::backfill_tiles(state.clone()));
 
     let index = static_dir.join("index.html");
     let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(&index));
 
     let app = Router::new()
-        .nest("/api", routes::api())
+        .nest("/api", routes::api(state.clone()))
         .route("/ws", get(ws::handler))
         .nest_service(
             "/uploads",
@@ -86,10 +113,18 @@ async fn main() -> anyhow::Result<()> {
                 .fallback_service(ServeDir::new(&upload_dir))
                 .layer(SetResponseHeaderLayer::overriding(
                     header::CACHE_CONTROL,
-                    HeaderValue::from_static("public, max-age=31536000, immutable"),
-                )),
+                    HeaderValue::from_static("private, max-age=31536000, immutable"),
+                ))
+                // Site photos and maps are private to signed-in people.
+                .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard)),
         )
-        .fallback_service(spa)
+        // Browsers must re-check the app shell after every update instead of
+        // guessing it's fresh; hashed bundles are cached by the service worker.
+        .fallback_service(
+            Router::new()
+                .fallback_service(spa)
+                .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"))),
+        )
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

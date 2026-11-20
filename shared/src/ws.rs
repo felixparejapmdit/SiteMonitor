@@ -19,6 +19,10 @@ pub enum DataScope {
     Agenda,
     Notifications,
     Photos,
+    Users,
+    Settings,
+    /// Service 5 workforce: workers and their records.
+    Workforce,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -48,7 +52,12 @@ pub enum WsEvent {
 
     // ---------------------------------------------- everyone, silent
     /// Data changed; refresh in the background without interrupting.
-    DataChanged { scopes: Vec<DataScope> },
+    DataChanged {
+        scopes: Vec<DataScope>,
+        /// The device that made the change (its `x-client-id`), so it can skip its own echo.
+        #[serde(default)]
+        origin: Option<String>,
+    },
     /// Server greeting after a successful connection.
     Hello { role: UserRole },
 }

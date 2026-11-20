@@ -3,8 +3,7 @@
  * layer toggles & executive summaries, project document, tap-to-pin
  * call-outs, the Estate Agenda with Quiet Day, and the handover sign-off.
  */
-import { test, expect } from "@playwright/test";
-import { api, openAs, resetDatabase, toast, userFor, workItemByTitle } from "./helpers";
+import { api, expect, openAs, resetDatabase, test, toast, userFor, workItemByTitle } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 test.beforeAll(() => resetDatabase());
@@ -62,16 +61,16 @@ test("project document shows leaders, crew delta, assets and audit trail", async
   await openAs(page, "VipClient");
   await page.getByTestId("capital-card").filter({ hasText: "Parking Conversion" }).click();
   await expect(page.getByTestId("project-title")).toHaveText("Parking Conversion to Multi-Purpose Hall");
-  await expect(page.getByText("Current Target Deadline:")).toBeVisible();
+  await expect(page.getByText("Finish by:")).toBeVisible();
   await expect(page.getByText(/moved from .* \(\+3 days\)/)).toBeVisible();
   const crew = page.getByTestId("manpower-block");
   await expect(crew.getByTestId("headcount")).toHaveText("14 Active Personnel");
   await expect(crew).toContainText("+6 transferred from Guest Villa 2 Roof Renovation");
-  for (const role of ["Construction Group Leader", "On-Site Quality Control (QC) Officer", "Admin Office Coordinator"]) {
+  for (const role of ["Site team lead", "Quality checker", "Office contact"]) {
     await expect(crew).toContainText(role);
   }
-  await expect(crew.getByRole("link", { name: /Call Ramon Dizon/ })).toHaveAttribute("href", "tel:+639175550142");
-  await expect(page.getByTestId("asset-block")).toContainText("Deployed Heavy Machinery");
+  await expect(crew.getByRole("link", { name: /Call Jun Dela Cruz/ })).toHaveAttribute("href", "tel:+639175550202");
+  await expect(page.getByTestId("asset-block")).toContainText("Machines on site");
   const timeline = page.getByTestId("timeline");
   await expect(timeline).toContainText("Weather · +2 days");
   await expect(timeline).toContainText("Site Conditions · +1 day");
@@ -122,7 +121,7 @@ test("handover report: before/after slider, delay audit and sign-off to 100%", a
   await openAs(page, "VipClient");
   await page.getByTestId("open-handover").click();
   const report = page.getByTestId("handover-report");
-  await expect(report).toContainText("Executive Handover Report");
+  await expect(report).toContainText("Handover report");
   await expect(page.getByTestId("before-after")).toBeVisible();
   const slider = page.getByTestId("before-after").locator("input[type=range]");
   await slider.fill("20");

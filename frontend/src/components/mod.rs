@@ -2,6 +2,7 @@
 
 pub mod estate_map;
 pub mod handover_report;
+pub mod live_feed;
 pub mod photo_annotator;
 pub mod toast;
 pub mod ui;

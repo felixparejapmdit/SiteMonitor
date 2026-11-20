@@ -18,6 +18,7 @@ use crate::components::photo_annotator::PhotoAnnotator;
 use crate::components::ui::{Avatar, EmptyState, Icon, Pill, ProgressBar, SkeletonPage};
 use crate::state::{use_app, AppState};
 use crate::util::{self, FlatArea};
+use crate::views::project_editor::ProjectModal;
 use crate::views::staff::progress_updater::{PhotoUploader, ProgressUpdater, RoutineCompleter, StatusPill};
 use crate::Route;
 
@@ -175,12 +176,114 @@ pub fn transfer_note(details: &[WorkItemDetail], items: &[WorkItem]) -> Option<S
 }
 
 #[component]
+fn RemovePhoto(photo_id: Uuid, on_done: EventHandler<()>) -> Element {
+    let app = use_app();
+    let mut confirm = use_signal(|| false);
+    let mut busy = use_signal(|| false);
+    rsx! {
+        div { class: "flex items-center justify-end gap-2",
+            if confirm() {
+                span { class: "text-sm text-tag-red-text", "Remove this photo and any owner notes on it?" }
+                button { class: "btn-ghost", onclick: move |_| confirm.set(false), "Keep it" }
+                button { class: "btn-danger", "data-testid": "remove-photo-confirm", disabled: busy(),
+                    onclick: move |_| async move {
+                        busy.set(true);
+                        match api::send_raw("DELETE", &format!("/photos/{photo_id}"), None).await {
+                            Ok(_) => {
+                                app.success("Photo removed");
+                                crate::services::sync::reload(app, vec![shared::ws::DataScope::Photos, shared::ws::DataScope::WorkItems]);
+                                on_done.call(());
+                            }
+                            Err(e) => app.error(e.message()),
+                        }
+                        busy.set(false);
+                    },
+                    "Remove"
+                }
+            } else {
+                button { class: "btn-ghost text-tag-red-text", "data-testid": "remove-photo", onclick: move |_| confirm.set(true), Icon { name: "trash" } "Remove photo" }
+            }
+        }
+    }
+}
+
+/// Staff record a setback: the target date moves back and the owner sees why on the timeline.
+#[component]
+fn LogDelayButton(work_item_id: Uuid) -> Element {
+    let app = use_app();
+    let mut open = use_signal(|| false);
+    let mut category = use_signal(|| DelayCategory::Weather);
+    let mut days = use_signal(|| 1u16);
+    let mut title = use_signal(String::new);
+    let mut note = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+    let ready = !note().trim().is_empty() && (1..=90).contains(&days()) && !busy();
+    let save = move |_| async move {
+        busy.set(true);
+        let req = LogDelayRequest { category: category(), days: days(), title: title(), note: note() };
+        match api::post::<_, WorkItem>(&format!("/work-items/{work_item_id}/delay"), &req).await {
+            Ok(w) => {
+                app.success(format!("Delay logged. New target date: {}", util::day(w.current_target_deadline)));
+                crate::services::sync::reload(app, vec![shared::ws::DataScope::WorkItems, shared::ws::DataScope::Agenda]);
+                open.set(false);
+                title.set(String::new());
+                note.set(String::new());
+            }
+            Err(e) => app.error(e.message()),
+        }
+        busy.set(false);
+    };
+    rsx! {
+        button { class: "btn-secondary", "data-testid": "log-delay", onclick: move |_| open.set(true), Icon { name: "clock" } "Log a delay" }
+        if open() {
+            crate::components::ui::Modal { title: "Log a delay", on_close: move |_| open.set(false),
+                div { class: "space-y-4", "data-testid": "delay-form",
+                    div {
+                        p { class: "label", "What caused it?" }
+                        div { class: "flex flex-wrap gap-2",
+                            for c in DelayCategory::ALL.into_iter().filter(|c| *c != DelayCategory::None) {
+                                crate::views::staff::asset_ops::ChoiceButton { key: "{c:?}", active: category() == c, label: c.label(), hint: "", onclick: move |_| category.set(c) }
+                            }
+                        }
+                    }
+                    div { class: "grid sm:grid-cols-[8rem_1fr] gap-4",
+                        div {
+                            label { class: "label", r#for: "delay-days", "Days lost" }
+                            input { id: "delay-days", r#type: "number", min: "1", max: "90", class: "field tabular", "data-testid": "delay-days", value: "{days}",
+                                oninput: move |e| days.set(e.value().parse().unwrap_or(0)) }
+                        }
+                        div {
+                            label { class: "label", r#for: "delay-title", "Short title (optional)" }
+                            input { id: "delay-title", class: "field", "data-testid": "delay-title", placeholder: "e.g. Heavy rain stopped the pour", value: "{title}", oninput: move |e| title.set(e.value()) }
+                        }
+                    }
+                    div {
+                        label { class: "label", r#for: "delay-note", "What happened?" }
+                        textarea { id: "delay-note", class: "field", rows: "3", "data-testid": "delay-note", placeholder: "The owner reads this on the project timeline.", value: "{note}", oninput: move |e| note.set(e.value()) }
+                        p { class: "hint", "The target date moves back by the days lost, and the schedule's handover moves with it." }
+                    }
+                    div { class: "modal-actions",
+                        button { class: "btn-ghost", onclick: move |_| open.set(false), "Cancel" }
+                        button { class: "btn-primary", "data-testid": "delay-save", disabled: !ready, onclick: save, "Log delay" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 pub fn LeadershipBlock(personnel: ProjectPersonnel, headcount: u32, note: Option<String>) -> Element {
-    let leaders = [
-        ("Construction Group Leader", personnel.group_leader_name.clone(), personnel.group_leader_phone.clone()),
-        ("On-Site Quality Control (QC) Officer", personnel.site_qc_officer_name.clone(), personnel.site_qc_officer_phone.clone()),
-        ("Admin Office Coordinator", personnel.admin_coordinator_name.clone(), personnel.admin_coordinator_phone.clone()),
-    ];
+    // Roles nobody has been picked for yet are left out rather than shown blank.
+    let leaders: Vec<_> = [
+        ("Site team lead", personnel.group_leader_name.clone(), personnel.group_leader_phone.clone()),
+        ("Quality checker", personnel.site_qc_officer_name.clone(), personnel.site_qc_officer_phone.clone()),
+        ("Office contact", personnel.admin_coordinator_name.clone(), personnel.admin_coordinator_phone.clone()),
+    ]
+    .into_iter()
+    .filter(|(_, name, _)| !name.trim().is_empty())
+    .collect();
+    let nobody = leaders.is_empty();
     rsx! {
         div { class: "space-y-4", "data-testid": "manpower-block",
             div { class: "flex flex-wrap items-baseline gap-x-3 gap-y-1",
@@ -197,15 +300,20 @@ pub fn LeadershipBlock(personnel: ProjectPersonnel, headcount: u32, note: Option
                             p { class: "text-[15px] font-medium truncate", "{name}" }
                             p { class: "text-xs text-muted", "{role}" }
                         }
-                        a { href: "{util::tel(&phone)}", class: "btn-secondary h-10 w-10 px-0 sm:w-auto sm:px-3", "aria-label": "Call {name}",
-                            Icon { name: "phone" }
-                            span { class: "hidden sm:inline", "Call" }
-                        }
-                        a { href: "{util::sms(&phone)}", class: "btn-secondary h-10 w-10 px-0 sm:w-auto sm:px-3", "aria-label": "Message {name}",
-                            Icon { name: "message" }
-                            span { class: "hidden sm:inline", "Message" }
+                        if !phone.trim().is_empty() {
+                            a { href: "{util::tel(&phone)}", class: "btn-secondary h-10 w-10 px-0 sm:w-auto sm:px-3", "aria-label": "Call {name}",
+                                Icon { name: "phone" }
+                                span { class: "hidden sm:inline", "Call" }
+                            }
+                            a { href: "{util::sms(&phone)}", class: "btn-secondary h-10 w-10 px-0 sm:w-auto sm:px-3", "aria-label": "Message {name}",
+                                Icon { name: "message" }
+                                span { class: "hidden sm:inline", "Message" }
+                            }
                         }
                     }
+                }
+                if nobody {
+                    li { class: "py-3 text-sm text-muted", "The office hasn't named the team for this job yet." }
                 }
             }
         }
@@ -225,7 +333,7 @@ pub fn AssetBlock(assets: Vec<Asset>) -> Element {
     rsx! {
         div { class: "grid md:grid-cols-2 gap-6", "data-testid": "asset-block",
             div {
-                p { class: "eyebrow mb-2", "Fixed Infrastructure" }
+                p { class: "eyebrow mb-2", "Built-in equipment" }
                 if fixed.is_empty() {
                     p { class: "text-sm text-muted", "None in this zone." }
                 }
@@ -239,7 +347,7 @@ pub fn AssetBlock(assets: Vec<Asset>) -> Element {
                 }
             }
             div {
-                p { class: "eyebrow mb-2", "Deployed Heavy Machinery" }
+                p { class: "eyebrow mb-2", "Machines on site" }
                 if machines.is_empty() {
                     p { class: "text-sm text-muted", "No machinery here right now." }
                 }
@@ -322,6 +430,8 @@ fn deadline_note(item: &WorkItem) -> Option<String> {
 #[component]
 pub fn CapitalCard(item: WorkItem, phases: Vec<ProjectPhase>) -> Element {
     let progress = item.calculated_progress;
+    let live = item.status == WorkStatus::InProgress && item.active_worker_count > 0;
+    let crew = if item.active_worker_count == 1 { "1 person".to_string() } else { format!("{} people", item.active_worker_count) };
     rsx! {
         Link { to: Route::Project { id: item.id }, class: "block card card-hover p-4", "data-testid": "capital-card",
             div { class: "flex flex-wrap items-start justify-between gap-2",
@@ -329,7 +439,7 @@ pub fn CapitalCard(item: WorkItem, phases: Vec<ProjectPhase>) -> Element {
                 StatusPill { status: item.status }
             }
             div { class: "flex items-center gap-3 mt-3",
-                div { class: "flex-1", ProgressBar { value: progress } }
+                div { class: "flex-1", ProgressBar { value: progress, live } }
                 span { class: "text-sm tabular text-muted w-10 text-right", "{progress}%" }
             }
             if !phases.is_empty() {
@@ -342,7 +452,15 @@ pub fn CapitalCard(item: WorkItem, phases: Vec<ProjectPhase>) -> Element {
                     }
                 }
             }
-            p { class: "text-xs text-muted mt-3", "Target: {util::day(item.current_target_deadline)} · {item.active_worker_count} on site today" }
+            div { class: "flex items-center gap-2 text-xs mt-3",
+                if live {
+                    span { class: "live-dot" }
+                    span { class: "font-medium text-ink", "{crew} on site now" }
+                } else {
+                    span { class: "text-muted", "No one on site right now" }
+                }
+                span { class: "text-muted ml-auto", "Finish by {util::day(item.current_target_deadline)}" }
+            }
         }
     }
 }
@@ -364,6 +482,7 @@ pub fn MaintenanceLine(item: WorkItem, detail: Option<WorkItemDetail>) -> Elemen
     });
     let (icon_class, icon, text) = match (item.stream, item.status) {
         (_, WorkStatus::CompletedAndArchived) => ("text-tag-green-text", "✓", format!("{} — Completed", item.title)),
+        (_, WorkStatus::Cancelled) => ("text-muted", "–", format!("{} — Cancelled", item.title)),
         (WorkStream::RoutineMaintenance, _) if today_done.is_some() => {
             let at = today_done.as_ref().map(|t| util::time(t.timestamp)).unwrap_or_default();
             ("text-tag-green-text", "✓", format!("{} — Completed {at}", item.title))
@@ -440,7 +559,7 @@ pub fn ZonePage(id: Uuid) -> Element {
         .filter(|w| w.stream != WorkStream::CapitalProject && (w.status.is_active() || util::same_local_day(w.current_target_deadline, Utc::now())))
         .cloned()
         .collect();
-    let archived: Vec<WorkItem> = in_zone.iter().filter(|w| w.status == WorkStatus::CompletedAndArchived).cloned().collect();
+    let archived: Vec<WorkItem> = in_zone.iter().filter(|w| matches!(w.status, WorkStatus::CompletedAndArchived | WorkStatus::Cancelled)).cloned().collect();
     let headcount: u32 = in_zone.iter().filter(|w| w.status.is_active()).map(|w| w.active_worker_count).sum();
     let note = transfer_note(&details, &items);
     let lead = in_zone
@@ -453,7 +572,7 @@ pub fn ZonePage(id: Uuid) -> Element {
         .assets
         .read()
         .as_ref()
-        .map(|a| a.assets.iter().filter(|x| zone.contains(&x.current_area_id)).cloned().collect())
+        .map(|a| a.assets.iter().filter(|x| zone.contains(&x.current_area_id) && !x.is_retired).cloned().collect())
         .unwrap_or_default();
     let mut entries: Vec<TimelineEntry> = details.iter().flat_map(|d| timeline_entries(d, true)).collect();
     entries.truncate(400);
@@ -462,7 +581,7 @@ pub fn ZonePage(id: Uuid) -> Element {
     let nav = use_navigator();
 
     rsx! {
-        article { class: "max-w-doc mx-auto rise-in", "data-testid": "zone-page",
+        article { class: "rise-in", "data-testid": "zone-page",
             Breadcrumbs { flat: flat.clone(), area_id: id }
             header { class: "space-y-3",
                 p { class: "eyebrow", "{area.area.zone_class.label()}" }
@@ -471,12 +590,12 @@ pub fn ZonePage(id: Uuid) -> Element {
                     Pill { tone: area.status.tone(), text: area.status.label().to_string(), dot: true }
                     span { class: "text-sm text-muted", "{area.status_reason}" }
                     if area.area.is_archived {
-                        Pill { tone: Tone::Gray, text: "Archived Locations" }
+                        Pill { tone: Tone::Gray, text: "No longer in use" }
                     }
                 }
                 if let Some(summary) = area.executive_summary.clone() {
                     div { class: "rounded-lg bg-sidebar px-4 py-3 mt-2",
-                        p { class: "eyebrow mb-1", "Executive summary" }
+                        p { class: "eyebrow mb-1", "In short" }
                         p { class: "text-[15px] leading-relaxed", "{summary}" }
                     }
                 }
@@ -499,7 +618,7 @@ pub fn ZonePage(id: Uuid) -> Element {
             if !sub_zones.is_empty() {
                 div { class: "flex flex-wrap gap-2 mt-6",
                     for s in sub_zones {
-                        Link { key: "{s.area.id}", to: Route::Zone { id: s.area.id }, class: "pill bg-hover text-ink hover:bg-[#e8e8e5] transition-colors h-7 px-2.5",
+                        Link { key: "{s.area.id}", to: Route::Zone { id: s.area.id }, class: "pill bg-hover text-ink hover:bg-line transition-colors h-7 px-2.5",
                             span { class: "w-1.5 h-1.5 rounded-full", style: "background: currentColor; opacity:.4" }
                             "{s.area.name}"
                         }
@@ -507,7 +626,7 @@ pub fn ZonePage(id: Uuid) -> Element {
                 }
             }
 
-            DocSection { title: "Active Capital Developments", subtitle: "Construction projects with their weighted phases.",
+            DocSection { title: "Building projects", subtitle: "Construction projects with their weighted phases.",
                 if capital.is_empty() {
                     p { class: "text-sm text-muted", "No construction is underway here." }
                 } else {
@@ -531,7 +650,7 @@ pub fn ZonePage(id: Uuid) -> Element {
                 }
             }
 
-            DocSection { title: "Live Manpower & Leadership", subtitle: "Today's crew on site and the people accountable.",
+            DocSection { title: "Team on site today", subtitle: "Today's crew on site and the people accountable.",
                 if let Some(p) = lead {
                     LeadershipBlock { personnel: p, headcount, note }
                 } else {
@@ -543,7 +662,7 @@ pub fn ZonePage(id: Uuid) -> Element {
                 AssetBlock { assets: zone_assets }
             }
 
-            DocSection { title: "Milestones & Delay Audit Trail",
+            DocSection { title: "Project history",
                 TimelineBlock { entries }
             }
 
@@ -573,15 +692,16 @@ pub fn ProjectPage(id: Uuid) -> Element {
     let app = use_app();
     let detail = use_detail(id);
     let mut photo_index = use_signal(|| 0usize);
+    let mut editing = use_signal(|| false);
     let Some(detail) = detail else {
-        return rsx! { div { class: "max-w-doc mx-auto", SkeletonPage {} } };
+        return rsx! { div { class: "w-full", SkeletonPage {} } };
     };
     let flat = app.flat_areas();
     let item = detail.item.clone();
     let items = app.work_items.read().clone().unwrap_or_default();
     let note = transfer_note(std::slice::from_ref(&detail), &items);
     let shift = deadline_note(&item);
-    let is_staff = app.is_staff();
+    let is_staff = app.can(Permission::UpdateProgress) && app.can_work_in(item.area_id);
     let is_vip = app.is_vip();
     let entries = timeline_entries(&detail, false);
     let photos = detail.photos.clone();
@@ -594,7 +714,7 @@ pub fn ProjectPage(id: Uuid) -> Element {
     let completed_time = |t: DateTime<Utc>| t.with_timezone(&Local).format("%b %-d").to_string();
 
     rsx! {
-        article { class: "max-w-doc mx-auto rise-in", "data-testid": "project-page",
+        article { class: "rise-in", "data-testid": "project-page",
             Breadcrumbs { flat: flat.clone(), area_id: item.area_id, tail: item.title.clone() }
             header { class: "space-y-4",
                 p { class: "eyebrow", "{item.stream.label()}" }
@@ -602,7 +722,10 @@ pub fn ProjectPage(id: Uuid) -> Element {
                 div { class: "flex flex-wrap items-center gap-2",
                     StatusPill { status: item.status }
                     if detail.area.is_archived {
-                        Pill { tone: Tone::Gray, text: "Archived Locations" }
+                        Pill { tone: Tone::Gray, text: "No longer in use" }
+                    }
+                    if app.can(Permission::ManageProjects) {
+                        button { class: "btn-secondary h-8 ml-auto", "data-testid": "edit-project", onclick: move |_| editing.set(true), Icon { name: "edit", size: 14 } "Edit project" }
                     }
                 }
                 div { class: "flex items-center gap-3 max-w-md",
@@ -610,7 +733,7 @@ pub fn ProjectPage(id: Uuid) -> Element {
                     span { class: "text-sm font-medium tabular", "data-testid": "progress-value", "{item.calculated_progress}%" }
                 }
                 div { class: "text-[15px]",
-                    span { class: "text-muted", "Current Target Deadline: " }
+                    span { class: "text-muted", "Finish by: " }
                     span { class: "font-medium", "{util::long_day(item.current_target_deadline)}" }
                     if let Some(s) = shift {
                         span { class: "text-sm text-muted", " — {s}" }
@@ -648,6 +771,9 @@ pub fn ProjectPage(id: Uuid) -> Element {
                         PhotoUploader { work_item_id: id }
                         Link { to: Route::Decisions {}, class: "btn-secondary", Icon { name: "flag" } "Report an issue" }
                         Link { to: Route::Equipment {}, class: "btn-secondary", Icon { name: "truck" } "Equipment" }
+                        if item.status.is_active() {
+                            LogDelayButton { work_item_id: id }
+                        }
                     }
                 }
             }
@@ -676,6 +802,9 @@ pub fn ProjectPage(id: Uuid) -> Element {
                 } else {
                     div { class: "space-y-3",
                         PhotoAnnotator { key: "{photos[idx].photo.id}", photo: photos[idx].clone(), work_item_id: id }
+                        if app.can(Permission::ManageProjects) || (app.can(Permission::UploadPhotos) && app.user_id() == Some(photos[idx].photo.uploaded_by)) {
+                            RemovePhoto { key: "rm-{photos[idx].photo.id}", photo_id: photos[idx].photo.id, on_done: move |_| photo_index.set(0) }
+                        }
                         if photos.len() > 1 {
                             div { class: "flex gap-2 overflow-x-auto no-scrollbar pb-1",
                                 for (i, p) in photos.iter().enumerate() {
@@ -696,7 +825,7 @@ pub fn ProjectPage(id: Uuid) -> Element {
                 }
             }
 
-            DocSection { title: "Live Manpower & Leadership",
+            DocSection { title: "Team on site today",
                 LeadershipBlock { personnel: item.personnel.clone(), headcount: item.active_worker_count, note }
             }
 
@@ -720,9 +849,12 @@ pub fn ProjectPage(id: Uuid) -> Element {
                 }
             }
 
-            DocSection { title: "Milestones & Delay Audit Trail",
+            DocSection { title: "Project history",
                 TimelineBlock { entries }
             }
+        }
+        if editing() {
+            ProjectModal { detail: Some(detail.clone()), on_close: move |_| editing.set(false) }
         }
     }
 }

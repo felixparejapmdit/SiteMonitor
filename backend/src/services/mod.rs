@@ -3,8 +3,12 @@
 pub mod agenda;
 pub mod media;
 pub mod progress;
+pub mod package;
 pub mod scheduler;
+pub mod vault;
 pub mod status;
+pub mod workforce;
+pub mod workforce_sample;
 
 use chrono::{DateTime, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set};
@@ -113,6 +117,13 @@ pub async fn system_user<C: ConnectionTrait>(db: &C) -> AppResult<Uuid> {
         Some(u) => Ok(u.id),
         None => Ok(Users::find().one(db).await?.map(|u| u.id).unwrap_or_default()),
     }
+}
+
+/// The estate settings, or the defaults if the office never saved any.
+pub async fn load_settings<C: ConnectionTrait>(db: &C) -> AppResult<EstateSettings> {
+    use crate::entities::estate_setting;
+    let row = estate_setting::Entity::find_by_id(1).one(db).await?;
+    Ok(row.and_then(|r| serde_json::from_value(r.data).ok()).unwrap_or_default())
 }
 
 #[cfg(test)]

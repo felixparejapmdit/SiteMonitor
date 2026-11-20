@@ -35,14 +35,35 @@ pub fn from_json<T: DeserializeOwned + Default>(value: &Json) -> T {
     serde_json::from_value(value.clone()).unwrap_or_default()
 }
 
+/// Whether the Clinic module is switched on (Access -> Modules); kept in step
+/// with the estate settings. While off, nobody has clinic access.
+pub static CLINIC_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A person's effective permissions: role defaults and overrides, minus the
+/// permissions of modules that are switched off.
+pub fn permissions(access: &AccessOverrides, role: UserRole) -> Vec<Permission> {
+    let mut p = access.effective(role);
+    if !CLINIC_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        p.retain(|x| *x != Permission::ManageClinic);
+    }
+    p
+}
+
 pub fn user(m: user::Model) -> User {
+    let role: UserRole = dec(&m.role);
+    let access = serde_json::from_value::<AccessOverrides>(m.permission_overrides.clone()).unwrap_or_default().normalized(role);
     User {
         id: m.id,
         name: m.name,
-        role: dec(&m.role),
+        role,
         phone: m.phone,
         email: m.email,
         assigned_area_ids: from_json::<Vec<Uuid>>(&m.assigned_area_ids),
+        is_active: m.is_active,
+        permissions: permissions(&access, role),
+        access,
+        must_change_password: m.must_change_password,
+        last_sign_in_at: m.last_sign_in_at,
     }
 }
 
@@ -53,6 +74,7 @@ pub fn base_map(m: base_map_version::Model) -> BaseMapVersion {
         orthographic_image_url: m.orthographic_image_url,
         is_active: m.is_active,
         created_at: m.created_at,
+        tiles: m.tiles.and_then(|t| serde_json::from_value(t).ok()),
     }
 }
 
@@ -134,6 +156,9 @@ pub fn decision(m: decision_alert::Model) -> DecisionAlert {
         status: dec(&m.status),
         created_at: m.created_at,
         resolved_at: m.resolved_at,
+        photo_url: m.photo_url,
+        reported_by: m.reported_by,
+        office_note: m.office_note,
     }
 }
 
@@ -148,6 +173,7 @@ pub fn asset(m: asset::Model) -> Asset {
         active_issue_report: m.active_issue_report,
         impact_level: dec(&m.impact_level),
         repair_eta: m.repair_eta,
+        is_retired: m.is_retired,
     }
 }
 

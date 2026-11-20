@@ -9,20 +9,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::response::Response;
 use futures::{SinkExt, StreamExt};
-use sea_orm::EntityTrait;
-use serde::Deserialize;
 use shared::ws::{DataScope, WsEvent};
 use shared::UserRole;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
-use crate::convert;
-use crate::entities::prelude::Users;
-use crate::error::{AppError, AppResult};
-use crate::state::AppState;
+use crate::error::AppResult;
+use crate::state::{AppState, CurrentUser};
 
 const STAFF: [UserRole; 2] = [UserRole::OfficeAdmin, UserRole::SiteMonitor];
 
@@ -63,29 +59,27 @@ impl Hub {
         self.send_to(&STAFF, &event).await;
     }
 
+    /// Instant push to the Office Admin only.
+    pub async fn to_office(&self, event: WsEvent) {
+        self.send_to(&[UserRole::OfficeAdmin], &event).await;
+    }
+
     /// Silent background refresh for everyone.
     pub async fn changed(&self, scopes: &[DataScope]) {
-        self.send_to(&UserRole::ALL, &WsEvent::DataChanged { scopes: scopes.to_vec() }).await;
+        self.changed_from(scopes, None).await;
+    }
+
+    /// Like `changed`, naming the device that made the change (echo suppression).
+    pub async fn changed_from(&self, scopes: &[DataScope], origin: Option<&str>) {
+        self.send_to(&UserRole::ALL, &WsEvent::DataChanged { scopes: scopes.to_vec(), origin: origin.map(str::to_string) }).await;
     }
 }
 
-#[derive(Deserialize)]
-pub struct WsParams {
-    user_id: Uuid,
-}
-
-pub async fn handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-    Query(params): Query<WsParams>,
-) -> AppResult<Response> {
-    let user = Users::find_by_id(params.user_id)
-        .one(&state.db)
-        .await?
-        .map(convert::user)
-        .ok_or_else(|| AppError::Unauthorized("Please choose who you are before connecting.".into()))?;
+/// Live updates for the signed-in person (the session cookie rides along on
+/// the same-origin upgrade request).
+pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>, user: CurrentUser) -> AppResult<Response> {
     let hub = state.hub.clone();
-    Ok(ws.on_upgrade(move |socket| serve(socket, hub, user.role)))
+    Ok(ws.on_upgrade(move |socket| serve(socket, hub, user.0.role)))
 }
 
 async fn serve(socket: WebSocket, hub: Hub, role: UserRole) {

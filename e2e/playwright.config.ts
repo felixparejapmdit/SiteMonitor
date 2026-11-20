@@ -16,12 +16,18 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
+    // Safari's engine: print set-ups and the screens they print from (tests tagged @safari).
+    { name: "webkit", grep: /@safari/, use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 } } },
+  ],
   webServer: {
     command: "cargo run -p backend --release",
     cwd: "..",
     url: `http://localhost:${PORT}/api/health`,
     reuseExistingServer: true,
+    // Demo mode exposes the seeded accounts the tests sign in with.
+    env: { SITEMONITOR_DEMO: "1" },
     timeout: 300_000,
   },
 });

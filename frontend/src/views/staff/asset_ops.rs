@@ -15,12 +15,15 @@ use crate::components::ui::{EmptyState, Icon, Modal, Pill, Spinner};
 use crate::services::sync::{self, Outcome};
 use crate::state::use_app;
 use crate::util::{self, FlatArea};
+use crate::Route;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Dialog {
     Move(Option<Uuid>),
     Breakdown(Option<Uuid>),
     Attach(Uuid),
+    /// Office Admin: add (None) or edit equipment.
+    Edit(Option<Uuid>),
 }
 
 #[component]
@@ -45,7 +48,9 @@ pub fn EquipmentView() -> Element {
     let Some(data) = app.assets.read().clone() else {
         return rsx! { crate::components::ui::SkeletonPage {} };
     };
-    let assets = data.assets.clone();
+    let is_admin = app.can(Permission::ManageEquipment);
+    let retired: Vec<Asset> = data.assets.iter().filter(|a| a.is_retired).cloned().collect();
+    let assets: Vec<Asset> = data.assets.iter().filter(|a| !a.is_retired).cloned().collect();
     let zone_id = zone();
     let scope: Vec<Uuid> = zone_id.map(|z| util::subtree(&flat, z)).unwrap_or_default();
     let here: Vec<Asset> = match zone_id {
@@ -69,9 +74,17 @@ pub fn EquipmentView() -> Element {
 
     rsx! {
         div { class: "space-y-6 rise-in",
-            header { class: "space-y-1",
-                h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Equipment" }
-                p { class: "text-[15px] text-muted", "Machinery, built-in systems and swappable parts — where they are and how they're doing." }
+            header { class: "flex flex-wrap items-end justify-between gap-4",
+                div { class: "space-y-1",
+                    h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Equipment" }
+                    p { class: "text-[15px] text-muted", "Machinery, built-in systems and swappable parts — where they are and how they're doing." }
+                }
+                if is_admin {
+                    button { class: "btn-secondary h-10 px-4", "data-testid": "add-equipment", onclick: move |_| dialog.set(Some(Dialog::Edit(None))),
+                        Icon { name: "plus" }
+                        "Add equipment"
+                    }
+                }
             }
 
             div { class: "card p-4 space-y-4",
@@ -126,6 +139,28 @@ pub fn EquipmentView() -> Element {
                 }
             }
 
+            if is_admin && !retired.is_empty() {
+                section {
+                    h2 { class: "section-title mb-3", "Retired" span { class: "text-muted font-normal ml-2", "{retired.len()}" } }
+                    ul { class: "card divide-y divide-line",
+                        for a in retired.iter() {
+                            {
+                                let rid = a.id;
+                                rsx! {
+                                    li { key: "{rid}", class: "flex items-center gap-3 px-4 py-3", "data-testid": "retired-asset",
+                                        div { class: "flex-1 min-w-0",
+                                            p { class: "text-[15px] text-muted", "{a.name}" }
+                                            p { class: "text-xs text-muted", "{a.mobility.label()} · last at {util::area_name(&flat, a.current_area_id)}" }
+                                        }
+                                        button { class: "btn-secondary h-10 px-4", onclick: move |_| dialog.set(Some(Dialog::Edit(Some(rid)))), Icon { name: "edit" } "Edit" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             section {
                 h2 { class: "section-title mb-3", "Recent movements" }
                 if data.recent_transfers.is_empty() {
@@ -134,7 +169,7 @@ pub fn EquipmentView() -> Element {
                     ul { class: "divide-y divide-line border-y border-line",
                         for t in data.recent_transfers.iter().take(12) {
                             li { key: "{t.id}", class: "py-2.5 text-sm flex flex-wrap gap-x-2",
-                                span { class: "font-medium", "{assets.iter().find(|a| a.id == t.asset_id).map(|a| a.name.clone()).unwrap_or_default()}" }
+                                span { class: "font-medium", "{data.assets.iter().find(|a| a.id == t.asset_id).map(|a| a.name.clone()).unwrap_or_default()}" }
                                 span { class: "text-muted",
                                     "moved "
                                     if let Some(f) = t.from_area_id { "from {util::area_name(&flat, f)} " }
@@ -152,6 +187,7 @@ pub fn EquipmentView() -> Element {
             Some(Dialog::Move(pre)) => rsx! { MoveDialog { preselect: pre, here: here.clone(), all: assets.clone(), zones: active_zones.clone(), on_close: move |_| dialog.set(None) } },
             Some(Dialog::Breakdown(pre)) => rsx! { BreakdownDialog { preselect: pre, here: here.clone(), all: assets.clone(), zone: zone_id, on_close: move |_| dialog.set(None) } },
             Some(Dialog::Attach(id)) => rsx! { AttachDialog { asset_id: id, all: assets.clone(), on_close: move |_| dialog.set(None) } },
+            Some(Dialog::Edit(id)) => rsx! { EquipmentDialog { asset: id.and_then(|id| data.assets.iter().find(|a| a.id == id).cloned()), zones: active_zones.clone(), on_close: move |_| dialog.set(None) } },
             None => rsx! {},
         }
     }
@@ -219,6 +255,9 @@ fn AssetCard(asset: Asset, parts: Vec<Asset>, on_action: EventHandler<Dialog>) -
                         button { class: "btn-secondary h-10", "data-testid": "detach", onclick: move |_| detach(id), Icon { name: "unlink" } "Detach" }
                     } else if asset.mobility == MobilityType::ModularComponent {
                         button { class: "btn-secondary h-10", onclick: move |_| on_action.call(Dialog::Attach(id)), Icon { name: "link" } "Install in…" }
+                    }
+                    if app.can(Permission::ManageEquipment) {
+                        button { class: "btn-ghost h-10", "data-testid": "edit-equipment", onclick: move |_| on_action.call(Dialog::Edit(Some(id))), Icon { name: "edit" } "Edit" }
                     }
                 }
             }
@@ -298,15 +337,15 @@ fn MoveDialog(preselect: Option<Uuid>, here: Vec<Asset>, all: Vec<Asset>, zones:
                     label { class: "label", r#for: "move-dest", "Move to" }
                     select { id: "move-dest", class: "field", "data-testid": "move-dest", onchange: move |e| dest.set(Uuid::parse_str(&e.value()).ok()),
                         option { value: "", selected: dest().is_none(), "Choose a location…" }
-                        for z in zones.iter().filter(|z| Some(z.area.id) != current_area) {
+                        for z in zones.iter().filter(|z| Some(z.area.id) != current_area && app.can_work_in(z.area.id)) {
                             option { key: "{z.area.id}", value: "{z.area.id}", selected: dest() == Some(z.area.id), "{\"\u{2003}\".repeat(z.depth)}{z.area.name}" }
                         }
                     }
                 }
-                div { class: "flex justify-end gap-2",
+                div { class: "modal-actions",
                     button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
                     button {
-                        class: "btn-primary btn-lg",
+                        class: "btn-primary",
                         disabled: busy() || selected().is_none() || dest().is_none(),
                         "data-testid": "confirm-move",
                         onclick: move |_| async move {
@@ -407,7 +446,7 @@ fn BreakdownDialog(preselect: Option<Uuid>, here: Vec<Asset>, all: Vec<Asset>, z
                     }
                 }
                 div {
-                    label { class: "label", r#for: "diag-note", "3. Diagnostic & Mitigation Note" }
+                    label { class: "label", r#for: "diag-note", "3. What's wrong and what was done" }
                     textarea { id: "diag-note", class: "field", rows: "3", "data-testid": "diag-note", placeholder: "What's wrong, and what have you done so far?", value: "{note}", oninput: move |e| note.set(e.value()) }
                 }
                 div {
@@ -445,10 +484,10 @@ fn BreakdownDialog(preselect: Option<Uuid>, here: Vec<Asset>, all: Vec<Asset>, z
                         }
                     }
                 }
-                div { class: "flex justify-end gap-2",
+                div { class: "modal-actions",
                     button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
                     button {
-                        class: "btn-red btn-lg",
+                        class: "btn-red",
                         disabled: !can_submit || busy(),
                         "data-testid": "submit-breakdown",
                         onclick: move |_| async move {
@@ -506,7 +545,7 @@ fn AttachDialog(asset_id: Uuid, all: Vec<Asset>, on_close: EventHandler<()>) -> 
                     }
                 }
                 p { class: "hint", "The part moves to wherever that equipment is." }
-                div { class: "flex justify-end gap-2",
+                div { class: "modal-actions",
                     button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
                     button {
                         class: "btn-primary",
@@ -539,12 +578,108 @@ pub fn ChoiceButton(active: bool, #[props(into)] label: String, #[props(into)] h
     rsx! {
         button {
             r#type: "button",
-            class: if active { "rounded-lg border-2 border-ink bg-white px-3 py-2.5 text-left transition-colors" } else { "rounded-lg border-2 border-line bg-white px-3 py-2.5 text-left hover:border-[#d6d6d3] transition-colors" },
+            class: if active { "rounded-lg border-2 border-ink bg-surface px-3 py-2.5 text-left transition-colors" } else { "rounded-lg border-2 border-line bg-surface px-3 py-2.5 text-left hover:border-[#d6d6d3] transition-colors" },
             "aria-pressed": active,
             onclick: move |e| onclick.call(e),
             p { class: "text-sm font-medium", "{label}" }
             if !hint.is_empty() {
                 p { class: "text-xs text-muted", "{hint}" }
+            }
+        }
+    }
+}
+
+/// Office Admin: add equipment, or rename / re-type / re-home / retire it.
+#[component]
+fn EquipmentDialog(asset: Option<Asset>, zones: Vec<FlatArea>, on_close: EventHandler<()>) -> Element {
+    let app = use_app();
+    let id = asset.as_ref().map(|a| a.id);
+    let installed = asset.as_ref().is_some_and(|a| a.parent_asset_id.is_some());
+    let mut name = use_signal(|| asset.as_ref().map(|a| a.name.clone()).unwrap_or_default());
+    let mut mobility = use_signal(|| asset.as_ref().map(|a| a.mobility).unwrap_or(MobilityType::MobileMachinery));
+    let mut area = use_signal(|| asset.as_ref().map(|a| a.current_area_id).or(*app.equipment_zone.peek()));
+    let mut in_use = use_signal(|| asset.as_ref().map(|a| !a.is_retired).unwrap_or(true));
+    let mut busy = use_signal(|| false);
+    let title = match &asset {
+        Some(a) => format!("Edit {}", a.name),
+        None => "Add equipment".to_string(),
+    };
+    let can_save = !name().trim().is_empty() && area().is_some() && !busy();
+    let save = move |_| async move {
+        let Some(area_id) = area() else { return };
+        busy.set(true);
+        let req = SaveAssetRequest { name: name(), mobility: mobility(), current_area_id: area_id, is_retired: !in_use() };
+        let result: Result<Asset, _> = match id {
+            Some(id) => crate::api::put(&format!("/assets/{id}"), &req).await,
+            None => crate::api::post("/assets", &req).await,
+        };
+        match result {
+            Ok(a) => {
+                app.success(match (id, a.is_retired) {
+                    (None, _) => format!("{} added", a.name),
+                    (Some(_), true) => format!("{} retired", a.name),
+                    (Some(_), false) => format!("{} saved", a.name),
+                });
+                sync::reload(app, vec![DataScope::Assets, DataScope::Map]);
+                on_close.call(());
+            }
+            Err(e) => app.error(e.message()),
+        }
+        busy.set(false);
+    };
+    rsx! {
+        Modal { title, on_close: move |_| on_close.call(()),
+            div { class: "space-y-4",
+                div {
+                    label { class: "label", r#for: "equip-name", "Name" }
+                    input { id: "equip-name", class: "field", "data-testid": "equip-name", placeholder: "e.g. Plate Compactor", value: "{name}", oninput: move |e| name.set(e.value()) }
+                }
+                div {
+                    label { class: "label", r#for: "equip-type", "Type" }
+                    select { id: "equip-type", class: "field", "data-testid": "equip-type",
+                        onchange: move |e| if let Some(m) = MobilityType::ALL.iter().find(|m| format!("{m:?}") == e.value()) { mobility.set(*m) },
+                        for m in MobilityType::ALL {
+                            option { key: "{m:?}", value: "{m:?}", selected: mobility() == m, "{m.label()}" }
+                        }
+                    }
+                }
+                div {
+                    label { class: "label", r#for: "equip-zone", if id.is_some() { "Location" } else { "Where is it kept?" } }
+                    select { id: "equip-zone", class: "field", "data-testid": "equip-zone", disabled: installed,
+                        onchange: move |e| area.set(Uuid::parse_str(&e.value()).ok()),
+                        option { value: "", selected: area().is_none(), "Choose a location…" }
+                        for z in zones.iter() {
+                            option { key: "{z.area.id}", value: "{z.area.id}", selected: area() == Some(z.area.id), "{\"\u{2003}\".repeat(z.depth)}{z.area.name}" }
+                        }
+                    }
+                    if zones.is_empty() {
+                        p { class: "hint", "data-testid": "no-zones-hint", "No zones yet. "
+                            Link { to: Route::Studio {}, class: "text-accent-ink underline", "Draw one in Map Studio" }
+                            " first."
+                        }
+                    }
+                    p { class: "hint",
+                        if installed { "It's installed inside other equipment, so it moves with that. Detach it first to move it on its own." }
+                        else if id.is_some() { "Changing the location is logged as a move. Installed parts move with it." }
+                        else { "New equipment starts as working." }
+                    }
+                }
+                if id.is_some() {
+                    label { class: "flex items-start gap-3 text-sm cursor-pointer",
+                        input { r#type: "checkbox", class: "w-4 h-4 mt-0.5 accent-[#064e3b]", "data-testid": "equip-in-use", checked: in_use(), onchange: move |e| in_use.set(e.checked()) }
+                        span {
+                            span { class: "font-medium", "In use" }
+                            span { class: "block text-muted", "Untick to retire it. It leaves the lists but stays in past records and movements." }
+                        }
+                    }
+                }
+                div { class: "modal-actions",
+                    button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
+                    button { class: "btn-primary", disabled: !can_save, "data-testid": "save-equipment", onclick: save,
+                        if busy() { Spinner {} }
+                        if id.is_some() { "Save changes" } else { "Add equipment" }
+                    }
+                }
             }
         }
     }

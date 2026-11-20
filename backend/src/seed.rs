@@ -7,7 +7,10 @@
 //! truck) — plus live projects, decisions, photos and a full agenda.
 
 use chrono::{DateTime, Duration, Local, NaiveTime, Utc};
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Set, TransactionTrait};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
+    TransactionTrait,
+};
 use shared::*;
 use uuid::Uuid;
 
@@ -60,9 +63,76 @@ pub async fn seed_if_empty(db: &DatabaseConnection) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Everything that belongs to the estate. People, sign-ins, settings and the
+/// access log are not listed, so they always survive a clear.
+const ESTATE_TABLES: &str = "equipment_reservations, asset_transfer_logs, photo_call_outs, site_photos, decision_alerts, \
+     executive_handover_reports, estate_agenda_items, notifications, manpower_ledger_entries, timeline_event_records, \
+     project_phases, work_items, assets, spatial_areas, base_map_versions";
+
+/// Settings → "Clear data": an empty estate on a blank map, ready to set up.
+pub async fn clear(db: &DatabaseConnection) -> anyhow::Result<()> {
+    let txn = db.begin().await?;
+    clear_estate(&txn).await?;
+    base_map_version::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        version_name: Set("Blank map".into()),
+        orthographic_image_url: Set("/seed/blank-map.svg".into()),
+        is_active: Set(true),
+        created_at: Set(Utc::now()),
+        tiles: Set(None),
+    }
+    .insert(&txn)
+    .await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+/// Settings → "Load sample data": swaps the estate for the sample one, worked
+/// by the people already here (no new accounts are created).
+pub async fn load_sample(db: &DatabaseConnection, me: Uuid) -> anyhow::Result<()> {
+    let txn = db.begin().await?;
+    clear_estate(&txn).await?;
+    let admin = user::Entity::find_by_id(me).one(&txn).await?.ok_or_else(|| anyhow::anyhow!("signed-in person not found"))?;
+    let monitors = user::Entity::find()
+        .filter(user::Column::Role.eq(enc(&UserRole::SiteMonitor)))
+        .filter(user::Column::IsActive.eq(true))
+        .order_by_asc(user::Column::Name)
+        .all(&txn)
+        .await?;
+    let monitor = monitors.first().cloned().unwrap_or_else(|| admin.clone());
+    let monitor2 = monitors.get(1).cloned().unwrap_or_else(|| admin.clone());
+    sample_estate(db, txn, Team { admin, monitor, monitor2 }).await
+}
+
+async fn clear_estate(txn: &DatabaseTransaction) -> anyhow::Result<()> {
+    // No CASCADE: should a kept table ever point at one of these, this fails instead of wiping it.
+    txn.execute_unprepared(&format!("TRUNCATE {ESTATE_TABLES}")).await?;
+    txn.execute_unprepared("UPDATE users SET assigned_area_ids = '[]'::jsonb").await?;
+    Ok(())
+}
+
+/// Who the sample work is credited to: the lead, the quality checker and the office contact.
+struct Team {
+    admin: user::Model,
+    monitor: user::Model,
+    monitor2: user::Model,
+}
+
+/// A Site Monitor looks after the given zones (other roles have no zones).
+async fn assign(txn: &DatabaseTransaction, who: &user::Model, zones: Vec<Uuid>) -> anyhow::Result<()> {
+    if who.role != enc(&UserRole::SiteMonitor) {
+        return Ok(());
+    }
+    let mut a: user::ActiveModel = who.clone().into();
+    a.assigned_area_ids = Set(to_json(&zones));
+    a.update(txn).await?;
+    Ok(())
+}
+
 struct Ctx<'a> {
-    txn: &'a sea_orm::DatabaseTransaction,
+    txn: &'a DatabaseTransaction,
     map: Uuid,
+    team: &'a Team,
 }
 
 impl Ctx<'_> {
@@ -105,6 +175,7 @@ impl Ctx<'_> {
             active_issue_report: Set(issue.map(Into::into)),
             impact_level: Set(enc(&impact)),
             repair_eta: Set(eta_days.map(|d| at(d, 16, 0))),
+            is_retired: Set(false),
         }
         .insert(self.txn)
         .await?;
@@ -136,12 +207,13 @@ impl Ctx<'_> {
             calculated_progress: Set(progress),
             original_deadline: Set(original_deadline),
             current_target_deadline: Set(target_deadline),
-            group_leader_name: Set("Ramon Dizon".into()),
-            group_leader_phone: Set("+63 917 555 0142".into()),
-            site_qc_officer_name: Set("Engr. Liza Marquez".into()),
-            site_qc_officer_phone: Set("+63 918 555 0177".into()),
-            admin_coordinator_name: Set("Marco Villanueva".into()),
-            admin_coordinator_phone: Set("+63 917 555 0101".into()),
+            // Real accounts, so every name the owner sees on a project is someone in People.
+            group_leader_name: Set(self.team.monitor.name.clone()),
+            group_leader_phone: Set(self.team.monitor.phone.clone()),
+            site_qc_officer_name: Set(self.team.monitor2.name.clone()),
+            site_qc_officer_phone: Set(self.team.monitor2.phone.clone()),
+            admin_coordinator_name: Set(self.team.admin.name.clone()),
+            admin_coordinator_phone: Set(self.team.admin.phone.clone()),
             active_worker_count: Set(crew),
             before_photo_url: Set(before.map(Into::into)),
             after_photo_url: Set(None),
@@ -280,8 +352,39 @@ impl Ctx<'_> {
     }
 }
 
+/// An empty database: the sample estate plus its four demo accounts.
 pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     let txn = db.begin().await?;
+    // Demo accounts share one password (shown on the sign-in page in demo mode).
+    let demo_hash = crate::auth::hash_password(crate::auth::DEMO_PASSWORD)?;
+    let mut people = Vec::new();
+    for (name, role, phone, email) in [
+        ("Victoria Ashford", UserRole::VipClient, "+63 917 555 0001", "victoria@ashford-estate.example"),
+        ("Marco Villanueva", UserRole::OfficeAdmin, "+63 917 555 0101", "marco@ashford-estate.example"),
+        ("Jun Dela Cruz", UserRole::SiteMonitor, "+63 917 555 0202", "jun@ashford-estate.example"),
+        ("Ana Santos", UserRole::SiteMonitor, "+63 917 555 0203", "ana@ashford-estate.example"),
+    ] {
+        let person = user::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            name: Set(name.into()),
+            role: Set(enc(&role)),
+            phone: Set(phone.into()),
+            email: Set(email.into()),
+            assigned_area_ids: Set(to_json(&Vec::<Uuid>::new())),
+            is_active: Set(true),
+            password_hash: Set(Some(demo_hash.clone())),
+            must_change_password: Set(false),
+            permission_overrides: Set(serde_json::json!({})),
+            last_sign_in_at: Set(None),
+        };
+        people.push(person.insert(&txn).await?);
+    }
+    let [_vip, admin, monitor, monitor2]: [user::Model; 4] = people.try_into().map_err(|_| anyhow::anyhow!("expected four demo accounts"))?;
+    sample_estate(db, txn, Team { admin, monitor, monitor2 }).await
+}
+
+async fn sample_estate(db: &DatabaseConnection, txn: DatabaseTransaction, team: Team) -> anyhow::Result<()> {
+    let (admin, monitor, monitor2) = (team.admin.id, team.monitor.id, team.monitor2.id);
 
     // ------------------------------------------------------------ base map
     let map = Uuid::new_v4();
@@ -291,19 +394,31 @@ pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         orthographic_image_url: Set("/seed/estate-map-v0.svg".into()),
         is_active: Set(false),
         created_at: Set(Utc::now() - Duration::days(160)),
+        tiles: Set(None),
+    }
+    .insert(&txn)
+    .await?;
+    base_map_version::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        version_name: Set("2026 Q4 Top-Down Render".into()),
+        orthographic_image_url: Set("/seed/estate-map-v1.svg".into()),
+        is_active: Set(false),
+        created_at: Set(Utc::now() - Duration::days(20)),
+        tiles: Set(None),
     }
     .insert(&txn)
     .await?;
     base_map_version::ActiveModel {
         id: Set(map),
-        version_name: Set("2026 Q4 Top-Down Render".into()),
-        orthographic_image_url: Set("/seed/estate-map-v1.svg".into()),
+        version_name: Set("2026 Q4 Aerial Render".into()),
+        orthographic_image_url: Set("/seed/estate-map-v2.svg".into()),
         is_active: Set(true),
-        created_at: Set(Utc::now() - Duration::days(20)),
+        created_at: Set(Utc::now() - Duration::days(3)),
+        tiles: Set(None),
     }
     .insert(&txn)
     .await?;
-    let c = Ctx { txn: &txn, map };
+    let c = Ctx { txn: &txn, map, team: &team };
 
     // ------------------------------------------------------------ zones
     use ZoneClass::*;
@@ -337,27 +452,14 @@ pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     let old_shed = c.area(None, "Old Tool Shed", ContractorOperations, rect(84.0, 30.0, 92.0, 34.0)).await?;
     let _ = (villa1, villa3, villa4, office, main3);
 
-    // ------------------------------------------------------------ users
-    let vip = Uuid::new_v4();
-    let admin = Uuid::new_v4();
-    let monitor = Uuid::new_v4();
-    let monitor2 = Uuid::new_v4();
-    for (id, name, role, phone, email, areas) in [
-        (vip, "Victoria Ashford", UserRole::VipClient, "+63 917 555 0001", "victoria@ashford-estate.example", vec![]),
-        (admin, "Marco Villanueva", UserRole::OfficeAdmin, "+63 917 555 0101", "marco@ashford-estate.example", vec![]),
-        (monitor, "Jun Dela Cruz", UserRole::SiteMonitor, "+63 917 555 0202", "jun@ashford-estate.example", vec![garden, hall, pool]),
-        (monitor2, "Ana Santos", UserRole::SiteMonitor, "+63 917 555 0203", "ana@ashford-estate.example", vec![main1, power, deepwell]),
-    ] {
-        user::ActiveModel {
-            id: Set(id),
-            name: Set(name.into()),
-            role: Set(enc(&role)),
-            phone: Set(phone.into()),
-            email: Set(email.into()),
-            assigned_area_ids: Set(to_json(&areas)),
-        }
-        .insert(&txn)
-        .await?;
+    // ------------------------------------------------------------ who looks after which zones
+    // Two Site Monitors split the zones; a lone one looks after all of them.
+    let (zones_a, zones_b) = (vec![garden, hall, pool], vec![main1, power, deepwell]);
+    if team.monitor2.role == enc(&UserRole::SiteMonitor) && monitor2 != monitor {
+        assign(&txn, &team.monitor, zones_a).await?;
+        assign(&txn, &team.monitor2, zones_b).await?;
+    } else {
+        assign(&txn, &team.monitor, [zones_a, zones_b].concat()).await?;
     }
 
     // ------------------------------------------------------------ assets
@@ -515,8 +617,10 @@ pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     // ------------------------------------------------------------ manpower
     c.ledger(parking, None, 8, 8, "Morning crew allocation", admin, past(7, 35)).await?;
     c.ledger(roof, None, 6, 6, "Morning crew allocation", admin, past(7, 35)).await?;
-    c.ledger(roof, None, -6, 0, "Moved to Parking Conversion to Multi-Purpose Hall: Accelerating leveling before rain", monitor, past(9, 10)).await?;
-    c.ledger(parking, Some(roof), 6, 14, "Accelerating leveling before rain", monitor, past(9, 10)).await?;
+    // Earlier today, even just after midnight (the owner sees "today's" crew moves).
+    let moved = past(9, 10).max(at(0, 0, 1));
+    c.ledger(roof, None, -6, 0, "Moved to Parking Conversion to Multi-Purpose Hall: Accelerating leveling before rain", monitor, moved).await?;
+    c.ledger(parking, Some(roof), 6, 14, "Accelerating leveling before rain", monitor, moved).await?;
     c.ledger(wall, None, 6, 6, "Morning crew allocation", admin, past(7, 35)).await?;
     c.ledger(suite, None, 5, 5, "Morning crew allocation", admin, past(7, 35)).await?;
     c.ledger(pool_clean, None, 2, 2, "Morning crew allocation", admin, past(7, 35)).await?;
@@ -574,6 +678,9 @@ pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         status: Set(enc(&DecisionStatus::PublishedPendingClient)),
         created_at: Set(at(-1, 11, 0)),
         resolved_at: Set(None),
+        photo_url: Set(None),
+        reported_by: Set(None),
+        office_note: Set(None),
     }
     .insert(&txn)
     .await?;
@@ -591,6 +698,9 @@ pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         status: Set(enc(&DecisionStatus::PublishedPendingClient)),
         created_at: Set(past(9, 0)),
         resolved_at: Set(None),
+        photo_url: Set(None),
+        reported_by: Set(None),
+        office_note: Set(None),
     }
     .insert(&txn)
     .await?;
@@ -608,6 +718,9 @@ pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         status: Set(enc(&DecisionStatus::DraftInAdminQueue)),
         created_at: Set(past(10, 15)),
         resolved_at: Set(None),
+        photo_url: Set(None),
+        reported_by: Set(Some(monitor)),
+        office_note: Set(None),
     }
     .insert(&txn)
     .await?;
@@ -663,7 +776,7 @@ pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
 async fn complete_seed_phase(db: &DatabaseConnection, gazebo: Uuid, phase: Uuid, monitor: Uuid) -> anyhow::Result<()> {
     use crate::state::AppState;
     use crate::ws::Hub;
-    let state = AppState { db: db.clone(), hub: Hub::default(), upload_dir: std::env::temp_dir() };
+    let state = AppState { db: db.clone(), hub: Hub::default(), upload_dir: std::env::temp_dir(), throttle: Default::default() };
     let txn = db.begin().await?;
     site_photo::ActiveModel {
         id: Set(Uuid::new_v4()),

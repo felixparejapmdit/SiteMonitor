@@ -10,6 +10,7 @@ pub struct Model {
     pub orthographic_image_url: String,
     pub is_active: bool,
     pub created_at: DateTimeUtc,
+    pub tiles: Option<Json>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

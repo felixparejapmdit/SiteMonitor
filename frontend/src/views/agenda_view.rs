@@ -85,7 +85,7 @@ fn VipAgenda() -> Element {
     let items = app.work_items.read().clone().unwrap_or_default();
 
     rsx! {
-        div { class: "max-w-doc mx-auto space-y-8 rise-in",
+        div { class: "space-y-8 rise-in",
             header { class: "flex flex-col sm:flex-row sm:items-end justify-between gap-4",
                 div {
                     p { class: "eyebrow", "Next six weeks" }
@@ -117,7 +117,7 @@ fn VipAgenda() -> Element {
             if !cards.is_empty() {
                 div { class: "space-y-3",
                     for n in cards {
-                        div { key: "{n.id}", class: "card p-5 border-[#cfe0cc] bg-[#f7fbf6]", "data-testid": "anticipation-card",
+                        div { key: "{n.id}", class: "card p-5 border-tag-green-text/25 bg-tag-green-bg/40", "data-testid": "anticipation-card",
                             p { class: "eyebrow text-tag-green-text", "Coming up" }
                             p { class: "font-semibold mt-0.5", "{n.title}" }
                             p { class: "text-[15px] text-muted mt-1", "{n.body}" }
@@ -213,10 +213,10 @@ fn QuietDayModal(on_close: EventHandler<()>, on_done: EventHandler<QuietDayRespo
                     label { class: "label", r#for: "qd-notes", "Anything the team should know? (optional)" }
                     textarea { id: "qd-notes", class: "field", rows: "2", value: "{description}", oninput: move |e| description.set(e.value()) }
                 }
-                div { class: "flex justify-end gap-2",
+                div { class: "modal-actions",
                     button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
                     button {
-                        class: "btn-primary btn-lg",
+                        class: "btn-primary",
                         disabled: !valid || busy(),
                         "data-testid": "qd-submit",
                         onclick: move |_| async move {
@@ -253,7 +253,7 @@ fn MasterScheduler() -> Element {
     let data = app.agenda.read().clone().unwrap_or(AgendaResponse { items: vec![], reservations: vec![], equipment_conflicts: vec![] });
     let flat = app.flat_areas();
     let assets = app.assets.read().as_ref().map(|a| a.assets.clone()).unwrap_or_default();
-    let is_admin = app.is_admin();
+    let is_admin = app.can(Permission::ManageSchedule);
 
     let today = Local::now().date_naive();
     let monday = today + Duration::weeks(week_offset());
@@ -293,12 +293,12 @@ fn MasterScheduler() -> Element {
 
             // -------------------------------------------- quiet day queue
             if !flagged.is_empty() {
-                section { class: "rounded-xl border border-[#f3c9cb] bg-tag-red-bg/70 overflow-hidden", "data-testid": "conflict-queue",
+                section { class: "rounded-xl border border-tag-red-text/20 bg-tag-red-bg/70 overflow-hidden", "data-testid": "conflict-queue",
                     div { class: "px-5 py-3 flex items-center gap-2 text-tag-red-text",
                         Icon { name: "moon" }
                         p { class: "font-semibold flex-1", "Quiet Day conflicts — {util::plural(flagged.len(), \"task\")} must move" }
                     }
-                    ul { class: "divide-y divide-[#f3c9cb] bg-white/60",
+                    ul { class: "divide-y divide-tag-red-text/20 bg-surface/60",
                         for f in flagged {
                             {
                                 let blocking = occasions.iter().filter(|o| o.start_time < f.end_time && f.start_time < o.end_time).max_by_key(|o| o.end_time).cloned();
@@ -344,7 +344,7 @@ fn MasterScheduler() -> Element {
 
             // -------------------------------------------- equipment conflicts
             if !data.equipment_conflicts.is_empty() {
-                section { class: "rounded-xl border border-[#f0e2b6] bg-tag-amber-bg/70 px-5 py-3 space-y-2", "data-testid": "equipment-conflicts",
+                section { class: "rounded-xl border border-tag-amber-text/20 bg-tag-amber-bg/70 px-5 py-3 space-y-2", "data-testid": "equipment-conflicts",
                     p { class: "font-semibold text-tag-amber-text flex items-center gap-2", Icon { name: "alert" } "Machinery double-booked" }
                     for c in data.equipment_conflicts.iter() {
                         {
@@ -381,7 +381,7 @@ fn MasterScheduler() -> Element {
                             rsx! {
                                 div {
                                     key: "{d}",
-                                    class: if drag_over() == Some(d) { "rounded-lg border-2 border-ink bg-hover min-h-48 transition-colors" } else if quiet { "rounded-lg border border-[#c9d8e8] bg-tag-blue-bg/50 min-h-48 transition-colors" } else { "rounded-lg border border-line bg-sidebar min-h-48 transition-colors" },
+                                    class: if drag_over() == Some(d) { "rounded-lg border-2 border-ink bg-hover min-h-48 transition-colors" } else if quiet { "rounded-lg border border-tag-blue-text/20 bg-tag-blue-bg/50 min-h-48 transition-colors" } else { "rounded-lg border border-line bg-sidebar min-h-48 transition-colors" },
                                     "data-testid": "day-{d}",
                                     ondragover: move |e: DragEvent| { e.prevent_default(); drag_over.set(Some(d)); },
                                     ondragleave: move |_| { if drag_over() == Some(d) { drag_over.set(None); } },
@@ -414,7 +414,7 @@ fn MasterScheduler() -> Element {
                                                 rsx! {
                                                     button {
                                                         key: "{i.id}",
-                                                        class: if i.is_flagged_conflict { "w-full text-left rounded-md bg-white border-l-4 border-tag-red-text px-2 py-1.5 shadow-sm hover:shadow transition-shadow" } else { "w-full text-left rounded-md bg-white border-l-4 border-transparent px-2 py-1.5 shadow-sm hover:shadow transition-shadow" },
+                                                        class: if i.is_flagged_conflict { "w-full text-left rounded-md bg-surface border-l-4 border-tag-red-text px-2 py-1.5 shadow-sm hover:shadow transition-shadow" } else { "w-full text-left rounded-md bg-surface border-l-4 border-transparent px-2 py-1.5 shadow-sm hover:shadow transition-shadow" },
                                                         style: if !i.is_flagged_conflict { match agenda_tone(&i) { Tone::Red => "border-left-color:#e7a9ab", Tone::Amber => "border-left-color:#e9c66c", Tone::Green => "border-left-color:#9cc298", Tone::Blue => "border-left-color:#8fb3d6", _ => "border-left-color:#d6d6d3" } } else { "" },
                                                         draggable: if movable { "true" } else { "false" },
                                                         "data-testid": "board-item",
@@ -461,8 +461,15 @@ fn ItemModal(item: EstateAgendaItem, on_close: EventHandler<()>) -> Element {
     let mut start = use_signal(|| util::to_input(item.start_time));
     let mut end = use_signal(|| util::to_input(item.end_time));
     let mut busy = use_signal(|| false);
+    let mut editing = use_signal(|| false);
+    let mut confirm_delete = use_signal(|| false);
     let id = item.id;
     let editable = item.event_type != AgendaEventType::VipSpecialOccasion;
+    // Handover dates follow their project; Quiet Days belong to the owner.
+    let fully_editable = editable && item.event_type != AgendaEventType::TargetDeadline && app.can(Permission::ManageSchedule) && item.area_id.is_none_or(|a| app.can_work_in(a));
+    if editing() {
+        return rsx! { AddScheduleModal { editing: Some(item.clone()), on_close: move |_| on_close.call(()) } };
+    }
     let machinery: Vec<String> = app
         .agenda
         .read()
@@ -476,7 +483,7 @@ fn ItemModal(item: EstateAgendaItem, on_close: EventHandler<()>) -> Element {
         Modal { title: item.title.clone(), on_close: move |_| on_close.call(()),
             div { class: "space-y-4",
                 div { class: "flex flex-wrap gap-2",
-                    Pill { tone: agenda_tone(&item), text: item.event_type.label() }
+                    Pill { tone: agenda_tone(&item), text: app.settings.read().event_type_label(item.event_type) }
                     Pill { tone: Tone::Gray, text: item.intrusion_level.label() }
                     if item.is_flagged_conflict {
                         Pill { tone: Tone::Red, text: "Clashes with a Quiet Day" }
@@ -525,31 +532,65 @@ fn ItemModal(item: EstateAgendaItem, on_close: EventHandler<()>) -> Element {
                         }
                     }
                 }
+                if fully_editable {
+                    div { class: "border-t border-line pt-4 flex flex-wrap items-center gap-2",
+                        button { class: "btn-secondary", "data-testid": "sched-edit", onclick: move |_| editing.set(true), Icon { name: "edit" } "Edit details" }
+                        if confirm_delete() {
+                            span { class: "text-sm text-tag-red-text ml-auto", "Delete this item for good?" }
+                            button { class: "btn-ghost", onclick: move |_| confirm_delete.set(false), "Keep it" }
+                            button {
+                                class: "btn-danger",
+                                "data-testid": "sched-delete-confirm",
+                                disabled: busy(),
+                                onclick: move |_| async move {
+                                    busy.set(true);
+                                    match api::send_raw("DELETE", &format!("/agenda/{id}"), None).await {
+                                        Ok(_) => {
+                                            app.success("Removed from the schedule");
+                                            sync::reload(app, vec![DataScope::Agenda, DataScope::Map]);
+                                            on_close.call(());
+                                        }
+                                        Err(e) => app.error(e.message()),
+                                    }
+                                    busy.set(false);
+                                },
+                                "Delete"
+                            }
+                        } else {
+                            button { class: "btn-ghost text-tag-red-text ml-auto", "data-testid": "sched-delete", onclick: move |_| confirm_delete.set(true), Icon { name: "trash" } "Delete" }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 #[component]
-fn AddScheduleModal(on_close: EventHandler<()>) -> Element {
+fn AddScheduleModal(on_close: EventHandler<()>, #[props(default)] editing: Option<EstateAgendaItem>) -> Element {
     let app = use_app();
-    let flat: Vec<util::FlatArea> = app.flat_areas().into_iter().filter(|a| !a.area.is_archived).collect();
-    let items: Vec<WorkItem> = app.work_items.read().clone().unwrap_or_default().into_iter().filter(|w| w.status.is_active()).collect();
-    let machines: Vec<Asset> = app.assets.read().as_ref().map(|a| a.assets.iter().filter(|a| a.mobility == MobilityType::MobileMachinery).cloned().collect()).unwrap_or_default();
+    let edit_id = editing.as_ref().map(|e| e.id);
+    let was_booked: Vec<Uuid> =
+        app.agenda.read().as_ref().map(|a| a.reservations.iter().filter(|r| Some(r.agenda_item_id) == edit_id).map(|r| r.asset_id).collect()).unwrap_or_default();
+    let flat: Vec<util::FlatArea> = app.flat_areas().into_iter().filter(|a| !a.area.is_archived && app.can_work_in(a.area.id)).collect();
+    let items: Vec<WorkItem> =
+        app.work_items.read().clone().unwrap_or_default().into_iter().filter(|w| w.status.is_active() && app.can_work_in(w.area_id)).collect();
+    let machines: Vec<Asset> = app.assets.read().as_ref().map(|a| a.assets.iter().filter(|a| a.mobility == MobilityType::MobileMachinery && !a.is_retired).cloned().collect()).unwrap_or_default();
     let tomorrow = Local::now().date_naive() + Duration::days(1);
     let start_default = Local.from_local_datetime(&tomorrow.and_hms_opt(8, 0, 0).unwrap()).earliest().unwrap().with_timezone(&Utc);
-    let mut title = use_signal(String::new);
-    let mut description = use_signal(String::new);
-    let mut area = use_signal(|| None::<Uuid>);
-    let mut project = use_signal(|| None::<Uuid>);
-    let mut kind = use_signal(|| AgendaEventType::IntrusiveMaintenance);
-    let mut level = use_signal(|| IntrusionLevel::NoiseHeavy);
-    let mut start = use_signal(|| util::to_input(start_default));
-    let mut end = use_signal(|| util::to_input(start_default + Duration::hours(3)));
-    let mut booked = use_signal(Vec::<Uuid>::new);
+    let e = editing.clone();
+    let mut title = use_signal(|| e.as_ref().map(|e| e.title.clone()).unwrap_or_default());
+    let mut description = use_signal(|| e.as_ref().map(|e| e.description.clone()).unwrap_or_default());
+    let mut area = use_signal(|| e.as_ref().and_then(|e| e.area_id));
+    let mut project = use_signal(|| e.as_ref().and_then(|e| e.work_item_id));
+    let mut kind = use_signal(|| e.as_ref().map(|e| e.event_type).unwrap_or(AgendaEventType::IntrusiveMaintenance));
+    let mut level = use_signal(|| e.as_ref().map(|e| e.intrusion_level).unwrap_or(IntrusionLevel::NoiseHeavy));
+    let mut start = use_signal(|| util::to_input(e.as_ref().map(|e| e.start_time).unwrap_or(start_default)));
+    let mut end = use_signal(|| util::to_input(e.as_ref().map(|e| e.end_time).unwrap_or(start_default + Duration::hours(3))));
+    let mut booked = use_signal(|| was_booked);
     let mut busy = use_signal(|| false);
     rsx! {
-        Modal { title: "Add to schedule", wide: true, on_close: move |_| on_close.call(()),
+        Modal { title: if edit_id.is_some() { "Edit schedule item" } else { "Add to schedule" }, wide: true, on_close: move |_| on_close.call(()),
             div { class: "space-y-4",
                 div {
                     label { class: "label", "Title" }
@@ -559,18 +600,18 @@ fn AddScheduleModal(on_close: EventHandler<()>) -> Element {
                     div {
                         label { class: "label", "Where" }
                         select { class: "field", "data-testid": "sched-area", onchange: move |e| area.set(Uuid::parse_str(&e.value()).ok()),
-                            option { value: "", "Choose a zone…" }
+                            option { value: "", selected: area().is_none(), "Choose a zone…" }
                             for a in flat.iter() {
-                                option { key: "{a.area.id}", value: "{a.area.id}", "{\"\u{2003}\".repeat(a.depth)}{a.area.name}" }
+                                option { key: "{a.area.id}", value: "{a.area.id}", selected: area() == Some(a.area.id), "{\"\u{2003}\".repeat(a.depth)}{a.area.name}" }
                             }
                         }
                     }
                     div {
                         label { class: "label", "Project (optional)" }
                         select { class: "field", onchange: move |e| project.set(Uuid::parse_str(&e.value()).ok()),
-                            option { value: "", "None" }
+                            option { value: "", selected: project().is_none(), "None" }
                             for w in items.iter() {
-                                option { key: "{w.id}", value: "{w.id}", "{w.title}" }
+                                option { key: "{w.id}", value: "{w.id}", selected: project() == Some(w.id), "{w.title}" }
                             }
                         }
                     }
@@ -578,7 +619,7 @@ fn AddScheduleModal(on_close: EventHandler<()>) -> Element {
                         label { class: "label", "Type" }
                         select { class: "field", onchange: move |e| { if let Some(k) = AgendaEventType::ALL.iter().find(|k| format!("{k:?}") == e.value()) { kind.set(*k); } },
                             for k in AgendaEventType::ALL.iter().filter(|k| **k != AgendaEventType::VipSpecialOccasion) {
-                                option { key: "{k:?}", value: "{k:?}", selected: kind() == *k, "{k.label()}" }
+                                option { key: "{k:?}", value: "{k:?}", selected: kind() == *k, "{app.settings.read().event_type_label(*k)}" }
                             }
                         }
                     }
@@ -609,7 +650,7 @@ fn AddScheduleModal(on_close: EventHandler<()>) -> Element {
                                     button {
                                         key: "{m.id}",
                                         r#type: "button",
-                                        class: if on { "pill h-8 px-3 bg-ink text-white" } else { "pill h-8 px-3 bg-hover text-ink hover:bg-[#e8e8e5]" },
+                                        class: if on { "pill h-8 px-3 chip-on" } else { "pill h-8 px-3 bg-hover text-ink hover:bg-line" },
                                         "aria-pressed": on,
                                         onclick: move |_| {
                                             let mut b = booked.write();
@@ -626,7 +667,7 @@ fn AddScheduleModal(on_close: EventHandler<()>) -> Element {
                     label { class: "label", "Notes" }
                     textarea { class: "field", rows: "2", value: "{description}", oninput: move |e| description.set(e.value()) }
                 }
-                div { class: "flex justify-end gap-2",
+                div { class: "modal-actions",
                     button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
                     button {
                         class: "btn-primary",
@@ -646,13 +687,16 @@ fn AddScheduleModal(on_close: EventHandler<()>) -> Element {
                                 end_time: e,
                                 asset_ids: booked(),
                             };
-                            let outcome: Outcome<EstateAgendaItem> = sync::mutate(app, "Add schedule item", "POST", "/agenda", &req).await;
+                            let outcome: Outcome<EstateAgendaItem> = match edit_id {
+                                Some(id) => sync::mutate(app, "Edit schedule item", "PUT", format!("/agenda/{id}"), &req).await,
+                                None => sync::mutate(app, "Add schedule item", "POST", "/agenda", &req).await,
+                            };
                             match outcome {
                                 Outcome::Saved(saved) => {
                                     if saved.is_flagged_conflict {
-                                        app.toast(crate::state::ToastTone::Warning, "Added — but it clashes with a Quiet Day", Some("It's flagged at the top so you can move it.".into()));
+                                        app.toast(crate::state::ToastTone::Warning, "Saved — but it clashes with a Quiet Day", Some("It's flagged at the top so you can move it.".into()));
                                     } else {
-                                        app.success("Added to the schedule");
+                                        app.success(if edit_id.is_some() { "Schedule item updated" } else { "Added to the schedule" });
                                     }
                                     sync::reload(app, vec![DataScope::Agenda]);
                                     on_close.call(());
@@ -663,7 +707,7 @@ fn AddScheduleModal(on_close: EventHandler<()>) -> Element {
                             busy.set(false);
                         },
                         if busy() { Spinner {} }
-                        "Add"
+                        if edit_id.is_some() { "Save changes" } else { "Add" }
                     }
                 }
             }

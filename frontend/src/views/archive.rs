@@ -30,7 +30,7 @@ pub fn ArchiveView() -> Element {
     };
     let mut results: Vec<WorkItem> = items
         .iter()
-        .filter(|w| if q.is_empty() { w.status == WorkStatus::CompletedAndArchived || archived_zone_ids.contains(&w.area_id) } else { true })
+        .filter(|w| if q.is_empty() { matches!(w.status, WorkStatus::CompletedAndArchived | WorkStatus::Cancelled) || archived_zone_ids.contains(&w.area_id) } else { true })
         .filter(|w| matches(w))
         .cloned()
         .collect();
@@ -38,7 +38,7 @@ pub fn ArchiveView() -> Element {
     let archived_zones: Vec<util::FlatArea> = flat.iter().filter(|a| a.area.is_archived).cloned().collect();
 
     rsx! {
-        div { class: "max-w-doc mx-auto space-y-8 rise-in",
+        div { class: "space-y-8 rise-in",
             header {
                 h1 { class: "doc-title", "History" }
                 p { class: "text-[15px] text-muted mt-1", "Finished projects and places that have been demolished or repurposed — nothing is ever lost." }
@@ -50,10 +50,10 @@ pub fn ArchiveView() -> Element {
 
             if q.is_empty() && !archived_zones.is_empty() {
                 section {
-                    h2 { class: "section-title mb-3", "Archived Locations" }
+                    h2 { class: "section-title mb-3", "No longer in use" }
                     div { class: "flex flex-wrap gap-2",
                         for a in archived_zones {
-                            Link { key: "{a.area.id}", to: Route::Zone { id: a.area.id }, class: "pill h-8 px-3 bg-tag-gray-bg text-tag-gray-text hover:bg-[#e8e8e5] transition-colors",
+                            Link { key: "{a.area.id}", to: Route::Zone { id: a.area.id }, class: "pill h-8 px-3 bg-tag-gray-bg text-tag-gray-text hover:bg-line transition-colors",
                                 Icon { name: "archive", size: 12 }
                                 "{a.area.name}"
                             }
@@ -80,7 +80,7 @@ pub fn ArchiveView() -> Element {
                                             }
                                             div { class: "flex gap-1.5",
                                                 if in_archived {
-                                                    Pill { tone: Tone::Gray, text: "Archived Locations" }
+                                                    Pill { tone: Tone::Gray, text: "No longer in use" }
                                                 }
                                                 Pill { tone: w.status.tone(), text: w.status.label() }
                                             }

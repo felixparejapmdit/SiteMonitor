@@ -65,6 +65,8 @@ pub fn relative(dt: DateTime<Utc>) -> String {
 pub fn plural(n: usize, word: &str) -> String {
     if n == 1 {
         format!("1 {word}")
+    } else if word == "person" {
+        format!("{n} people")
     } else {
         format!("{n} {word}s")
     }
@@ -236,6 +238,21 @@ pub fn storage_get(key: &str) -> Option<String> {
 pub fn storage_set(key: &str, value: &str) {
     if let Some(s) = window().local_storage().ok().flatten() {
         let _ = s.set_item(key, value);
+    }
+}
+
+/// False on iPhone Safari, which can't show a page element full screen — the button is hidden there.
+pub fn can_fullscreen() -> bool {
+    document().fullscreen_enabled()
+}
+
+/// Shows the element full screen, or leaves full screen if something already is.
+pub fn toggle_fullscreen(id: &str) {
+    let doc = document();
+    if doc.fullscreen_element().is_some() {
+        doc.exit_fullscreen();
+    } else if let Some(el) = doc.get_element_by_id(id) {
+        let _ = el.request_fullscreen();
     }
 }
 

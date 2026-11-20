@@ -17,19 +17,31 @@ use crate::services::sync::{self, Outcome};
 use crate::state::use_app;
 use crate::util;
 
-const QUICK_REASONS: [&str; 6] = [
-    "Accelerating leveling before rain",
-    "Urgent repair needs extra hands",
-    "Materials just arrived",
-    "Finished early here",
-    "Rain — moving to indoor work",
-    "Owner requested priority",
-];
+/// Unsaved crew numbers survive leaving the page (or a reload) for the rest of the day.
+const CREW_DRAFT_KEY: &str = "sm-crew-draft";
+
+fn today_key() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn restore_draft() -> HashMap<Uuid, u32> {
+    util::storage_get(CREW_DRAFT_KEY)
+        .and_then(|s| serde_json::from_str::<(String, HashMap<Uuid, u32>)>(&s).ok())
+        .filter(|(day, _)| *day == today_key())
+        .map(|(_, d)| d)
+        .unwrap_or_default()
+}
 
 #[component]
 pub fn CrewView() -> Element {
     let app = use_app();
-    let mut draft = use_signal(HashMap::<Uuid, u32>::new);
+    let mut draft = use_signal(restore_draft);
+    let restored = use_hook(|| !draft.peek().is_empty());
+    use_effect(move || {
+        let d = draft.read();
+        let value = if d.is_empty() { String::new() } else { serde_json::to_string(&(today_key(), &*d)).unwrap_or_default() };
+        util::storage_set(CREW_DRAFT_KEY, &value);
+    });
     let mut busy = use_signal(|| false);
     let mut show_move = use_signal(|| false);
     let is_admin = app.is_admin();
@@ -38,9 +50,28 @@ pub fn CrewView() -> Element {
         .work_items
         .read()
         .as_ref()
-        .map(|w| w.iter().filter(|w| matches!(w.status, WorkStatus::Planning | WorkStatus::InProgress | WorkStatus::Halted)).cloned().collect())
+        .map(|w| {
+            w.iter()
+                .filter(|w| matches!(w.status, WorkStatus::Planning | WorkStatus::InProgress | WorkStatus::Halted) && app.can_work_in(w.area_id))
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default();
     let flat = app.flat_areas();
+    // Merged Service 5 workforce: today's attendance and project groups linked to jobs.
+    let workers = crate::views::workforce_ops::use_workers();
+    let groups = use_resource(|| async {
+        let _ = crate::views::personnel::REFRESH();
+        crate::api::get::<Vec<shared::api::WorkGroup>>("/workforce/groups").await.unwrap_or_default()
+    });
+    let people: Vec<Worker> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).collect();
+    let count = |s: WorkerStatus| people.iter().filter(|w| w.status == s).count();
+    let (present_n, absent_n, pass_n) = (count(WorkerStatus::Present), count(WorkerStatus::Absent), count(WorkerStatus::OnPass));
+    let linked = groups.read().clone().unwrap_or_default();
+    let roster_for = move |job: Uuid| -> Option<u32> {
+        let g: Vec<_> = linked.iter().filter(|g| g.work_item_id == Some(job)).collect();
+        (!g.is_empty()).then(|| g.iter().map(|g| g.present).sum())
+    };
     let roster_prompt = app.notifications.read().iter().find(|n| n.kind == NotificationKind::MorningRosterPrompt).cloned();
     let saved: HashMap<Uuid, u32> = items.iter().map(|w| (w.id, w.active_worker_count)).collect();
     let current = |id: Uuid| -> u32 { draft.read().get(&id).copied().unwrap_or_else(|| saved.get(&id).copied().unwrap_or(0)) };
@@ -59,8 +90,8 @@ pub fn CrewView() -> Element {
         let changes = changes.clone();
         async move {
             busy.set(true);
-            let req = ReallocateRequest { allocations: changes, transfers: vec![], reason: Some("Morning crew allocation".into()) };
-            let outcome: Outcome<Vec<WorkItem>> = sync::mutate(app, "Crew allocation", "POST", "/manpower/reallocate", &req).await;
+            let req = ReallocateRequest { allocations: changes, transfers: vec![], reason: Some("Morning crew".into()) };
+            let outcome: Outcome<Vec<WorkItem>> = sync::mutate(app, "Today's crew", "POST", "/manpower/reallocate", &req).await;
             match outcome {
                 Outcome::Saved(_) => {
                     app.success("Today's crew is saved");
@@ -86,13 +117,27 @@ pub fn CrewView() -> Element {
 
             if is_admin {
                 if let Some(p) = roster_prompt {
-                    div { class: "rounded-xl bg-tag-amber-bg border border-[#f0e2b6] px-5 py-4", "data-testid": "roster-banner",
+                    div { class: "rounded-xl bg-tag-amber-bg border border-tag-amber-text/20 px-5 py-4", "data-testid": "roster-banner",
                         p { class: "font-semibold text-tag-amber-text", "Morning Roster Reset: Allocate Today's Crew" }
                         p { class: "text-sm text-tag-amber-text/90 mt-0.5", "{p.body} Use the + and − buttons below, then press Save." }
                     }
                 }
             }
 
+            if !people.is_empty() {
+                div { class: "card px-4 py-3 flex flex-wrap gap-x-8 gap-y-2 text-sm", "data-testid": "workforce-today",
+                    span { class: "text-muted", "Workforce today" }
+                    for (label, n) in [("Total active", people.len()), ("Present", present_n), ("Absent", absent_n), ("On pass", pass_n)] {
+                        span { key: "{label}", b { class: "tabular", "{n}" } " {label}" }
+                    }
+                }
+            }
+
+            if restored && change_count > 0 {
+                div { class: "rounded-xl bg-tag-blue-bg px-5 py-3 text-sm text-tag-blue-text", "data-testid": "crew-draft-restored",
+                    "Your unsaved crew changes were kept. Press Save today's crew to keep them, or Undo to drop them."
+                }
+            }
             if items.is_empty() {
                 EmptyState { icon: "users", title: "No active jobs", body: "Jobs appear here once they're planned or in progress." }
             }
@@ -113,12 +158,20 @@ pub fn CrewView() -> Element {
                                             let changed = value != w.active_worker_count;
                                             let place = util::area_name(&flat, w.area_id);
                                             rsx! {
-                                                div { key: "{id}", class: if changed { "flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 bg-[#fbfaf5]" } else { "flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3" }, "data-testid": "crew-row",
+                                                div { key: "{id}", class: if changed { "flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 bg-tag-amber-bg/40" } else { "flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3" }, "data-testid": "crew-row",
                                                     div { class: "flex-1 min-w-0",
                                                         p { class: "text-[15px] font-medium truncate", "{w.title}" }
                                                         p { class: "text-xs text-muted truncate",
                                                             "{place}"
                                                             if changed { " · was {w.active_worker_count}" }
+                                                        }
+                                                        if let Some(n) = roster_for(id) {
+                                                            p { class: "text-xs text-accent-ink flex items-center gap-2", "data-testid": "crew-roster",
+                                                                "Roster: {n} present in linked groups"
+                                                                if n != value {
+                                                                    button { class: "underline", "data-testid": "crew-use-roster", onclick: move |_| { draft.write().insert(id, n); }, "Use {n}" }
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                     div { class: "flex items-center gap-1.5 self-end sm:self-auto",
@@ -163,8 +216,8 @@ pub fn CrewView() -> Element {
 
         // ------------------------------------------------ sticky save bar
         if change_count > 0 {
-            div { class: "fixed bottom-16 md:bottom-0 inset-x-0 md:left-60 z-30 border-t border-line bg-white/95 backdrop-blur rise-in",
-                div { class: "max-w-6xl mx-auto px-4 sm:px-8 h-16 flex items-center gap-3",
+            div { class: "fixed bottom-16 md:bottom-0 inset-x-0 md:left-[var(--sidebar-w)] z-30 border-t border-line bg-surface/95 backdrop-blur rise-in",
+                div { class: "w-full px-4 sm:px-6 lg:px-10 h-16 flex items-center gap-3",
                     p { class: "flex-1 text-sm",
                         span { class: "font-semibold tabular", "{total} workers" }
                         span { class: "text-muted", " · {util::plural(change_count, \"change\")}" }
@@ -191,7 +244,9 @@ fn MoveWorkersModal(items: Vec<WorkItem>, on_close: EventHandler<()>) -> Element
     let mut source = use_signal(|| with_crew.first().map(|w| w.id));
     let mut dest = use_signal(|| None::<Uuid>);
     let mut count = use_signal(|| 1u32);
-    let mut reason = use_signal(|| QUICK_REASONS[0].to_string());
+    // Quick reasons come from Settings, so the office can tailor them.
+    let reasons = app.settings.read().crew_move_reasons.clone();
+    let mut reason = use_signal(|| reasons.first().cloned().unwrap_or_default());
     let mut busy = use_signal(|| false);
 
     let available = source().and_then(|s| items.iter().find(|w| w.id == s)).map(|w| w.active_worker_count).unwrap_or(0);
@@ -244,21 +299,24 @@ fn MoveWorkersModal(items: Vec<WorkItem>, on_close: EventHandler<()>) -> Element
                 div {
                     p { class: "label", "Why?" }
                     div { class: "flex flex-wrap gap-2 mb-2",
-                        for r in QUICK_REASONS {
+                        for r in reasons {
                             button {
                                 key: "{r}",
-                                class: if reason() == r { "pill h-8 px-3 bg-ink text-white" } else { "pill h-8 px-3 bg-hover text-ink hover:bg-[#e8e8e5]" },
-                                onclick: move |_| reason.set(r.to_string()),
+                                class: if reason() == r { "pill h-8 px-3 chip-on" } else { "pill h-8 px-3 bg-hover text-ink hover:bg-line" },
+                                onclick: {
+                                    let r = r.clone();
+                                    move |_| reason.set(r.clone())
+                                },
                                 "{r}"
                             }
                         }
                     }
                     input { class: "field", placeholder: "Or type a reason", value: "{reason}", oninput: move |e| reason.set(e.value()) }
                 }
-                div { class: "flex justify-end gap-2 pt-1",
+                div { class: "modal-actions",
                     button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
                     button {
-                        class: "btn-primary btn-lg",
+                        class: "btn-primary",
                         disabled: !can_submit || busy(),
                         "data-testid": "confirm-move-workers",
                         onclick: move |_| async move {

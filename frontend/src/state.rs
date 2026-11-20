@@ -43,7 +43,10 @@ pub enum MapLayer {
 pub struct AppState {
     // --- who is using the app (dev-mode role switcher)
     pub users: Signal<Vec<User>>,
+    pub settings: Signal<EstateSettings>,
     pub current_user: Signal<Option<User>>,
+    /// False until we know whether someone is signed in.
+    pub auth_ready: Signal<bool>,
     // --- connectivity
     pub is_online: Signal<bool>,
     pub pending_offline_mutations: Signal<Vec<OfflineMutation>>,
@@ -74,7 +77,9 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             users: Signal::new(Vec::new()),
+            settings: Signal::new(EstateSettings::default()),
             current_user: Signal::new(None),
+            auth_ready: Signal::new(false),
             is_online: Signal::new(true),
             pending_offline_mutations: Signal::new(Vec::new()),
             ws_connected: Signal::new(false),
@@ -113,6 +118,11 @@ impl AppState {
         self.role() == Some(UserRole::OfficeAdmin)
     }
 
+    /// Checks the access matrix (the server checks again on every action).
+    pub fn can(&self, p: Permission) -> bool {
+        self.current_user.read().as_ref().map(|u| u.can(p)).unwrap_or(false)
+    }
+
     pub fn user_id(&self) -> Option<Uuid> {
         self.current_user.read().as_ref().map(|u| u.id)
     }
@@ -123,6 +133,13 @@ impl AppState {
 
     pub fn work_item(&self, id: Uuid) -> Option<WorkItem> {
         self.work_items.read().as_ref()?.iter().find(|w| w.id == id).cloned()
+    }
+
+    /// Mirrors the server: Site Monitors work only in their zones and the zones inside them.
+    pub fn can_work_in(&self, area: Uuid) -> bool {
+        let Some(me) = self.current_user.read().clone() else { return false };
+        let flat = self.flat_areas();
+        shared::access::works_in(&me, area, |z| flat.iter().find(|a| a.area.id == z).and_then(|a| a.area.parent_id))
     }
 
     pub fn user_name(&self, id: Uuid) -> String {

@@ -3,8 +3,7 @@
  * equipment moves and breakdown reports, the weighted phase updater, the
  * draft-to-VIP pipeline, the Master Scheduler and the Map Studio.
  */
-import { test, expect } from "@playwright/test";
-import { api, openAs, pngBuffer, resetDatabase, toast, userFor, workItemByTitle } from "./helpers";
+import { api, expect, openAs, pngBuffer, resetDatabase, test, toast, userFor, workItemByTitle } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 test.beforeAll(() => resetDatabase());
@@ -25,16 +24,17 @@ test("mid-day reshuffle moves workers with a quick reason", async ({ page }) => 
   await openAs(page, "SiteMonitor", "/crew", "Jun");
   await page.getByTestId("open-move-workers").click();
   const parking = await workItemByTitle(page.request, "Parking Conversion to Multi-Purpose Hall");
-  const suite = await workItemByTitle(page.request, "Master Suite Refit");
+  // Both jobs are in Jun's zones (the hall and the Grand Garden); others aren't offered to him.
+  const wall = await workItemByTitle(page.request, "Retaining Wall Leveling");
   await page.getByTestId("move-from").selectOption(parking.id);
-  await page.getByTestId("move-to").selectOption(suite.id);
+  await page.getByTestId("move-to").selectOption(wall.id);
   await page.getByTestId("move-plus").click();
   await page.getByTestId("move-plus").click();
   await expect(page.getByTestId("move-count")).toHaveText("3");
   await page.getByRole("button", { name: "Materials just arrived" }).click();
   await page.getByTestId("confirm-move-workers").click();
   await expect(toast(page).filter({ hasText: "Moved 3 workers" })).toBeVisible();
-  expect((await workItemByTitle(page.request, "Master Suite Refit")).active_worker_count).toBe(8);
+  expect((await workItemByTitle(page.request, "Retaining Wall Leveling")).active_worker_count).toBe(9);
 });
 
 test("equipment: zone context lists only that zone, then moves the crane", async ({ page }) => {
@@ -45,6 +45,7 @@ test("equipment: zone context lists only that zone, then moves the crane", async
   map.areas.forEach(walk);
   const terrace = flat.find((a) => a.name === "Retaining Wall Terrace");
   const warehouse = flat.find((a) => a.name === "Contractor Warehouse");
+  const pool = flat.find((a) => a.name === "Outdoor Pool");
   await page.getByTestId("zone-context").selectOption(terrace.id);
   await expect(page.getByTestId("asset-card")).toHaveCount(1);
   await expect(page.getByTestId("asset-card")).toContainText("2-Ton Mini Crane");
@@ -53,9 +54,11 @@ test("equipment: zone context lists only that zone, then moves the crane", async
   const picker = page.getByTestId("asset-picker");
   await expect(picker.locator("option")).toHaveCount(2); // placeholder + crane only
   await picker.selectOption({ label: "2-Ton Mini Crane" });
-  await page.getByTestId("move-dest").selectOption(warehouse.id);
+  // Jun only looks after the garden, the hall and the pool, so the warehouse isn't offered.
+  await expect(page.getByTestId("move-dest").locator(`option[value="${warehouse.id}"]`)).toHaveCount(0);
+  await page.getByTestId("move-dest").selectOption(pool.id);
   await page.getByTestId("confirm-move").click();
-  await expect(toast(page).filter({ hasText: "2-Ton Mini Crane moved to Contractor Warehouse" })).toBeVisible();
+  await expect(toast(page).filter({ hasText: "2-Ton Mini Crane moved to Outdoor Pool" })).toBeVisible();
   await expect(page.getByTestId("asset-card")).toHaveCount(0);
 });
 
@@ -79,7 +82,8 @@ test("breakdown report with deadline impact shifts the project", async ({ page }
 });
 
 test("weighted phase updater with a 16:9 proof photo", async ({ page }) => {
-  await openAs(page, "SiteMonitor", "/", "Jun");
+  // The Master Suite is inside Main Residence 1, which Ana looks after.
+  await openAs(page, "SiteMonitor", "/", "Ana");
   const suite = await workItemByTitle(page.request, "Master Suite Refit");
   await page.goto(`/projects/${suite.id}`);
   await expect(page.getByTestId("progress-updater")).toContainText("3. Joinery (35%)");
@@ -116,13 +120,14 @@ test("draft-to-VIP: monitor reports, admin polishes and publishes", async ({ pag
 
   const admin = await browser.newPage();
   await openAs(admin, "OfficeAdmin", "/decisions");
-  const editor = admin.getByTestId("publish-editor").filter({ hasText: "Imported stone basin delayed by 10 days" });
+  await admin.getByTestId("issue-row").filter({ hasText: "Imported stone basin delayed by 10 days" }).locator("[role=button]").click();
+  const editor = admin.getByTestId("issue-detail").getByTestId("publish-editor").filter({ hasText: "Imported stone basin delayed by 10 days" });
   await expect(editor).toHaveCount(1);
   await editor.getByTestId("publish-summary").fill("The stone basin for the master bathroom is held at the port for about 10 more days.");
   await editor.getByTestId("option-a").fill("Install a local marble basin - No Delay");
   await editor.getByTestId("option-b").fill("Wait for the imported basin - +10 Days Delay");
   await editor.getByTestId("publish-to-vip").click();
-  await expect(toast(admin).filter({ hasText: "Published — the owner was notified instantly" })).toBeVisible();
+  await expect(toast(admin).filter({ hasText: "Sent — the owner was notified" })).toBeVisible();
   await admin.close();
 
   const vip = await userFor(page.request, "VipClient");
@@ -173,11 +178,14 @@ test("map studio: draw a nested zone, reshape and archive it", async ({ page }) 
 
   const panel = page.getByTestId("edit-zone-panel");
   await expect(panel).toContainText("Koi Pond");
+  // The studio flies to the new zone (0.55 s); grab a corner once it has landed.
+  await page.waitForTimeout(800);
   const vertex = page.getByTestId("vertex").first();
   const vb = (await vertex.boundingBox())!;
   await page.mouse.move(vb.x + vb.width / 2, vb.y + vb.height / 2);
   await page.mouse.down();
-  await page.mouse.move(vb.x - 30, vb.y - 20, { steps: 5 });
+  // Drag inward: a sub-zone corner may not leave its parent (Grand Garden).
+  await page.mouse.move(vb.x + 20, vb.y + 14, { steps: 5 });
   await page.mouse.up();
   await page.getByTestId("save-shape").click();
   await expect(toast(page).filter({ hasText: "New shape saved" })).toBeVisible();
@@ -195,5 +203,5 @@ test("history search finds work in archived locations", async ({ page }) => {
   await page.getByTestId("history-search").fill("tool shed");
   const results = page.getByTestId("history-results");
   await expect(results).toContainText("Old Tool Shed Clear-Out");
-  await expect(results).toContainText("Archived Locations");
+  await expect(results).toContainText("No longer in use");
 });

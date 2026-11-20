@@ -3,11 +3,11 @@
  * select and checkbox one at a time (fresh page each time) and fail on any
  * WASM panic, console error, failed API call or blank screen.
  */
-import { test, expect, Page } from "@playwright/test";
-import { openAs, resetDatabase, Role, workItemByTitle } from "./helpers";
+import { Page } from "@playwright/test";
+import { Role, expect, openAs, resetDatabase, signInPage, test, workItemByTitle } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
-test.setTimeout(15 * 60_000);
+test.setTimeout(40 * 60_000); // hundreds of controls, each clicked on a fresh page
 test.beforeAll(() => resetDatabase());
 
 const CONTROLS = "main button:visible, main a[href]:visible, main select:visible, main input[type=checkbox]:visible, [role=dialog] button:visible";
@@ -21,14 +21,15 @@ async function areaId(page: Page, name: string): Promise<string> {
 }
 
 async function pagesFor(page: Page, role: Role): Promise<string[]> {
+  await signInPage(page, "OfficeAdmin");
   const parking = (await workItemByTitle(page.request, "Parking Conversion to Multi-Purpose Hall")).id;
   const pool = (await workItemByTitle(page.request, "Swimming Pool Cleanup")).id;
   const gazebo = (await workItemByTitle(page.request, "Rose Garden Gazebo Build")).id;
   const hall = await areaId(page, "Multi-Purpose Hall (Parking Conversion)");
   const shared = ["/", "/agenda", "/archive", `/projects/${parking}`, `/projects/${pool}`, `/zones/${hall}`, `/handover/${gazebo}`];
   if (role === "VipClient") return shared;
-  const staff = [...shared, "/crew", "/equipment", "/decisions"];
-  return role === "OfficeAdmin" ? [...staff, "/map-studio"] : staff;
+  const staff = [...shared, "/crew", "/equipment", "/decisions", "/assignments", "/personnel"];
+  return role === "OfficeAdmin" ? [...staff, "/map-studio", "/access", "/people", "/settings", "/workforce", "/operations", "/clinic"] : staff;
 }
 
 /** Collects problems (panics, console errors, failed API calls) while a page is open. */

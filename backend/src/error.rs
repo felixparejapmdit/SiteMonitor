@@ -15,6 +15,8 @@ pub enum AppError {
     Forbidden(String),
     #[error("{0}")]
     Unauthorized(String),
+    #[error("{0}")]
+    TooMany(String),
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
     #[error("{0}")]
@@ -42,6 +44,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::Forbidden(m) => (StatusCode::FORBIDDEN, m.clone()),
             AppError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
+            AppError::TooMany(m) => (StatusCode::TOO_MANY_REQUESTS, m.clone()),
             AppError::Db(e) => {
                 tracing::error!(error = %e, "database error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong saving or loading data. Please try again.".into())
