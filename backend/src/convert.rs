@@ -35,6 +35,20 @@ pub fn from_json<T: DeserializeOwned + Default>(value: &Json) -> T {
     serde_json::from_value(value.clone()).unwrap_or_default()
 }
 
+/// Whether the Clinic module is switched on (Access -> Modules); kept in step
+/// with the estate settings. While off, nobody has clinic access.
+pub static CLINIC_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A person's effective permissions: role defaults and overrides, minus the
+/// permissions of modules that are switched off.
+pub fn permissions(access: &AccessOverrides, role: UserRole) -> Vec<Permission> {
+    let mut p = access.effective(role);
+    if !CLINIC_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        p.retain(|x| *x != Permission::ManageClinic);
+    }
+    p
+}
+
 pub fn user(m: user::Model) -> User {
     let role: UserRole = dec(&m.role);
     let access = serde_json::from_value::<AccessOverrides>(m.permission_overrides.clone()).unwrap_or_default().normalized(role);
@@ -46,7 +60,7 @@ pub fn user(m: user::Model) -> User {
         email: m.email,
         assigned_area_ids: from_json::<Vec<Uuid>>(&m.assigned_area_ids),
         is_active: m.is_active,
-        permissions: access.effective(role),
+        permissions: permissions(&access, role),
         access,
         must_change_password: m.must_change_password,
         last_sign_in_at: m.last_sign_in_at,

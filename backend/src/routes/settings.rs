@@ -67,7 +67,14 @@ pub async fn update(State(state): State<AppState>, me: CurrentUser, Json(req): J
     } else {
         row.insert(&state.db).await?;
     }
-    state.hub.changed(&[DataScope::Settings]).await;
+    // Switching a module on or off changes everyone's effective permissions.
+    let was = crate::convert::CLINIC_ON.swap(s.clinic_enabled, std::sync::atomic::Ordering::Relaxed);
+    if was != s.clinic_enabled {
+        tracing::info!(by = %me.0.name, on = s.clinic_enabled, "clinic module switched");
+        state.hub.changed(&[DataScope::Settings, DataScope::Users]).await;
+    } else {
+        state.hub.changed(&[DataScope::Settings]).await;
+    }
     Ok(Json(s))
 }
 
@@ -134,12 +141,12 @@ mod tests {
     }
 }
 
-/// Creating or restoring a database package needs settings, workforce and clinic
-/// access: the package holds all three (in practice, the Office Admin).
+/// Creating or restoring a database package needs settings and backup access
+/// (in practice, the Office Admin). Clinic records go along even while the
+/// Clinic module is off, so a restore never loses them.
 fn require_package(me: &CurrentUser) -> AppResult<()> {
     me.require(Permission::ManageSettings)?;
-    me.require(Permission::ManageWorkforce)?;
-    me.require(Permission::ManageClinic)
+    me.require(Permission::BackupWorkforce)
 }
 
 /// `POST /api/settings/backup` — the whole database (estate, workforce, uploaded

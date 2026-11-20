@@ -62,7 +62,7 @@ Open **http://localhost:8737** and sign in.
 
 ### Access
 
-**Access** (Office Admin) is a matrix of 18 permissions × people. Everyone starts with their role's defaults. The admin can add or remove single permissions for one person, review the changes, and save. Every change is logged, the server checks the matrix on every action, nobody can remove their own "Change access", and at least one active person always keeps it.
+**Access** (Office Admin) is a matrix of 27 permissions × people. Everyone starts with their role's defaults. The admin can add or remove single permissions for one person, review the changes, and save. Every change is logged, the server checks the matrix on every action, nobody can remove their own "Change access", and at least one active person always keeps it.
 
 On Windows you can also start the database and the app in the background with:
 
@@ -75,6 +75,12 @@ To reset the demo data at any time:
 ```bash
 cargo run -p backend --release -- reset
 ```
+
+#### Workforce modules and the Clinic switch
+
+The modules merged from Service 5 DB each have their own permission in the Access matrix (group "Workforce (Service 5)"): Assignments, personnel & project groups; Workforce reports; Overnight duty; Overtime; Visitations; Signatories; Print centre; Backup, restore & snapshots; and Clinic ledger. A page or tab only shows for people who hold its permission, and the server checks the same permission.
+
+The **Clinic module is switched off** for everyone by default (Access → Modules). While it is off nobody has clinic access, whatever their permissions say, and the Clinic ledger page is hidden; its code, routes and records are kept, and each person's clinic permission is preserved. Switching it on (Access → Modules → Switch on) brings it all back.
 
 ## Tests
 

@@ -178,3 +178,13 @@ export function auditData(): { workers: number; workers_plain: number; records: 
   const line = out.trim().split("\n").reverse().find((l) => l.trim().startsWith("{"));
   return JSON.parse(line!);
 }
+
+/** Switches the Clinic module (off by default) on or off, as the Office Admin. */
+export async function setClinic(on: boolean) {
+  const admin = await userFor(undefined as unknown as APIRequestContext, "OfficeAdmin");
+  const ctx = await pwRequest.newContext({ baseURL: BASE_URL, extraHTTPHeaders: { authorization: `Bearer ${admin.token}` } });
+  const settings = await (await ctx.get("/api/settings")).json();
+  const res = await ctx.put("/api/settings", { data: { ...settings, clinic_enabled: on } });
+  if (!res.ok()) throw new Error(`could not switch the clinic module: ${await res.text()}`);
+  await ctx.dispose();
+}

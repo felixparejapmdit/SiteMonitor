@@ -34,7 +34,7 @@ pub fn SignatoriesBoard() -> Element {
     let meta = use_records("project_groups_meta");
     let mut assigning = use_signal(|| None::<String>);
     let mut confirm_delete = use_signal(|| None::<String>);
-    let can_edit = app.can(Permission::ManageWorkforce);
+    let can_edit = app.can(Permission::ManageSignatories);
     let list = sigs.read().clone().unwrap_or_default();
     let people: Vec<Worker> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).collect();
     let mut vols: HashMap<String, usize> = HashMap::new();

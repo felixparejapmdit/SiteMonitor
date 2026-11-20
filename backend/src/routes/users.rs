@@ -97,7 +97,7 @@ pub async fn update(
     if role_changed {
         after.access = AccessOverrides::default();
     }
-    after.permissions = after.access.effective(role);
+    after.permissions = convert::permissions(&after.access, role);
     keep_an_access_admin(&state, &[after]).await?;
     let mut a = row.into_active_model();
     if role_changed {
@@ -211,8 +211,21 @@ pub async fn save_access(
     for c in &req.changes {
         let row = Users::find_by_id(c.user_id).one(&state.db).await?.ok_or_else(|| AppError::not_found("person"))?;
         let before = convert::user(row);
-        let access = c.access.normalized(before.role);
-        let effective = access.effective(before.role);
+        let mut access = c.access.normalized(before.role);
+        // While the Clinic module is off its permission can't be seen or changed:
+        // keep whatever each person had, so switching the module back on restores it.
+        if !convert::CLINIC_ON.load(std::sync::atomic::Ordering::Relaxed) {
+            access.granted.retain(|p| *p != Permission::ManageClinic);
+            access.revoked.retain(|p| *p != Permission::ManageClinic);
+            if before.access.granted.contains(&Permission::ManageClinic) {
+                access.granted.push(Permission::ManageClinic);
+            }
+            if before.access.revoked.contains(&Permission::ManageClinic) {
+                access.revoked.push(Permission::ManageClinic);
+            }
+            access = access.normalized(before.role);
+        }
+        let effective = convert::permissions(&access, before.role);
         if before.id == me.0.id && !effective.contains(&Permission::ManageAccess) {
             return Err(AppError::bad("You can't remove your own \u{201c}Change access\u{201d} permission. Ask another admin."));
         }

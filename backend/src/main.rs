@@ -93,6 +93,8 @@ async fn main() -> anyhow::Result<()> {
     if seed::seed_if_empty(&db).await? {
         tracing::info!("seeded a fresh estate");
     }
+    // Modules switched off in settings (e.g. the clinic) take their permissions with them.
+    convert::CLINIC_ON.store(services::load_settings(&db).await?.clinic_enabled, std::sync::atomic::Ordering::Relaxed);
     auth::ensure_passwords(&db).await?;
 
     let state = AppState { db, hub: ws::Hub::default(), upload_dir: upload_dir.clone(), throttle: Default::default() };

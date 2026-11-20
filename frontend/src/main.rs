@@ -258,8 +258,10 @@ fn nav_for(app: AppState) -> Vec<NavItem> {
                 v.push(item(Route::Assignments {}, "Assignments", "check", CREW, Hue::Emerald));
                 v.push(item(Route::Personnel {}, "Personnel", "users", CREW, Hue::Teal));
             }
-            if app.can(Permission::ManageWorkforce) {
+            if !views::page_tabs(app, "workforce").is_empty() {
                 v.push(item(Route::Workforce {}, "Workforce records", "layers", CREW, Hue::Indigo));
+            }
+            if !views::page_tabs(app, "operations").is_empty() {
                 v.push(item(Route::Operations {}, "Operations", "clock", "Operations & duty", Hue::Blue));
             }
             if app.can(Permission::ManageClinic) {
@@ -900,16 +902,16 @@ fn no_access(icon: &'static str, page: &str, permission: &str) -> Element {
 
 #[component]
 fn Workforce() -> Element {
-    if !use_app().can(Permission::ManageWorkforce) {
-        return no_access("layers", "workforce records", "Manage workers & volunteers");
+    if views::page_tabs(use_app(), "workforce").is_empty() {
+        return no_access("layers", "workforce records", "Assignments, personnel & project groups");
     }
     rsx! { views::workforce_ops::WorkforceView {} }
 }
 
 #[component]
 fn Operations() -> Element {
-    if !use_app().can(Permission::ManageWorkforce) {
-        return no_access("clock", "duty & operations", "Manage workers & volunteers");
+    if views::page_tabs(use_app(), "operations").is_empty() {
+        return no_access("clock", "operations", "Overnight duty");
     }
     rsx! { views::workforce_ops::OperationsView {} }
 }

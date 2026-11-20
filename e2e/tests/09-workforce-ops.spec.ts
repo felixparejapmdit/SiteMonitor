@@ -5,7 +5,7 @@
  * unified sidebar per role, live refresh across tabs, and print set-ups.
  */
 import { Page, request as pwRequest } from "@playwright/test";
-import { BASE_URL, expect, openAs, resetDatabase, test, userFor, workItemByTitle } from "./helpers";
+import { BASE_URL, expect, openAs, resetDatabase, test, userFor, workItemByTitle, setClinic } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);
@@ -28,6 +28,7 @@ const stubPrint = (page: Page) => page.evaluate(() => { (window as any).print = 
 
 test.beforeAll(async () => {
   resetDatabase();
+  await setClinic(true); // the clinic module is off by default
   const admin = await userFor(undefined as any, "OfficeAdmin");
   const ctx = await pwRequest.newContext({ baseURL: BASE_URL, extraHTTPHeaders: { authorization: `Bearer ${admin.token}` } });
   const res = await ctx.post("/api/workforce/import?file_name=seed.json&mode=Merge", {

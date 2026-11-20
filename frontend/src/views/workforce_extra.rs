@@ -636,7 +636,7 @@ pub fn VisitationsHub() -> Element {
     let mut status = use_signal(String::new);
     let people = active(&workers);
     let map = by_a_number(&people);
-    let can_edit = app.can(Permission::ManageWorkforce);
+    let can_edit = app.can(Permission::ManageVisitations);
     let mut list = visits.read().clone().unwrap_or_default();
     list.sort_by(|a, b| s(a, "date").cmp(&s(b, "date")));
     let names: Vec<String> = ministers.read().clone().unwrap_or_default().iter().map(|m| s(m, "name")).filter(|n| !n.is_empty()).collect();

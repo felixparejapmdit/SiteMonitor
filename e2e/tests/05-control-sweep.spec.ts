@@ -7,7 +7,7 @@ import { Page } from "@playwright/test";
 import { Role, expect, openAs, resetDatabase, signInPage, test, workItemByTitle } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
-test.setTimeout(15 * 60_000);
+test.setTimeout(40 * 60_000); // hundreds of controls, each clicked on a fresh page
 test.beforeAll(() => resetDatabase());
 
 const CONTROLS = "main button:visible, main a[href]:visible, main select:visible, main input[type=checkbox]:visible, [role=dialog] button:visible";

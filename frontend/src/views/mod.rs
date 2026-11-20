@@ -38,18 +38,31 @@ pub const CLINIC_TABS: &[&str] = &["Health episodes", "Clearance", "Clinic visit
 pub fn settings_tabs(app: AppState) -> Vec<&'static str> {
     let mut t = vec!["General", "Crew", "Issues", "Schedule"];
     // Service 5's Admin & tools: Backup DB, Restore DB, Daily Snapshot.
-    if app.can(Permission::ManageWorkforce) {
+    if app.can(Permission::BackupWorkforce) {
         t.extend(["Backup DB", "Restore DB", "Daily Snapshot"]);
     }
     t.push("Estate data");
     t
 }
 
+/// The permission (Access page) that opens a Workforce or Operations tab.
+pub fn tab_permission(tab: &str) -> Permission {
+    match tab {
+        "Dashboard" | "Departments" | "Org Chart" | "History Log" | "Dependability" => Permission::ViewWorkforceReports,
+        "ID Cards" | "Attendance Gen" | "Update Forms" | "Print" => Permission::PrintWorkforce,
+        "Visitations" => Permission::ManageVisitations,
+        "Overnight Duty" | "Duty History" => Permission::ManageDuty,
+        "OT Calculator" | "OT Entries" => Permission::ManageOvertime,
+        "Signatories" => Permission::ManageSignatories,
+        _ => Permission::ManageWorkforce,
+    }
+}
+
 /// Tabs for a page key ("" = the page has none).
 pub fn page_tabs(app: AppState, page: &str) -> Vec<&'static str> {
     match page {
-        "workforce" => WORKFORCE_TABS.to_vec(),
-        "operations" => OPERATIONS_TABS.to_vec(),
+        "workforce" => WORKFORCE_TABS.iter().copied().filter(|t| app.can(tab_permission(t))).collect(),
+        "operations" => OPERATIONS_TABS.iter().copied().filter(|t| app.can(tab_permission(t))).collect(),
         "clinic" => CLINIC_TABS.to_vec(),
         "settings" => settings_tabs(app),
         _ => vec![],

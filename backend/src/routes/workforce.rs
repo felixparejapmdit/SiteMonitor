@@ -200,7 +200,7 @@ pub async fn summary(State(state): State<AppState>, user: CurrentUser) -> AppRes
 /// printed reports (family roster, records update forms). Health details only
 /// with "Clinic ledger".
 pub async fn family_roster(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<Value>>> {
-    user.require(Permission::ManageWorkforce)?;
+    require_any(&user, &[Permission::ManageWorkforce, Permission::PrintWorkforce])?;
     let clinic = user.0.can(Permission::ManageClinic);
     let mut out: Vec<Value> = workforce::people(&state.db)
         .await?
@@ -234,9 +234,7 @@ pub async fn family_roster(State(state): State<AppState>, user: CurrentUser) -> 
 
 /// `GET /api/workers` — everyone who manages crew can see the list.
 pub async fn list(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<Worker>>> {
-    if !user.0.can(Permission::ManageWorkforce) {
-        user.require(Permission::ManageCrew)?;
-    }
+    can_read_workforce(&user)?;
     let people = workforce::people(&state.db).await?;
     let visible = visible_ids(&state, &user, &people).await?;
     let mut out: Vec<Worker> =
@@ -300,11 +298,35 @@ async fn announce(state: &AppState, headers: Option<&HeaderMap>) {
     state.hub.changed_from(&[DataScope::Workforce], origin).await;
 }
 
+/// Any workforce module (or managing crew) needs the people list and the shared lists.
+const WORKFORCE_MODULES: &[Permission] = &[
+    Permission::ManageWorkforce, Permission::ManageCrew, Permission::ViewWorkforceReports, Permission::ManageDuty, Permission::ManageOvertime,
+    Permission::ManageVisitations, Permission::ManageSignatories, Permission::PrintWorkforce, Permission::BackupWorkforce,
+];
+
 fn can_read_workforce(user: &CurrentUser) -> AppResult<()> {
-    if user.0.can(Permission::ManageWorkforce) {
+    if WORKFORCE_MODULES.iter().any(|p| user.0.can(*p)) {
         return Ok(());
     }
     user.require(Permission::ManageCrew)
+}
+
+fn require_any(user: &CurrentUser, perms: &[Permission]) -> AppResult<()> {
+    match perms.iter().find(|p| user.0.can(**p)) {
+        Some(_) => Ok(()),
+        None => user.require(perms[0]),
+    }
+}
+
+/// The module that may change a list.
+fn module_of(collection: &str) -> Permission {
+    match collection {
+        "duty_areas" | "duty_schedules" => Permission::ManageDuty,
+        "ot_entries" => Permission::ManageOvertime,
+        "visitations" | "visitation_groups" | "ministers" => Permission::ManageVisitations,
+        "signatories" => Permission::ManageSignatories,
+        _ => Permission::ManageWorkforce,
+    }
 }
 
 fn today() -> String {
@@ -421,7 +443,7 @@ fn check_collection(user: &CurrentUser, collection: &str, write: bool) -> AppRes
         return user.require(Permission::ManageClinic);
     }
     if write {
-        user.require(Permission::ManageWorkforce)
+        user.require(module_of(collection))
     } else {
         can_read_workforce(user)
     }
@@ -488,7 +510,7 @@ pub async fn import(
     headers: HeaderMap,
     bytes: Bytes,
 ) -> AppResult<Json<WorkforceImportReport>> {
-    user.require(Permission::ManageWorkforce)?;
+    user.require(Permission::BackupWorkforce)?;
     if bytes.is_empty() {
         return Err(AppError::bad("The file was empty. Please choose the backup again."));
     }
@@ -506,7 +528,7 @@ pub async fn import(
 /// `GET /api/workforce/export` — one file with every workforce record, encrypted
 /// with the passphrase in `x-backup-passphrase` (`.agwcz`, the format Service 5 uses).
 pub async fn export(State(state): State<AppState>, user: CurrentUser, Query(q): Query<ExportQuery>, headers: HeaderMap) -> AppResult<Json<Value>> {
-    user.require(Permission::ManageWorkforce)?;
+    user.require(Permission::BackupWorkforce)?;
     let mut all = workforce::export(&state.db).await?;
     // Selective backup (Service 5's backup picker): keep only the chosen lists.
     if let (Some(keep), Some(m)) = (q.collections.as_deref().filter(|c| !c.is_empty()), all.as_object_mut()) {
@@ -618,7 +640,7 @@ fn roster_rows(days: Vec<(String, Vec<Value>)>) -> Vec<Value> {
 /// `GET /api/workforce/project-history` — who was on each project, day by day,
 /// from the daily snapshots and today (Service 5's "Project Roster History").
 pub async fn project_history(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<Value>>> {
-    user.require(Permission::ManageWorkforce)?;
+    require_any(&user, &[Permission::ManageWorkforce, Permission::ViewWorkforceReports])?;
     let mut days: Vec<(String, Vec<Value>)> = workforce::all_snapshots(&state.db)
         .await?
         .into_iter()
@@ -631,7 +653,7 @@ pub async fn project_history(State(state): State<AppState>, user: CurrentUser) -
 
 /// `GET /api/workforce/snapshots`
 pub async fn snapshots(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<WorkforceSnapshotInfo>>> {
-    user.require(Permission::ManageWorkforce)?;
+    user.require(Permission::BackupWorkforce)?;
     let rows = state.db.query_all(stmt("SELECT id, taken_at, reason, workers FROM workforce_snapshots ORDER BY taken_at DESC", vec![])).await?;
     Ok(Json(
         rows.iter()
@@ -649,7 +671,7 @@ pub async fn snapshots(State(state): State<AppState>, user: CurrentUser) -> AppR
 
 /// `POST /api/workforce/snapshots` — "take a snapshot now".
 pub async fn take_snapshot(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<WorkforceSnapshotInfo>>> {
-    user.require(Permission::ManageWorkforce)?;
+    user.require(Permission::BackupWorkforce)?;
     workforce::snapshot(&state.db, "manual").await?;
     snapshots(State(state), user).await
 }
@@ -657,7 +679,7 @@ pub async fn take_snapshot(State(state): State<AppState>, user: CurrentUser) -> 
 /// `POST /api/workforce/snapshots/{id}/restore` — puts the workforce data back
 /// as it was (the current data is snapshotted first, and empty parts never wipe).
 pub async fn restore_snapshot(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<WorkforceImportReport>> {
-    user.require(Permission::ManageWorkforce)?;
+    user.require(Permission::BackupWorkforce)?;
     let data = workforce::snapshot_data(&state.db, id).await?.ok_or_else(|| AppError::not_found("snapshot"))?;
     let mut n = workforce::normalize(data)?;
     n.label = "Snapshot restore".into();

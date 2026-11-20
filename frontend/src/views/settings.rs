@@ -111,7 +111,7 @@ pub fn SettingsView() -> Element {
 
             }
             if tab == "Backup DB" {
-                if app.can(Permission::ManageClinic) {
+                if app.can(Permission::BackupWorkforce) {
                     Section { title: "Back up the whole database", hint: "Estate, projects, personnel, clinic and photos as one encrypted package. Share the package and its passphrase directly with your team, never through GitHub.",
                         BackupRestore { part: "backup" }
                     }
@@ -121,7 +121,7 @@ pub fn SettingsView() -> Element {
                 }
             }
             if tab == "Restore DB" {
-                if app.can(Permission::ManageClinic) {
+                if app.can(Permission::BackupWorkforce) {
                     Section { title: "Restore a database package", hint: "Replaces this estate, its personnel and photos with a package made on another machine. Sign-in accounts here are kept.",
                         BackupRestore { part: "restore" }
                     }

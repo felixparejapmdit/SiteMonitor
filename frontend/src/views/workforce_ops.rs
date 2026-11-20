@@ -299,14 +299,15 @@ fn status_tone(s: WorkerStatus) -> Tone {
 
 #[component]
 pub fn WorkforceView() -> Element {
-    let tab = current_tab("workforce", crate::views::WORKFORCE_TABS);
+    let tabs = crate::views::page_tabs(use_app(), "workforce");
+    let tab = current_tab("workforce", &tabs);
     rsx! {
         div { class: "space-y-5 rise-in",
             header { class: "space-y-1",
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Workforce" }
                 p { class: "text-[15px] text-muted", "The workforce dashboard, departments, ID cards, project groups, visitations, reassignments, attendance lists, update forms and archived personnel." }
             }
-            PageTabs { page: "workforce", tabs: crate::views::WORKFORCE_TABS.to_vec() }
+            PageTabs { page: "workforce", tabs: tabs.clone() }
             match tab {
                 "Dashboard" => rsx! { crate::views::workforce_more::DashboardTab {} crate::views::workforce_pages::DashboardCharts {} crate::views::workforce_extra::DashboardMore {} },
                 "Departments" => rsx! { DepartmentsTab {} crate::views::workforce_extra::HousingTables {} },
@@ -555,14 +556,15 @@ fn HistoryTab() -> Element {
 
 #[component]
 pub fn OperationsView() -> Element {
-    let tab = current_tab("operations", crate::views::OPERATIONS_TABS);
+    let tabs = crate::views::page_tabs(use_app(), "operations");
+    let tab = current_tab("operations", &tabs);
     rsx! {
         div { class: "space-y-5 rise-in",
             header { class: "space-y-1 no-print",
                 h1 { class: "text-2xl sm:text-3xl font-semibold tracking-tight", "Operations" }
                 p { class: "text-[15px] text-muted", "Overnight duty, the encoder, attendance, overtime, the org chart, history, dependability, signatories and printing." }
             }
-            PageTabs { page: "operations", tabs: crate::views::OPERATIONS_TABS.to_vec() }
+            PageTabs { page: "operations", tabs: tabs.clone() }
             match tab {
                 "Overnight Duty" => rsx! { DutyTab {} crate::views::workforce_pages::DutyOverrides {} },
                 "Duty History" => rsx! { crate::views::workforce_extra::DutyMonth {} crate::views::workforce_more::DutyHistoryTab {} },
@@ -610,7 +612,7 @@ fn DutyTab() -> Element {
     let workers = use_workers();
     let mut date = use_signal(today);
     let mut editing = use_signal(|| None::<(String, Value)>);
-    let can_edit = app.can(Permission::ManageWorkforce);
+    let can_edit = app.can(Permission::ManageDuty);
     let people = workers.read().clone().unwrap_or_default();
     let map = by_a_number(&people);
     let area_list = areas.read().clone().unwrap_or_default();
@@ -935,19 +937,19 @@ fn OvertimeTab() -> Element {
                 "All days"
             }
             button { class: "btn-secondary", "data-testid": "ot-schedule-print", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print OT schedule" }
-            if app.can(Permission::ManageWorkforce) {
+            if app.can(Permission::ManageOvertime) {
                 button { class: "btn-secondary", "data-testid": "ot-copy-yesterday", onclick: copy_yesterday, "Copy the day before" }
             }
         }
         div { class: "flex flex-wrap items-center justify-between gap-3 no-print",
             p { class: "text-sm text-muted tabular", "data-testid": "ot-total", "{list.len()} entries · total ₱{total:.2}" }
-            if app.can(Permission::ManageWorkforce) {
+            if app.can(Permission::ManageOvertime) {
                 button { class: "btn-secondary", "data-testid": "ot-paste-open", onclick: move |_| pasting.set(true), Icon { name: "edit" } "From a list of names" }
                 button { class: "btn-primary", "data-testid": "ot-add", onclick: move |_| editing.set(Some((new_id("ot"), json!({ "date": day(), "otType": "regular", "status": "approved" })))), Icon { name: "plus" } "Add overtime" }
             }
         }
         if pasting() { crate::views::workforce_more::OtPaste { on_close: move |_| pasting.set(false) } }
-        if app.can(Permission::ManageWorkforce) && !every_day() { crate::views::workforce_pages::OtEncoder { day: day() } }
+        if app.can(Permission::ManageOvertime) && !every_day() { crate::views::workforce_pages::OtEncoder { day: day() } }
         p { class: "font-semibold print-only", "Overtime schedule {day}" }
         Table { head: vec!["Date", "Work", "Who", "Kind", "Hours", "Rate", "Pay"], rows, on_edit: move |id: String| {
             if let Some(v) = sorted.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) }

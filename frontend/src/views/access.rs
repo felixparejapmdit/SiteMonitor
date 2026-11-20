@@ -71,6 +71,7 @@ pub fn AccessView() -> Element {
     });
 
     let Some(m) = data() else { return rsx! { crate::components::ui::SkeletonPage {} } };
+    let clinic_on = app.settings.read().clinic_enabled;
     let me = app.user_id();
     let d = draft();
     let set_of = |u: &User| d.get(&u.id).cloned().unwrap_or_else(|| sorted(u.permissions.clone()));
@@ -158,6 +159,8 @@ pub fn AccessView() -> Element {
                 }
             }
 
+            ModulesCard {}
+
             // ---- toolbar
             div { class: "flex flex-wrap items-center gap-2",
                 div { class: "relative w-full sm:w-64",
@@ -238,6 +241,7 @@ pub fn AccessView() -> Element {
                                             p { class: "font-medium text-ink flex items-center gap-1.5",
                                                 "{p.label()}"
                                                 if p.is_sensitive() { span { class: "pill bg-tag-amber-bg text-tag-amber-text", title: "Gives admin powers", "Admin" } }
+                                                if p == Permission::ManageClinic && !clinic_on { span { class: "pill bg-tag-gray-bg text-tag-gray-text", "Module off" } }
                                             }
                                             p { class: "text-xs text-muted mt-0.5 max-w-[320px]", "{p.description()}" }
                                         }
@@ -246,7 +250,8 @@ pub fn AccessView() -> Element {
                                                 let set = set_of(u);
                                                 let state = cell(u, &set, p);
                                                 let changed = set.contains(&p) != u.permissions.contains(&p);
-                                                let locked = Some(u.id) == me && p == Permission::ManageAccess;
+                                                // Your own access admin can't be removed; a switched-off module's permission can't be changed.
+                                                let locked = (Some(u.id) == me && p == Permission::ManageAccess) || (p == Permission::ManageClinic && !clinic_on);
                                                 let on = set.contains(&p);
                                                 let id = u.id;
                                                 let label = format!("{} — {}", u.name, p.label());
@@ -427,5 +432,56 @@ fn CellMark(state: Cell) -> Element {
         Cell::None => rsx! {
             span { class: "inline-flex w-6 h-6 rounded-md border border-line items-center justify-center", "aria-hidden": "true" }
         },
+    }
+}
+
+/// Modules that can be switched off for everyone without losing their data.
+#[component]
+fn ModulesCard() -> Element {
+    let app = use_app();
+    let mut busy = use_signal(|| false);
+    let on = app.settings.read().clinic_enabled;
+    let can = app.can(Permission::ManageSettings);
+    let toggle = move |_| async move {
+        busy.set(true);
+        let mut s = app.settings.peek().clone();
+        s.clinic_enabled = !s.clinic_enabled;
+        match api::put::<_, EstateSettings>("/settings", &s).await {
+            Ok(v) => {
+                let mut settings = app.settings;
+                settings.set(v.clone());
+                app.success(if v.clinic_enabled { "Clinic module switched on" } else { "Clinic module switched off" });
+                // Everyone's permissions change with it; reload to pick up yours.
+                gloo_timers::future::TimeoutFuture::new(600).await;
+                if let Some(w) = web_sys::window() {
+                    let _ = w.location().reload();
+                }
+            }
+            Err(e) => app.error(e.message()),
+        }
+        busy.set(false);
+    };
+    rsx! {
+        section { class: "card p-4 space-y-3", "data-testid": "access-modules",
+            p { class: "eyebrow", "Modules" }
+            div { class: "flex flex-wrap items-center gap-3",
+                div { class: "flex-1 min-w-[16rem]",
+                    p { class: "font-medium", "Clinic ledger (health episodes, clinic visits, vaccines, medications, contact tracing)" }
+                    p { class: "text-sm text-muted",
+                        if on { "On: people with the Clinic ledger permission below can use it." } else { "Off for everyone. Its records are kept and come back when it is switched on." }
+                    }
+                }
+                button {
+                    class: if on { "btn-secondary" } else { "btn-primary" },
+                    role: "switch",
+                    "aria-checked": on,
+                    "data-testid": "module-clinic",
+                    disabled: !can || busy(),
+                    title: if can { "Switch the clinic module" } else { "Needs the Change estate settings permission" },
+                    onclick: toggle,
+                    if on { "Switch off" } else { "Switch on" }
+                }
+            }
+        }
     }
 }

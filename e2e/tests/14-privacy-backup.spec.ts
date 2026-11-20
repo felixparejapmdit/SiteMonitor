@@ -4,7 +4,7 @@
  * between machines as passphrase-encrypted packages that keep local sign-ins.
  */
 import { request as pwRequest } from "@playwright/test";
-import { BASE_URL, auditData, expect, openAs, resetDatabase, test, userFor } from "./helpers";
+import { BASE_URL, auditData, expect, openAs, resetDatabase, test, userFor, setClinic } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(180_000);
@@ -14,6 +14,7 @@ const hexPass = (p: string) => ({ "x-backup-passphrase": Buffer.from(p, "utf8").
 
 test.beforeAll(async () => {
   resetDatabase();
+  await setClinic(true); // the clinic module is off by default
   const admin = await userFor(undefined as any, "OfficeAdmin");
   const ctx = await pwRequest.newContext({ baseURL: BASE_URL, extraHTTPHeaders: { authorization: `Bearer ${admin.token}` } });
   const backup = {

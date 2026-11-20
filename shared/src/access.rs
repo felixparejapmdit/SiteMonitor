@@ -28,7 +28,16 @@ pub enum Permission {
     /// Service 5 workforce records: people, their personal details, backups and imports.
     ManageWorkforce,
     /// Clinic ledger: health episodes, clinic visits, vaccines, contact tracing.
+    /// Only works while the Clinic module is switched on (Access → Modules).
     ManageClinic,
+    // Workforce modules merged from Service 5 DB
+    ViewWorkforceReports,
+    ManageDuty,
+    ManageOvertime,
+    ManageVisitations,
+    ManageSignatories,
+    PrintWorkforce,
+    BackupWorkforce,
     // Issues & decisions
     RaiseIssues,
     PublishDecisions,
@@ -50,7 +59,11 @@ use Permission::*;
 pub const GROUPS: &[(&str, &[Permission])] = &[
     ("Projects", &[ManageProjects, UpdateProgress, SignOffProjects]),
     ("Site photos", &[UploadPhotos, ManagePhotoNotes, CommentOnPhotos]),
-    ("Crew & equipment", &[ManageCrew, OperateEquipment, ManageEquipment, ManageWorkforce, ManageClinic]),
+    ("Crew & equipment", &[ManageCrew, OperateEquipment, ManageEquipment]),
+    (
+        "Workforce (Service 5)",
+        &[ManageWorkforce, ViewWorkforceReports, ManageDuty, ManageOvertime, ManageVisitations, ManageSignatories, PrintWorkforce, BackupWorkforce, ManageClinic],
+    ),
     ("Issues & decisions", &[RaiseIssues, PublishDecisions, AnswerDecisions]),
     ("Schedule", &[ManageSchedule, BookQuietDays]),
     ("Estate map", &[ManageMap]),
@@ -58,9 +71,10 @@ pub const GROUPS: &[(&str, &[Permission])] = &[
 ];
 
 impl Permission {
-    pub const ALL: [Permission; 20] = [
+    pub const ALL: [Permission; 27] = [
         ManageProjects, UpdateProgress, SignOffProjects, UploadPhotos, ManagePhotoNotes, CommentOnPhotos, ManageCrew,
-        OperateEquipment, ManageEquipment, ManageWorkforce, ManageClinic, RaiseIssues, PublishDecisions, AnswerDecisions, ManageSchedule, BookQuietDays,
+        OperateEquipment, ManageEquipment, ManageWorkforce, ManageClinic, ViewWorkforceReports, ManageDuty, ManageOvertime, ManageVisitations,
+        ManageSignatories, PrintWorkforce, BackupWorkforce, RaiseIssues, PublishDecisions, AnswerDecisions, ManageSchedule, BookQuietDays,
         ManageMap, ManagePeople, ManageAccess, ManageSettings,
     ];
 
@@ -75,8 +89,15 @@ impl Permission {
             ManageCrew => "Move crew between jobs",
             OperateEquipment => "Move & report equipment",
             ManageEquipment => "Add, edit & retire equipment",
-            ManageWorkforce => "Manage workers & volunteers",
+            ManageWorkforce => "Assignments, personnel & project groups",
             ManageClinic => "Clinic ledger (medical records)",
+            ViewWorkforceReports => "Workforce reports",
+            ManageDuty => "Overnight duty",
+            ManageOvertime => "Overtime (OT entries & calculator)",
+            ManageVisitations => "Visitations",
+            ManageSignatories => "Signatories",
+            PrintWorkforce => "Print centre (ID cards, job orders, forms)",
+            BackupWorkforce => "Backup, restore & snapshots",
             RaiseIssues => "Report issues",
             PublishDecisions => "Send decisions to the owner",
             AnswerDecisions => "Answer decisions",
@@ -101,7 +122,14 @@ impl Permission {
             OperateEquipment => "Move machines, attach parts, report and clear breakdowns.",
             ManageEquipment => "Add new machines, rename them or retire them.",
             ManageWorkforce => "See and edit worker records (personal details included), import Service 5 backups and restore snapshots.",
-            ManageClinic => "See and record health episodes, clinic visits, vaccines and contact tracing. Every change is logged.",
+            ManageClinic => "See and record health episodes, clinic visits, vaccines and contact tracing. Every change is logged. Needs the Clinic module switched on.",
+            ViewWorkforceReports => "See the workforce dashboard, departments, org chart, history log and dependability.",
+            ManageDuty => "Make and change overnight duty rosters, duty areas and swaps.",
+            ManageOvertime => "Record overtime and use the OT calculator.",
+            ManageVisitations => "Schedule and record visitations, visitation groups and ministers.",
+            ManageSignatories => "Add signatories, their signatures and the project groups they sign for.",
+            PrintWorkforce => "Print ID cards, job orders, attendance lists, family rosters and update forms.",
+            BackupWorkforce => "Download encrypted backups, import Service 5 backups, restore packages and snapshots.",
             RaiseIssues => "Send problems from the field to the office.",
             PublishDecisions => "Turn field reports into decisions for the owner.",
             AnswerDecisions => "Choose an option on decisions the office sends.",
@@ -117,7 +145,7 @@ impl Permission {
     /// Permissions that can lock people out or expose everything: shown with a
     /// warning in the matrix and confirmed before saving.
     pub fn is_sensitive(self) -> bool {
-        matches!(self, ManagePeople | ManageAccess | ManageSettings | ManageWorkforce | ManageClinic)
+        matches!(self, ManagePeople | ManageAccess | ManageSettings | ManageWorkforce | ManageClinic | BackupWorkforce)
     }
 }
 
@@ -128,8 +156,8 @@ pub fn role_defaults(role: UserRole) -> &'static [Permission] {
         UserRole::SiteMonitor => &[UpdateProgress, UploadPhotos, ManagePhotoNotes, ManageCrew, OperateEquipment, RaiseIssues, ManageSchedule],
         UserRole::OfficeAdmin => &[
             ManageProjects, UpdateProgress, UploadPhotos, ManagePhotoNotes, ManageCrew, OperateEquipment, ManageEquipment,
-            ManageWorkforce, ManageClinic, RaiseIssues, PublishDecisions, ManageSchedule, ManageMap, ManagePeople, ManageAccess,
-            ManageSettings,
+            ManageWorkforce, ManageClinic, ViewWorkforceReports, ManageDuty, ManageOvertime, ManageVisitations, ManageSignatories,
+            PrintWorkforce, BackupWorkforce, RaiseIssues, PublishDecisions, ManageSchedule, ManageMap, ManagePeople, ManageAccess, ManageSettings,
         ],
     }
 }

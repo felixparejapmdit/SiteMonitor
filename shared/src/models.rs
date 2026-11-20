@@ -578,6 +578,11 @@ pub struct EstateSettings {
     pub category_labels: std::collections::HashMap<AlertCategory, String>,
     /// Custom wording for schedule event types.
     pub event_type_labels: std::collections::HashMap<AgendaEventType, String>,
+    /// The Clinic module (health episodes and every clinic list). Off by
+    /// default: while off nobody has clinic access, whatever their permissions;
+    /// the records stay and come back when it is switched on.
+    #[serde(default)]
+    pub clinic_enabled: bool,
 }
 
 impl Default for EstateSettings {
@@ -600,6 +605,7 @@ impl Default for EstateSettings {
             .to_vec(),
             category_labels: Default::default(),
             event_type_labels: Default::default(),
+            clinic_enabled: false,
         }
     }
 }
