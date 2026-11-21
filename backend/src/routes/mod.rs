@@ -54,6 +54,9 @@ pub fn api(state: AppState) -> Router<AppState> {
         .route("/workforce/summary", get(workforce::summary))
         .route("/workforce/family-roster", get(workforce::family_roster))
         .route("/workers/{id}/reassign", put(workforce::reassign))
+        .route("/workers/{id}/archive", post(workforce::archive))
+        .route("/workers/{id}/assignment", put(workforce::set_assignment))
+        .route("/workers/{id}/reemploy", post(workforce::reemploy))
         .route("/workers/delete", post(workforce::delete_workers))
         .route("/workforce/start-day", post(workforce::start_day))
         .route("/workforce/project-history", get(workforce::project_history))
@@ -63,6 +66,7 @@ pub fn api(state: AppState) -> Router<AppState> {
         // A live service5.db is ~90 MB and growing, so this one route takes big uploads.
         .route("/workforce/import", post(workforce::import).layer(DefaultBodyLimit::max(512 * 1024 * 1024)))
         .route("/workforce/export", get(workforce::export))
+        .route("/workforce/import/preview", post(workforce::import_preview).layer(DefaultBodyLimit::max(512 * 1024 * 1024)))
         .route("/settings/backup", post(settings::backup_export))
         .route("/settings/restore", post(settings::backup_import).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)))
         .route("/workforce/snapshots", get(workforce::snapshots).post(workforce::take_snapshot))

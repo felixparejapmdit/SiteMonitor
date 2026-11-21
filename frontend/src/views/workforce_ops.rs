@@ -57,14 +57,33 @@ pub async fn delete_record(list: &str, id: &str) -> Result<(), api::ApiFail> {
     Ok(())
 }
 
-/// A field of a record as text (numbers too), "" when missing.
+/// A field of a record as text (numbers too), "" when missing. `a.b` reaches
+/// into a nested object when there is no field with that exact name.
 pub fn s(v: &Value, k: &str) -> String {
-    match v.get(k) {
+    let found = v.get(k).or_else(|| if k.contains('.') { k.split('.').try_fold(v, |cur, part| cur.get(part)) } else { None });
+    match found {
         Some(Value::String(x)) => x.clone(),
         Some(Value::Number(n)) => n.to_string(),
         Some(Value::Bool(b)) => if *b { "yes".into() } else { "no".into() },
         _ => String::new(),
     }
+}
+
+/// Sets a field; `a.b` writes into a nested object (created when missing).
+pub fn set_path(v: &mut Value, k: &str, val: Value) {
+    if !k.contains('.') || v.get(k).is_some() {
+        v[k] = val;
+        return;
+    }
+    let mut cur = v;
+    let parts: Vec<&str> = k.split('.').collect();
+    for part in &parts[..parts.len() - 1] {
+        if !cur.get(*part).is_some_and(Value::is_object) {
+            cur[*part] = json!({});
+        }
+        cur = &mut cur[*part];
+    }
+    cur[parts[parts.len() - 1]] = val;
 }
 
 pub fn new_id(prefix: &str) -> String {
@@ -94,6 +113,8 @@ pub enum Kind {
     Number,
     /// Stores the worker's A#.
     Worker,
+    /// A picture kept in the record as a data URL (e.g. visit photo evidence).
+    Photo,
     Choice(Vec<String>),
 }
 
@@ -199,7 +220,7 @@ pub fn RecordModal(
                                 let value = s(&draft.read(), key);
                                 let mut set = move |v: String, num: bool| {
                                     let val = if num { v.parse::<f64>().map(|n| json!(n)).unwrap_or(json!(v)) } else { json!(v) };
-                                    draft.write()[key] = val;
+                                    set_path(&mut draft.write(), key, val);
                                 };
                                 match fl.kind.clone() {
                                     Kind::Long => rsx! { textarea { id: "rf-{key}", class: "field", rows: "3", "data-testid": "rf-{key}", value: "{value}", oninput: move |e| set(e.value(), false) } },
@@ -221,6 +242,27 @@ pub fn RecordModal(
                                         }
                                     },
                                     Kind::Text => rsx! { input { id: "rf-{key}", class: "field", "data-testid": "rf-{key}", value: "{value}", oninput: move |e| set(e.value(), false) } },
+                                    Kind::Photo => {
+                                        let input_id = format!("rf-{}", key.replace('.', "-"));
+                                        rsx! {
+                                            div { class: "flex items-center gap-3",
+                                                if value.starts_with("data:image/") { img { src: "{value}", alt: "", class: "w-16 h-16 rounded-lg object-cover border border-line" } }
+                                                input { id: "{input_id}", r#type: "file", accept: "image/jpeg,image/png,image/webp", class: "text-sm", "data-testid": "rf-{key}",
+                                                    onchange: move |_| {
+                                                        let input_id = input_id.clone();
+                                                        async move {
+                                                            match crate::services::media_canvas::file_as_data_url(&input_id, 2.0 * 1_048_576.0).await {
+                                                                Ok(Some(url)) => set_path(&mut draft.write(), key, json!(url)),
+                                                                Ok(None) => {}
+                                                                Err(e) => app.error(e),
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if !value.is_empty() { button { r#type: "button", class: "btn-ghost h-8", onclick: move |_| set_path(&mut draft.write(), key, Value::Null), "Remove" } }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -287,6 +329,44 @@ pub fn print_with(page_css: &str) {
     ));
 }
 
+/// Runs one of Service 5's own print templates (frontend/public/print/s5print.js),
+/// e.g. `s5print("personnelReport", json!(["trade"]))`; the args are the call's arguments.
+pub fn s5print(report: &str, args: Value) {
+    let _ = document::eval(&format!(
+        "window.S5Print ? S5Print.{report}({}) : alert('The print templates are still loading. Please try again in a moment.');",
+        call_args(&args)
+    ));
+}
+
+fn call_args(args: &Value) -> String {
+    args.as_array().map(|a| a.iter().map(Value::to_string).collect::<Vec<_>>().join(",")).unwrap_or_default()
+}
+
+/// Service 5's on-screen print view (job orders, visit sheets): its own page
+/// layout in a frame, and "Print now" prints exactly that.
+#[component]
+pub fn S5Preview(report: &'static str, args: Value) -> Element {
+    let call = format!("{report}({})", call_args(&args));
+    let shown = call.clone();
+    use_effect(use_reactive!(|shown| {
+        let _ = document::eval(&format!(
+            "(function go(n) {{
+                if (!window.S5Print) {{ if (n < 100) setTimeout(function () {{ go(n + 1); }}, 100); return; }}
+                S5Print.{shown}.then(function (html) {{ var f = document.getElementById('s5-preview'); if (f) f.srcdoc = html || ''; }});
+            }})(0);"
+        ));
+    }));
+    rsx! {
+        div { class: "flex justify-end no-print",
+            button { class: "btn-primary", "data-testid": "s5-print-now",
+                onclick: move |_| { let _ = document::eval("S5Print.printFrame(document.getElementById('s5-preview'))"); },
+                Icon { name: "archive" } "Print now"
+            }
+        }
+        iframe { id: "s5-preview", title: "Print preview", "data-testid": "s5-preview", class: "w-full rounded-md border border-line bg-white", style: "height: 78vh;" }
+    }
+}
+
 fn status_tone(s: WorkerStatus) -> Tone {
     match s {
         WorkerStatus::Present => Tone::Green,
@@ -315,8 +395,8 @@ pub fn WorkforceView() -> Element {
                 "Project Groups" => rsx! { GroupsTab {} },
                 "Visitations" => rsx! { crate::views::workforce_extra::VisitationsHub {} },
                 "Reassign Volunteers" => rsx! { crate::views::workforce_pages::ReallocationPanel {} },
-                "Attendance Gen" => rsx! { crate::views::workforce_print::PrintTab { initial: "list" } },
-                "Update Forms" => rsx! { crate::views::workforce_print::PrintTab { initial: "forms" } },
+                "Attendance Gen" => rsx! { crate::views::workforce_sheets::AttendanceGenerator {} },
+                "Update Forms" => rsx! { crate::views::workforce_sheets::UpdateFormsPrint {} },
                 "Archived Personnel" => rsx! { crate::views::assignments::AssignmentsView { initial_status: "archived" } },
                 _ => rsx! { crate::views::workforce_more::AreasTab {} },
             }
@@ -350,7 +430,7 @@ fn GroupsTab() -> Element {
                 "Grouped by area"
             }
             button { class: "btn-secondary", "data-testid": "groups-log", onclick: move |_| log.set(true), "Change log" }
-            button { class: "btn-secondary", "data-testid": "groups-print", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print all rosters" }
+            button { class: "btn-secondary", "data-testid": "groups-print", onclick: move |_| s5print("projectGroups", json!([{ "kind": "all" }])), Icon { name: "archive" } "Print All" }
             if can_link {
                 button { class: "btn-primary", "data-testid": "group-create", onclick: move |_| editing.set(Some(None)), Icon { name: "plus" } "Create group" }
             }
@@ -401,6 +481,7 @@ fn GroupsTab() -> Element {
                         }
                     }
                     if can_link {
+                        button { class: "btn-icon btn-ghost", "aria-label": "Print {g.name}", title: "Print", "data-testid": "group-print", onclick: { let n = g.name.clone(); move |_| s5print("projectGroups", json!([{ "group": n }])) }, Icon { name: "archive" } }
                         button { class: "btn-icon btn-ghost", "aria-label": "Edit {g.name}", "data-testid": "group-edit", onclick: { let n = g.name.clone(); move |_| editing.set(Some(Some(n.clone()))) }, Icon { name: "edit" } }
                     }
                 }
@@ -508,9 +589,23 @@ fn DependabilityTab() -> Element {
     }
 }
 
+/// Service 5's org chart buttons: print the charts, or job orders for everyone shown.
 #[component]
-fn PrintButton(label: &'static str) -> Element {
-    rsx! { div { class: "flex justify-end no-print", button { class: "btn-secondary", "data-testid": "print-tab", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "{label}" } } }
+fn OrgChartPrints() -> Element {
+    let workers = use_workers();
+    rsx! {
+        div { class: "flex justify-end gap-2 no-print",
+            button { class: "btn-secondary", "data-testid": "print-tab", onclick: move |_| print_with("size: auto; margin: 8mm 10mm"), Icon { name: "archive" } "Print Charts" }
+            button { class: "btn-secondary", "data-testid": "org-print-jo", title: "Print Job Order slips for the volunteers shown below",
+                onclick: move |_| {
+                    let ids: Vec<uuid::Uuid> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).map(|w| w.id).collect();
+                    *crate::views::workforce_print::PRINT_REQUEST.write() = Some(("jo", ids));
+                    crate::components::ui::PAGE_TABS.write().insert("operations", "Print");
+                },
+                Icon { name: "archive" } "Print Job Orders"
+            }
+        }
+    }
 }
 
 /// Service 5's "Analytics & History": the change log, project roster history, and person dossiers.
@@ -568,17 +663,22 @@ pub fn OperationsView() -> Element {
             match tab {
                 "Overnight Duty" => rsx! { DutyTab {} crate::views::workforce_pages::DutyOverrides {} },
                 "Duty History" => rsx! { crate::views::workforce_extra::DutyMonth {} crate::views::workforce_more::DutyHistoryTab {} },
-                "Encoder" => rsx! { crate::views::workforce_more::TomorrowTab {} },
+                "Encoder" => rsx! { crate::views::encoder::Encoder {} },
                 "Monthly Attendance" => rsx! { AttendanceTab {} },
                 "OT Calculator" => rsx! { crate::views::workforce_extra::OtSummary {} },
                 "OT Entries" => rsx! { OvertimeTab {} },
-                "Org Chart" => rsx! { PrintButton { label: "Print org chart" } OrgChartTab {} },
+                "Org Chart" => rsx! { OrgChartPrints {} OrgChartTab {} },
                 "History Log" => rsx! { HistoryHub {} },
-                "Dependability" => rsx! { PrintButton { label: "Print dependability roster" } DependabilityTab {} },
+                "Dependability" => rsx! {
+                    div { class: "flex justify-end no-print",
+                        button { class: "btn-secondary", "data-testid": "print-tab", onclick: move |_| s5print("analytics", json!([{ "kind": "roster", "days": 90 }])), Icon { name: "archive" } "Print Dependability Roster" }
+                    }
+                    DependabilityTab {}
+                },
                 "Signatories" => rsx! { crate::views::workforce_pages::SignatoriesBoard {} },
                 "Bulk Update" => rsx! { crate::views::workforce_more::BulkTab {} },
                 "Pick Lists" => rsx! { crate::views::workforce_more::PickListsTab {} },
-                _ => rsx! { crate::views::workforce_print::PrintTab { initial: "id" } },
+                _ => rsx! { crate::views::workforce_print::PrintTab { initial: "jo" } },
             }
         }
     }
@@ -612,10 +712,32 @@ fn DutyTab() -> Element {
     let workers = use_workers();
     let mut date = use_signal(today);
     let mut editing = use_signal(|| None::<(String, Value)>);
+    let mut clearing = use_signal(|| "");
     let can_edit = app.can(Permission::ManageDuty);
     let people = workers.read().clone().unwrap_or_default();
     let map = by_a_number(&people);
     let area_list = areas.read().clone().unwrap_or_default();
+    // Service 5's Clear Day / Clear Week: empty the chosen night, or Monday to Sunday of its week.
+    let clear = move |span: &'static str| async move {
+        let Ok(d) = chrono::NaiveDate::parse_from_str(&date(), "%Y-%m-%d") else { return };
+        use chrono::Datelike;
+        let dates: Vec<String> = if span == "day" {
+            vec![date()]
+        } else {
+            let monday = d - chrono::Duration::days(d.weekday().num_days_from_monday() as i64);
+            (0..7).map(|i| (monday + chrono::Duration::days(i)).format("%Y-%m-%d").to_string()).collect()
+        };
+        let days: Vec<Value> = schedules.read().clone().unwrap_or_default().into_iter().filter(|x| dates.contains(&s(x, "dateStr"))).collect();
+        let mut cleared = 0;
+        for x in days {
+            cleared += x["assignments"].as_array().map(Vec::len).unwrap_or(0);
+            if let Err(e) = save_record(app, "duty_schedules", &s(&x, "dateStr"), &json!({ "dateStr": s(&x, "dateStr"), "assignments": [] })).await {
+                return app.error(e);
+            }
+        }
+        clearing.set("");
+        if cleared == 0 { app.success("No assignments found to clear.") } else { app.success(format!("Cleared {cleared} duty assignments")) }
+    };
     let day = schedules.read().clone().unwrap_or_default().into_iter().find(|d| s(d, "dateStr") == date());
     let assigned = |area_id: &str| -> Vec<String> {
         day.as_ref()
@@ -700,6 +822,15 @@ fn DutyTab() -> Element {
             if can_edit {
                 button { class: "btn-primary", "data-testid": "duty-generate", onclick: generate, Icon { name: "refresh" } "Make the roster for this date" }
                 button { class: "btn-secondary", "data-testid": "duty-week", onclick: week, "Make the week" }
+                if clearing().is_empty() {
+                    button { class: "btn-ghost text-tag-red-text", "data-testid": "duty-clear-day", onclick: move |_| clearing.set("day"), "Clear day" }
+                    button { class: "btn-ghost text-tag-red-text", "data-testid": "duty-clear-week", onclick: move |_| clearing.set("week"), "Clear week" }
+                    button { class: "btn-secondary", "data-testid": "duty-print", title: "Print schedule", onclick: move |_| s5print("duty", json!([{ "date": date() }])), Icon { name: "archive" } "Print" }
+                } else {
+                    span { class: "text-sm", if clearing() == "day" { "Clear every area on {date()}?" } else { "Clear every area for that whole week?" } }
+                    button { class: "btn-danger", "data-testid": "duty-clear-confirm", onclick: move |_| clear(clearing()), "Clear" }
+                    button { class: "btn-ghost", onclick: move |_| clearing.set(""), "Keep" }
+                }
                 button { class: "btn-secondary", "data-testid": "duty-add-area",
                     onclick: move |_| editing.set(Some((new_id("duty"), json!({ "roster": [], "workersNeeded": 1, "lastRotationIndex": -1, "shiftTime": "20:00" })))),
                     Icon { name: "plus" } "Add duty area"
@@ -835,7 +966,6 @@ fn AttendanceTab() -> Element {
                 label { class: "label", r#for: "att-month", "Month" }
                 input { id: "att-month", r#type: "month", class: "field", "data-testid": "att-month", value: "{month}", oninput: move |e| month.set(e.value()) }
             }
-            button { class: "btn-secondary", "data-testid": "print-attendance", onclick: move |_| print_with("size: landscape; margin: 8mm"), Icon { name: "archive" } "Print sheet (landscape)" }
             p { class: "text-sm text-muted", "P present · A absent · L on pass" }
         }
         div { class: "card overflow-x-auto print-sheet", "data-testid": "attendance-sheet",
@@ -871,10 +1001,27 @@ fn OvertimeTab() -> Element {
     let mut pasting = use_signal(|| false);
     let mut day = use_signal(today);
     let mut every_day = use_signal(|| false);
+    let mut trade = use_signal(String::new);
+    let mut who_q = use_signal(String::new);
+    let mut show_rate = use_signal(|| true);
+    let mut clearing = use_signal(|| false);
     let people = workers.read().clone().unwrap_or_default();
     let map = by_a_number(&people);
     let all = ot.read().clone().unwrap_or_default();
-    let list: Vec<Value> = all.iter().filter(|e| every_day() || s(e, "date") == day()).cloned().collect();
+    // Service 5's OT Entries filters: trade and a volunteer name / A# search.
+    let person_of = |e: &Value| map.get(&s(e, "volunteerId")).cloned();
+    let trade_of = |e: &Value| if s(e, "trade").is_empty() { person_of(e).map(|w| w.trade).unwrap_or_default() } else { s(e, "trade") };
+    let mut trades: Vec<String> = all.iter().map(trade_of).filter(|t| !t.is_empty()).collect();
+    trades.sort();
+    trades.dedup();
+    let ql = who_q().to_lowercase();
+    let list: Vec<Value> = all
+        .iter()
+        .filter(|e| every_day() || s(e, "date") == day())
+        .filter(|e| trade().is_empty() || trade_of(e) == trade())
+        .filter(|e| ql.is_empty() || name_of(&map, &s(e, "volunteerId")).to_lowercase().contains(&ql) || s(e, "volunteerId").contains(&ql))
+        .cloned()
+        .collect();
     let total: f64 = list.iter().filter_map(|e| e["computedPay"].as_f64()).sum();
     let mut sorted = list.clone();
     sorted.sort_by(|a, b| s(b, "date").cmp(&s(a, "date")));
@@ -914,13 +1061,42 @@ fn OvertimeTab() -> Element {
         .map(|e| {
             let who = if !s(e, "volunteerId").is_empty() { name_of(&map, &s(e, "volunteerId")) } else { format!("{} people", s(e, "totalCount")) };
             let pay = e["computedPay"].as_f64().map(|p| format!("₱{p:.2}")).unwrap_or_default();
-            (s(e, "id"), vec![s(e, "date"), s(e, "title"), who, s(e, "otType"), s(e, "hours"), s(e, "hourlyRate"), pay])
+            let level = if s(e, "skillLevel").is_empty() { person_of(e).map(|w| w.skill_level).unwrap_or_default() } else { s(e, "skillLevel") };
+            let area = if s(e, "otArea").is_empty() { s(e, "title") } else { s(e, "otArea") };
+            let task = if s(e, "otTask").is_empty() { s(e, "description") } else { s(e, "otTask") };
+            let mut cells = vec![s(e, "date"), who, trade_of(e), level, s(e, "hours"), area, task];
+            if show_rate() {
+                cells.push(s(e, "hourlyRate"));
+            }
+            cells.push(pay);
+            (s(e, "id"), cells)
         })
         .collect();
+    let head: Vec<&'static str> = if show_rate() {
+        vec!["Date", "Name", "Trade", "Level", "Hours", "Area", "Task", "Rate", "Pay"]
+    } else {
+        vec!["Date", "Name", "Trade", "Level", "Hours", "Area", "Task", "Pay"]
+    };
+    // Service 5 "Clear": remove the entries shown (this day, or every day).
+    let clear_ids: Vec<String> = list.iter().map(|e| s(e, "id")).collect();
+    let clear = move |_| {
+        let ids = clear_ids.clone();
+        async move {
+            for id in &ids {
+                if let Err(e) = delete_record("ot_entries", id).await {
+                    return app.error(e.message());
+                }
+            }
+            clearing.set(false);
+            app.success(format!("{} cleared", util::plural(ids.len(), "entry")));
+        }
+    };
     let fields = vec![
         f("date", "Date", Kind::Date),
-        f("title", "Work done", Kind::Text),
         f("volunteerId", "Person", Kind::Worker),
+        f("otArea", "Area (where)", Kind::Text),
+        f("otTask", "Task / work done", Kind::Text),
+        f("title", "Title", Kind::Text),
         f("otType", "Kind", choice(&["regular", "rest day", "holiday"])),
         f("hours", "Hours", Kind::Number),
         f("hourlyRate", "Rate per hour", Kind::Number),
@@ -936,13 +1112,43 @@ fn OvertimeTab() -> Element {
                 input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "ot-all-days", checked: every_day(), onchange: move |e| every_day.set(e.checked()) }
                 "All days"
             }
-            button { class: "btn-secondary", "data-testid": "ot-schedule-print", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print OT schedule" }
+            // Service 5's OT Entries prints: the schedule by area and the timesheet matrix.
+            button { class: "btn-primary", "data-testid": "ot-schedule-print", title: "Print Overtime Schedule (By Area)",
+                onclick: move |_| { let r = if every_day() { String::new() } else { day() }; s5print("overtime", json!([{ "kind": "schedule", "start": r, "end": r }])) }, Icon { name: "archive" } "OT Schedule" }
+            button { class: "btn-secondary", "data-testid": "ot-matrix-print", title: "Timesheet Matrix (per volunteer)",
+                onclick: move |_| { let r = if every_day() { String::new() } else { day() }; s5print("overtime", json!([{ "kind": "matrix", "start": r, "end": r }])) }, "Matrix" }
             if app.can(Permission::ManageOvertime) {
-                button { class: "btn-secondary", "data-testid": "ot-copy-yesterday", onclick: copy_yesterday, "Copy the day before" }
+                button { class: "btn-secondary", "data-testid": "ot-copy-yesterday", onclick: copy_yesterday, "Load from yesterday" }
+            }
+        }
+        div { class: "flex flex-wrap items-end gap-2 no-print",
+            div {
+                label { class: "label", r#for: "ot-trade", "Trade" }
+                select { id: "ot-trade", class: "field w-auto", "data-testid": "ot-trade", onchange: move |e| trade.set(e.value()),
+                    option { value: "", "All trades" }
+                    for t in trades.iter() { option { key: "{t}", value: "{t}", selected: trade() == *t, "{t}" } }
+                }
+            }
+            div {
+                label { class: "label", r#for: "ot-who", "Volunteer" }
+                input { id: "ot-who", r#type: "search", class: "field w-auto", placeholder: "Name or A#", "data-testid": "ot-who", value: "{who_q}", oninput: move |e| who_q.set(e.value()) }
+            }
+            label { class: "flex items-center gap-2 text-sm pb-2",
+                input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "ot-show-rate", checked: show_rate(), onchange: move |e| show_rate.set(e.checked()) }
+                "Rate"
+            }
+            if app.can(Permission::ManageOvertime) && !list.is_empty() {
+                if clearing() {
+                    span { class: "text-sm pb-2", "Remove the {list.len()} entries shown?" }
+                    button { class: "btn-danger", "data-testid": "ot-clear-confirm", onclick: clear, "Clear" }
+                    button { class: "btn-ghost", onclick: move |_| clearing.set(false), "Keep" }
+                } else {
+                    button { class: "btn-ghost text-tag-red-text", "data-testid": "ot-clear", onclick: move |_| clearing.set(true), "Clear" }
+                }
             }
         }
         div { class: "flex flex-wrap items-center justify-between gap-3 no-print",
-            p { class: "text-sm text-muted tabular", "data-testid": "ot-total", "{list.len()} entries · total ₱{total:.2}" }
+            p { class: "text-sm text-muted tabular", "data-testid": "ot-total", "{list.len()} entries · grand total ₱{total:.2}" }
             if app.can(Permission::ManageOvertime) {
                 button { class: "btn-secondary", "data-testid": "ot-paste-open", onclick: move |_| pasting.set(true), Icon { name: "edit" } "From a list of names" }
                 button { class: "btn-primary", "data-testid": "ot-add", onclick: move |_| editing.set(Some((new_id("ot"), json!({ "date": day(), "otType": "regular", "status": "approved" })))), Icon { name: "plus" } "Add overtime" }
@@ -951,7 +1157,7 @@ fn OvertimeTab() -> Element {
         if pasting() { crate::views::workforce_more::OtPaste { on_close: move |_| pasting.set(false) } }
         if app.can(Permission::ManageOvertime) && !every_day() { crate::views::workforce_pages::OtEncoder { day: day() } }
         p { class: "font-semibold print-only", "Overtime schedule {day}" }
-        Table { head: vec!["Date", "Work", "Who", "Kind", "Hours", "Rate", "Pay"], rows, on_edit: move |id: String| {
+        Table { head, rows, on_edit: move |id: String| {
             if let Some(v) = sorted.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) }
         } }
         if let Some((id, v)) = editing() {

@@ -59,7 +59,9 @@ test("Assignments: three views, filters, sorting, paging, bulk edit, generate fo
   await page.getByTestId("assign-select-page").check();
   await page.getByTestId("assign-forms").click();
   await expect(page).toHaveURL(/\/operations$/);
-  await expect(page.getByTestId("update-form")).toHaveCount(3);
+  // Service 5's "Generate Forms": the job order print view for the ticked people.
+  await expect(page.getByTestId("jo-toolbar")).toBeVisible();
+  await expect(page.frameLocator("#s5-preview").locator(".worker-form")).toHaveCount(3);
 
   // A past day shows the statuses of that day, read-only.
   await page.goto("/assignments");
@@ -161,16 +163,16 @@ test("dashboard rosters, duty override with reason, OT encoder, org roles, archi
   expect(problems, problems.join("\n")).toEqual([]);
 });
 
-test("ID card trade filter, minister summary, and the Backup / Restore / Daily Snapshot tabs", async ({ page }) => {
+test("ID card trade filter, visit prints, and the Backup / Restore / Daily Snapshot tabs", async ({ page }) => {
   const problems = watch(page);
   await openAs(page, "OfficeAdmin", "/workforce");
   await page.getByTestId("tab-ID Cards").click();
   await page.getByTestId("print-trade").selectOption("Plumber");
   await expect(page.locator(".id-card")).toHaveCount(2);
+  // Service 5 has no minister summary print (its visit sheets are per visit, scheduled, or the last 7 days).
   await page.getByTestId("tab-Visitations").click();
-  await page.evaluate(() => { (window as any).print = () => {}; });
-  await page.getByTestId("visit-print-ministers").click();
-  await expect(page.getByText("Visits by minister")).toBeAttached();
+  await expect(page.getByTestId("visit-print-ministers")).toHaveCount(0);
+  await expect(page.getByTestId("visit-print-scheduled")).toBeVisible();
 
   await page.goto("/settings");
   await page.getByTestId("tab-Backup DB").click();

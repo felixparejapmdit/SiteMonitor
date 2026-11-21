@@ -6,7 +6,7 @@
 //!
 //! Login accounts travel too, so who reported or moved what still points at
 //! someone, but restoring never replaces a local account: package accounts are
-//! matched by id, then by email, and only missing ones are added.
+//! matched by id, then by username, and only missing ones are added.
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -118,19 +118,26 @@ pub async fn restore(db: &DatabaseConnection, upload_dir: &Path, pkg: Value) -> 
         return Err(AppError::bad("This package was made by a different version of SiteMonitor. Update both machines to the same version first."));
     }
     let txn = db.begin().await?;
-    // Accounts: keep every local one; match package ones by id, then email.
-    let local = txn.query_all(stmt("SELECT id, lower(email) AS email FROM users", vec![])).await?;
+    // Accounts: keep every local one; match package ones by id, then username.
+    let local = txn.query_all(stmt("SELECT id, lower(username) AS username FROM users", vec![])).await?;
     let by_id: Vec<Uuid> = local.iter().filter_map(|r| r.try_get("", "id").ok()).collect();
-    let by_email: HashMap<String, Uuid> = local.iter().filter_map(|r| Some((r.try_get::<String>("", "email").ok()?, r.try_get::<Uuid>("", "id").ok()?))).collect();
+    let by_username: HashMap<String, Uuid> = local.iter().filter_map(|r| Some((r.try_get::<String>("", "username").ok()?, r.try_get::<Uuid>("", "id").ok()?))).collect();
     let mut map: HashMap<String, String> = HashMap::new();
     let mut added = 0;
     for u in pkg["users"].as_array().into_iter().flatten() {
         let id = u["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or_else(|| AppError::bad("The package has a damaged account."))?;
-        let email = u["email"].as_str().unwrap_or("").to_lowercase();
+        // Packages made before usernames carry an email: its first part is the username.
+        let mut u = u.clone();
+        if u.get("username").is_none() {
+            let from_email = u["email"].as_str().unwrap_or("").split('@').next().unwrap_or("").to_lowercase();
+            u["username"] = json!(from_email);
+        }
+        let u = &u;
+        let username = u["username"].as_str().unwrap_or("").to_lowercase();
         if by_id.contains(&id) {
             // Same account: its zones come with the restored map.
             txn.execute(stmt("UPDATE users SET assigned_area_ids = $2 WHERE id = $1", vec![id.into(), u["assigned_area_ids"].clone().into()])).await?;
-        } else if let Some(local_id) = by_email.get(&email) {
+        } else if let Some(local_id) = by_username.get(&username) {
             map.insert(id.to_string(), local_id.to_string());
             txn.execute(stmt("UPDATE users SET assigned_area_ids = $2 WHERE id = $1", vec![(*local_id).into(), u["assigned_area_ids"].clone().into()])).await?;
         } else {
@@ -166,7 +173,7 @@ pub async fn restore(db: &DatabaseConnection, upload_dir: &Path, pkg: Value) -> 
     db.execute_unprepared("DELETE FROM workforce_records; DELETE FROM workers").await?;
     let n = workforce::normalize(pkg["workforce"].clone())?;
     let workers = n.workers.len();
-    workforce::import(db, n, shared::api::ImportMode::Merge, true).await?;
+    workforce::import(db, n, shared::api::ImportMode::Merge, true, &serde_json::Map::new()).await?;
 
     // Uploaded files.
     let mut files = 0;

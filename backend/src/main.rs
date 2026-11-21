@@ -3,7 +3,8 @@
 //! ```text
 //! backend            # migrate, seed if empty, start crons, serve on PORT
 //! backend reset      # drop everything, re-create the schema and re-seed
-//! backend set-password <email> <password>   # recover an account
+//! backend set-password <username> <password>   # recover an account
+//! backend parity-check <service5.db>             # is everything in it held here?
 //! ```
 
 mod auth;
@@ -74,16 +75,25 @@ async fn main() -> anyhow::Result<()> {
         }
         "set-password" => {
             let args: Vec<String> = std::env::args().skip(2).collect();
-            let [email, password] = args.as_slice() else { anyhow::bail!("usage: backend set-password <email> <password>") };
+            let [username, password] = args.as_slice() else { anyhow::bail!("usage: backend set-password <username> <password>") };
             Migrator::up(&db, None).await?;
-            auth::set_password_cli(&db, email, password).await?;
-            println!("Password set for {email}.");
+            auth::set_password_cli(&db, username, password).await?;
+            println!("Password set for {username}.");
             return Ok(());
         }
         "audit-data" => {
             // Counts personnel data readable without the key (should all be 0).
             Migrator::up(&db, None).await?;
             println!("{}", services::workforce::plain_counts(&db).await?);
+            return Ok(());
+        }
+        "parity-check" => {
+            // Compares a Service 5 file with this database (names and counts only).
+            let file = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: backend parity-check <service5.db or backup.json>"))?;
+            Migrator::up(&db, None).await?;
+            let key_file = PathBuf::from(std::env::var("DATA_KEY_FILE").unwrap_or_else(|_| "data/keys/personnel.key".into()));
+            services::vault::init(&key_file)?;
+            print!("{}", services::workforce::parity(&db, &std::fs::read(file)?).await?);
             return Ok(());
         }
         "" | "serve" => {}

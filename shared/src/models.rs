@@ -30,7 +30,7 @@ pub struct User {
     pub name: String,
     pub role: UserRole,
     pub phone: String,
-    pub email: String,
+    pub username: String,
     pub assigned_area_ids: Vec<Uuid>,
     /// Deactivated people keep their history but can no longer sign in or be chosen.
     #[serde(default = "active_default")]
@@ -588,7 +588,7 @@ pub struct EstateSettings {
 impl Default for EstateSettings {
     fn default() -> Self {
         Self {
-            estate_name: "Ashford Estate".into(),
+            estate_name: "Our Estate".into(),
             roster_reset_time: "00:00".into(),
             roster_prompt_time: "07:30".into(),
             deadline_check_time: "07:00".into(),
@@ -677,6 +677,16 @@ pub struct Worker {
     /// Tomorrow's assignment (Service 5's encoder), "" when not set.
     #[serde(default)]
     pub tomorrow: String,
+    /// Tomorrow's staged plan beyond the task (Service 5 `tomorrowAssignment`), for the encoder.
+    #[serde(default)]
+    pub tomorrow_area: String,
+    #[serde(default)]
+    pub tomorrow_project: String,
+    /// "Present" / "Absent" / "Passes" as staged for tomorrow ("" = not staged).
+    #[serde(default)]
+    pub tomorrow_status: String,
+    #[serde(default)]
+    pub tomorrow_reason: String,
     /// Where the person stays (Service 5 `workResidence` / `residence`).
     #[serde(default)]
     pub residence: String,

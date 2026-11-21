@@ -23,7 +23,7 @@ export type Role = "VipClient" | "OfficeAdmin" | "SiteMonitor";
 export interface User {
   id: string;
   name: string;
-  email: string;
+  username: string;
   role: Role;
   assigned_area_ids: string[];
   permissions: string[];
@@ -38,7 +38,7 @@ export const DEMO_PASSWORD = "SiteMonitor-demo";
 interface DemoAccount {
   name: string;
   role: Role;
-  email: string;
+  username: string;
 }
 
 async function demoAccount(role: Role, firstName?: string): Promise<DemoAccount> {
@@ -52,24 +52,24 @@ async function demoAccount(role: Role, firstName?: string): Promise<DemoAccount>
 }
 
 /** Signs in on a separate connection and returns the person with a session token. */
-export async function signIn(email: string, password = DEMO_PASSWORD): Promise<User> {
+export async function signIn(username: string, password = DEMO_PASSWORD): Promise<User> {
   const ctx = await pwRequest.newContext({ baseURL: BASE_URL });
-  const res = await ctx.post("/api/auth/login", { data: { email, password } });
-  expect(res.ok(), `sign-in as ${email} → ${res.status()} ${await res.text()}`).toBeTruthy();
+  const res = await ctx.post("/api/auth/login", { data: { username, password } });
+  expect(res.ok(), `sign-in as ${username} → ${res.status()} ${await res.text()}`).toBeTruthy();
   const body = await res.json();
   await ctx.dispose();
   return { ...body.user, token: body.token };
 }
 
 export async function userFor(_request: APIRequestContext, role: Role, firstName?: string): Promise<User> {
-  return signIn((await demoAccount(role, firstName)).email);
+  return signIn((await demoAccount(role, firstName)).username);
 }
 
 /** Signs a browser page in (sets the HttpOnly session cookie for its context). */
 export async function signInPage(page: Page, role: Role, firstName?: string) {
   const a = await demoAccount(role, firstName);
-  const res = await page.request.post("/api/auth/login", { data: { email: a.email, password: DEMO_PASSWORD } });
-  expect(res.ok(), `sign-in as ${a.email} → ${res.status()}`).toBeTruthy();
+  const res = await page.request.post("/api/auth/login", { data: { username: a.username, password: DEMO_PASSWORD } });
+  expect(res.ok(), `sign-in as ${a.username} → ${res.status()}`).toBeTruthy();
   const body = await res.json();
   return { ...body.user, token: body.token } as User;
 }

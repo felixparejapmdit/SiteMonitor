@@ -127,21 +127,28 @@ test("directory: filters, columns, bulk status, archive with a reason, restore, 
 test("job orders skip people who are off or turned off; update forms and the list sheet", async ({ page }) => {
   await openAs(page, "OfficeAdmin", "/operations");
   await page.getByTestId("tab-Print").click();
-  await page.getByTestId("print-kind").selectOption("jo");
-  await expect(page.locator(".job-order")).toHaveCount(1);
-  await expect(page.locator(".job-order")).toContainText("Ana Present");
-  await expect(page.locator(".job-order")).toContainText("Task: Lay blocks");
-  await expect(page.getByTestId("print-left-out")).toContainText("Ben NoJO (job orders turned off)");
-  await expect(page.getByTestId("print-left-out")).toContainText("Cara Pass (on pass)");
+  // Service 5's print view: only people who can get a job order; its banner counts the rest.
+  const f = page.frameLocator("#s5-preview");
+  await expect(f.locator(".worker-form")).toHaveCount(1);
+  await expect(f.locator(".worker-form")).toContainText("Ana Present");
+  await expect(f.locator(".worker-form")).toContainText("Lay blocks");
+  await expect(f.locator(".print-summary-feedback")).toContainText("Generated 1 Job Order (2 skipped");
 
-  await page.getByTestId("print-kind").selectOption("forms");
-  await expect(page.getByTestId("update-form")).toHaveCount(3);
-  await expect(page.getByTestId("update-form").filter({ hasText: "Ana Present" })).toContainText("Hypertension");
-
-  await page.getByTestId("print-kind").selectOption("list");
-  await page.getByTestId("print-title").fill("Pour team");
-  await expect(page.getByTestId("print-list")).toContainText("Pour team");
-  await expect(page.getByTestId("list-row")).toHaveCount(3);
+  // Service 5's update forms and list sheet (captured instead of printed).
+  await page.evaluate(() => { const w = window as any; w.__s5 = []; w.safePrint = (h: string) => w.__s5.push(h); });
+  const last = () => page.evaluate(() => { const a = (window as any).__s5; return a[a.length - 1] || ""; });
+  await page.goto("/workforce");
+  await page.evaluate(() => { const w = window as any; w.__s5 = []; w.safePrint = (h: string) => w.__s5.push(h); });
+  await page.getByTestId("tab-Update Forms").click();
+  await page.getByTestId("vru-print").click();
+  await expect.poll(last).toContain("Semi-Annual Volunteer Records Update Forms");
+  expect(await last()).toContain("Hypertension");
+  await page.getByTestId("tab-Attendance Gen").click();
+  await page.getByTestId("ag-title").fill("Pour team");
+  await page.getByTestId("ag-select-all").click();
+  await page.getByTestId("ag-print").click();
+  await expect.poll(last).toContain("Pour team");
+  for (const n of ["Ana Present", "Ben NoJO", "Cara Pass"]) expect(await last()).toContain(n);
 });
 
 test("visitations: schedule, mark done, coverage; visitation group members and the monthly sheet", async ({ page, request }) => {
@@ -161,16 +168,19 @@ test("visitations: schedule, mark done, coverage; visitation group members and t
   await expect(page.getByTestId("visit-unvisited")).not.toContainText("Ana Present");
 
   await page.getByTestId("visit-view-Groups").click();
-  await page.getByText(/Not in any group/).click();
+  await page.getByText(/^Add members/).click();
   await page.locator("label", { hasText: "Ben NoJO" }).getByTestId("vgroup-unassigned").check();
   await page.getByTestId("vgroup-assign").click();
   await expect(page.getByTestId("vgroup-member").filter({ hasText: "Ben NoJO" })).toBeVisible();
   await page.getByTestId("vgroup-member").filter({ hasText: "Ben NoJO" }).getByTestId("vgroup-role").selectOption("Katiwala");
   await expect.poll(async () => (await byA(request, "302")).visit_role).toBe("Katiwala");
-  await page.addInitScript(() => { (window as any).print = () => {}; });
-  await page.evaluate(() => { (window as any).print = () => { (window as any).__printed = true; }; });
+  await page.evaluate(() => { const w = window as any; w.__s5 = []; w.safePrint = (h: string) => w.__s5.push(h); });
   await page.getByTestId("vgroup-print-month").click();
-  await expect.poll(() => page.evaluate(() => document.getElementById("print-page")?.textContent)).toContain("landscape");
+  // Service 5's monthly sheet: landscape, with the group's officers.
+  const sheet = () => page.evaluate(() => (window as any).__s5[0] || "");
+  await expect.poll(sheet).toContain("TALAAN NG PRESENSYA");
+  expect(await sheet()).toMatch(/size:\s*landscape/);
+  expect(await sheet()).toContain("Ben NoJO");
 });
 
 test("overtime: copy the day before, then the calculator summary", async ({ page }) => {

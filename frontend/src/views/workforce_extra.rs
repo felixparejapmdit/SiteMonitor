@@ -18,7 +18,7 @@ use crate::components::ui::{EmptyState, Icon, Modal, Spinner};
 use crate::state::use_app;
 use crate::util;
 use crate::views::personnel::REFRESH as WORKERS_CHANGED;
-use crate::views::workforce_ops::{by_a_number, choice, f, name_of, new_id, print_with, s, save_record, today, use_records, use_workers, Kind, RecordModal, Table};
+use crate::views::workforce_ops::{by_a_number, choice, f, name_of, new_id, s, s5print, save_record, today, use_records, use_workers, Kind, RecordModal, S5Preview, Table};
 
 /// A small switch between views inside a tab.
 #[component]
@@ -136,7 +136,23 @@ pub fn DashboardMore() -> Element {
                 }
             }
             section { class: "card p-4 space-y-2", "data-testid": "wf-stale",
-                p { class: "font-semibold", "Same task for 3+ days" }
+                p { class: "font-semibold", "Same task for 3+ days" span { class: "text-muted font-normal", " · {stale.len()} flagged" } }
+                if !stale.is_empty() {
+                    // Service 5: mark everyone flagged at once, or dismiss the whole list.
+                    div { class: "flex flex-wrap gap-1",
+                        for (st, label) in [(WorkerStatus::Present, "All present"), (WorkerStatus::Absent, "All absent"), (WorkerStatus::OnPass, "All passes")] {
+                            button { key: "{label}", class: "btn-secondary h-7 px-2 text-xs", "data-testid": "stale-all-{st:?}",
+                                onclick: { let list: Vec<Worker> = stale.iter().map(|x| x.0.clone()).collect(); move |_| { let list = list.clone(); async move {
+                                    for w in list {
+                                        if let Err(e) = api::put::<_, Worker>(&format!("/workers/{}/status", w.id), &shared::api::WorkerStatusRequest { status: st, reason: String::new() }).await { return app.error(e.message()); }
+                                    }
+                                    *WORKERS_CHANGED.write() += 1;
+                                } } }, "{label}" }
+                        }
+                        button { class: "btn-ghost h-7 px-2 text-xs", "data-testid": "stale-dismiss-all",
+                            onclick: { let list: Vec<Worker> = stale.iter().map(|x| x.0.clone()).collect(); move |_| { let list = list.clone(); async move { for w in list { dismiss(w).await; } } } }, "Dismiss page" }
+                    }
+                }
                 if stale.is_empty() { p { class: "text-sm text-muted", "Nobody is stuck on an old task." } }
                 for (w, days) in stale.iter().cloned() {
                     div { key: "{w.id}", class: "text-sm flex items-center gap-2",
@@ -474,7 +490,7 @@ pub fn GroupChangeLog(on_close: EventHandler<()>) -> Element {
     rsx! {
         Modal { title: "Group change log", wide: true, on_close: move |_| on_close.call(()),
             div { class: "space-y-3", "data-testid": "group-log",
-                div { class: "flex justify-end no-print", button { class: "btn-secondary", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print" } }
+                div { class: "flex justify-end no-print", button { class: "btn-secondary", "data-testid": "group-log-print", onclick: move |_| s5print("projectGroups", json!([{ "kind": "changes", "range": "all" }])), Icon { name: "archive" } "Print" } }
                 Table { head: vec!["Date", "Person", "From", "To", "Reason", "By"], rows, empty: "No group changes logged yet." }
             }
         }
@@ -509,7 +525,7 @@ pub fn ProjectHistory() -> Element {
                         for p in projects.iter() { option { key: "{p}", value: "{p}", selected: *p == project, "{p}" } }
                     }
                 }
-                button { class: "btn-secondary", "data-testid": "ph-print", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print dossier" }
+                button { class: "btn-secondary", "data-testid": "ph-print", onclick: { let project = project.clone(); move |_| s5print("analytics", json!([{ "kind": "project", "project": project, "days": 90 }])) }, Icon { name: "archive" } "Print Investigation Dossier" }
             }
             p { class: "font-semibold", "{project}" span { class: "text-muted font-normal", " · {days.len()} days · {util::plural(people.len(), \"person\")} in all" } }
             Table { head: vec!["Date", "People", "Present", "Who"],
@@ -586,7 +602,7 @@ pub fn Dossier() -> Element {
                     for p in people.iter().filter(|w| !w.a_number.is_empty()) { option { key: "{p.id}", value: "{p.a_number}", selected: p.a_number == a, "{p.name} · A# {p.a_number}" } }
                 }
             }
-            button { class: "btn-secondary", "data-testid": "dossier-print", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print dossier" }
+            button { class: "btn-secondary", "data-testid": "dossier-print", onclick: { let name = w.name.clone(); move |_| s5print("analytics", json!([{ "worker": name, "days": 90 }])) }, Icon { name: "archive" } "Print dossier" }
         }
         div { class: "space-y-4", "data-testid": "dossier",
             div { class: "card p-4",
@@ -646,8 +662,6 @@ pub fn VisitationsHub() -> Element {
     let scheduled: Vec<Value> = list.iter().filter(|v| s(v, "status") == "scheduled" && matches(v) && in_timeframe(&s(v, "date"), &frame())).cloned().collect();
     let mut history: Vec<Value> = list.iter().filter(|v| s(v, "status") != "scheduled" && matches(v) && (status().is_empty() || s(v, "status").starts_with(&status()))).cloned().collect();
     history.reverse();
-    let week_ago = (Local::now().date_naive() - Duration::days(7)).format("%Y-%m-%d").to_string();
-    let last7: Vec<Value> = list.iter().filter(|v| s(v, "date") >= week_ago && s(v, "date") <= today()).cloned().collect();
     // Coverage: each person's last completed visit; never-visited people by housing.
     let mut last: HashMap<String, String> = HashMap::new();
     for v in list.iter().filter(|v| s(v, "status") == "completed") {
@@ -668,9 +682,11 @@ pub fn VisitationsHub() -> Element {
     let set_status = move |v: Value, to: &'static str| async move {
         let mut next = v.clone();
         next["status"] = json!(to);
-        if to == "completed" {
-            next["completedAt"] = json!(chrono::Utc::now().to_rfc3339());
-        }
+        let now = chrono::Utc::now().to_rfc3339();
+        next["completedAt"] = json!(now);
+        let mut details = next.get("completionDetails").filter(|d| d.is_object()).cloned().unwrap_or_else(|| json!({}));
+        details["completedAt"] = json!(now);
+        next["completionDetails"] = details;
         match save_record(app, "visitations", &s(&v, "id"), &next).await {
             Ok(_) => app.success(if to == "completed" { "Visit marked done" } else { "Visit cancelled" }),
             Err(e) => app.error(e),
@@ -680,33 +696,16 @@ pub fn VisitationsHub() -> Element {
         f("date", "Date", Kind::Date),
         f("aNumber", "Person visited", Kind::Worker),
         f("ministerName", "Minister", if names.is_empty() { Kind::Text } else { Kind::Choice(names.clone()) }),
-        f("status", "Status", choice(&["scheduled", "completed", "cancelled"])),
-        f("members", "Family members present", Kind::Text),
-        f("concerns", "Concerns raised", Kind::Long),
-        f("notes", "Notes", Kind::Long),
+        f("status", "Status", choice(&["scheduled", "completed", "canceled"])),
+        f("completionDetails.members", "Members present", Kind::Text),
+        f("completionDetails.concerns", "Issues or concerns raised", Kind::Long),
+        f("completionDetails.cancelReason", "Reason for cancelation", Kind::Text),
+        f("completionDetails.photoDataUrl", "Photo evidence", Kind::Photo),
+        f("notes", "Notes / purpose", Kind::Long),
     ];
     let print_rows = |rows: &[Value]| -> Vec<(String, Vec<String>)> { rows.iter().map(|v| (s(v, "id"), vec![s(v, "date"), who(v), s(v, "ministerName"), s(v, "status"), s(v, "notes")])).collect() };
-    let p_sched = print_rows(&scheduled);
-    let p_last7 = print_rows(&last7);
-    // Service 5's minister summary: visits per minister by status, and the latest one.
-    let mut per_minister: BTreeMap<String, (usize, usize, usize, String)> = BTreeMap::new();
-    for v in &list {
-        let m = if s(v, "ministerName").is_empty() { "Not set".to_string() } else { s(v, "ministerName") };
-        let e = per_minister.entry(m).or_default();
-        match s(v, "status").as_str() {
-            "completed" => {
-                e.0 += 1;
-                if s(v, "date") > e.3 {
-                    e.3 = s(v, "date");
-                }
-            }
-            "scheduled" => e.1 += 1,
-            _ => e.2 += 1,
-        }
-    }
-    let minister_rows: Vec<(String, Vec<String>)> =
-        per_minister.into_iter().map(|(m, (d, sc, c, last))| (m.clone(), vec![m, d.to_string(), sc.to_string(), c.to_string(), last])).collect();
-    let mut printing = use_signal(|| "");
+    // Service 5's visit sheets: "scheduled", "week", or one visit's id.
+    let mut printing = use_signal(String::new);
     rsx! {
         div { class: "flex flex-wrap items-center gap-3 no-print",
             Segmented { options: vec!["Schedule", "History", "Coverage", "Groups"], current: view, testid: "visit-view" }
@@ -714,9 +713,8 @@ pub fn VisitationsHub() -> Element {
                 button { class: "btn-primary ml-auto", "data-testid": "visit-add", onclick: move |_| editing.set(Some((new_id("visit"), json!({ "date": today(), "status": "scheduled", "createdAt": chrono::Utc::now().to_rfc3339() })))), Icon { name: "plus" } "Schedule a visit" }
                 button { class: "btn-secondary", "data-testid": "visit-past", onclick: move |_| editing.set(Some((new_id("visit"), json!({ "date": today(), "status": "completed", "completedAt": chrono::Utc::now().to_rfc3339(), "createdAt": chrono::Utc::now().to_rfc3339() })))), "Record a past visit" }
             }
-            button { class: "btn-secondary", "data-testid": "visit-print-scheduled", onclick: move |_| { printing.set("scheduled"); print_with("size: A4; margin: 10mm"); }, Icon { name: "archive" } "Print scheduled" }
-            button { class: "btn-secondary", "data-testid": "visit-print-week", onclick: move |_| { printing.set("week"); print_with("size: A4; margin: 10mm"); }, Icon { name: "archive" } "Print last 7 days" }
-            button { class: "btn-secondary", "data-testid": "visit-print-ministers", onclick: move |_| { printing.set("ministers"); print_with("size: A4; margin: 10mm"); }, Icon { name: "archive" } "Minister summary" }
+            button { class: "btn-secondary", "data-testid": "visit-print-scheduled", onclick: move |_| printing.set("scheduled".into()), Icon { name: "archive" } "Print scheduled" }
+            button { class: "btn-secondary", "data-testid": "visit-print-week", onclick: move |_| printing.set("week".into()), Icon { name: "archive" } "Print last 7 days" }
         }
         if view() == "Groups" {
             crate::views::workforce_more::VisitGroupsTab {}
@@ -751,7 +749,8 @@ pub fn VisitationsHub() -> Element {
                             span { class: "flex-1 min-w-[10rem]", {who(&v)} span { class: "text-muted text-sm ml-2", {s(&v, "ministerName")} } }
                             if can_edit {
                                 button { class: "btn-secondary h-8", "data-testid": "visit-done", onclick: { let v = v.clone(); move |_| set_status(v.clone(), "completed") }, Icon { name: "check" } "Done" }
-                                button { class: "btn-ghost h-8", "data-testid": "visit-cancel", onclick: { let v = v.clone(); move |_| set_status(v.clone(), "cancelled") }, "Cancel" }
+                                button { class: "btn-ghost h-8", "data-testid": "visit-cancel", onclick: { let v = v.clone(); move |_| set_status(v.clone(), "canceled") }, "Cancel" }
+                                button { class: "btn-ghost h-8", "data-testid": "visit-print-form", onclick: { let id = s(&v, "id"); move |_| printing.set(id.clone()) }, Icon { name: "archive" } "Print form" }
                                 button { class: "btn-icon btn-ghost", "aria-label": "Edit visit", onclick: { let v = v.clone(); move |_| editing.set(Some((s(&v, "id"), v.clone()))) }, Icon { name: "edit" } }
                             }
                         }
@@ -782,13 +781,13 @@ pub fn VisitationsHub() -> Element {
                 }
             },
         }
-        div { class: "print-only space-y-2",
-            if printing() == "ministers" {
-                p { class: "font-semibold", "Visits by minister" }
-                Table { head: vec!["Minister", "Done", "Scheduled", "Cancelled", "Last visit"], rows: minister_rows }
-            } else {
-                p { class: "font-semibold", if printing() == "week" { "Visits in the last 7 days" } else { "Scheduled visits" } }
-                Table { head: vec!["Date", "Person", "Minister", "Status", "Notes"], rows: if printing() == "week" { p_last7 } else { p_sched } }
+        if !printing().is_empty() {
+            Modal { title: "Visitation print view".to_string(), wide: true, on_close: move |_| printing.set(String::new()),
+                {
+                    let kind = printing();
+                    let args = match kind.as_str() { "scheduled" | "week" => json!([{ "kind": kind }]), id => json!([{ "kind": "one", "id": id }]) };
+                    rsx! { S5Preview { report: "visitSheets", args } }
+                }
             }
         }
         if let Some((id, v)) = editing() {
@@ -796,7 +795,8 @@ pub fn VisitationsHub() -> Element {
                 on_saved: move |saved: Value| {
                     let mut next = saved.clone();
                     if let Some(w) = map.get(&s(&saved, "aNumber")) { next["workerName"] = json!(w.name); next["workerId"] = json!(w.a_number); }
-                    if s(&saved, "status") == "completed" && s(&saved, "completedAt").is_empty() { next["completedAt"] = json!(chrono::Utc::now().to_rfc3339()); }
+                    if s(&saved, "status") == "completed" && s(&saved, "completedAt").is_empty() { next["completedAt"] = json!(s(&saved, "date")); }
+                    if s(&saved, "status") == "scheduled" { next["completedAt"] = Value::Null; next["completionDetails"] = Value::Null; }
                     let id = s(&saved, "id");
                     spawn(async move { let _ = save_record(app, "visitations", &id, &next).await; });
                 }
@@ -815,7 +815,14 @@ pub fn VisitGroupMembers() -> Element {
     let mut current = use_signal(String::new);
     let mut adding = use_signal(HashSet::<uuid::Uuid>::new);
     let mut month = use_signal(|| Local::now().format("%Y-%m").to_string());
-    let mut sheet = use_signal(|| false);
+    // Service 5's add-member dialog: who to list, and filters.
+    let mut pool = use_signal(|| "unassigned");
+    let mut pool_q = use_signal(String::new);
+    let mut pool_trade = use_signal(String::new);
+    let mut pool_housing = use_signal(String::new);
+    // Monthly sheet options.
+    let mut paper = use_signal(|| "folio".to_string());
+    let mut officers = use_signal(|| true);
     let glist = groups.read().clone().unwrap_or_default();
     let names: Vec<String> = glist.iter().map(|g| s(g, "name")).filter(|n| !n.is_empty()).collect();
     let people = active(&workers);
@@ -824,7 +831,36 @@ pub fn VisitGroupMembers() -> Element {
     let rank = |r: &str| match r { "Katiwala" => 0, "II Katiwala" => 1, "Kalihim" => 2, _ => 9 };
     let mut members: Vec<Worker> = people.iter().filter(|w| w.visit_group == g).cloned().collect();
     members.sort_by_key(|w| (rank(&w.visit_role), w.name.to_lowercase()));
-    let unassigned: Vec<Worker> = people.iter().filter(|w| w.visit_group.is_empty()).cloned().collect();
+    let ql = pool_q().to_lowercase();
+    let unassigned: Vec<Worker> = people
+        .iter()
+        .filter(|w| match pool() {
+            "same" => w.visit_group != g && !s(&ginfo, "housing").is_empty() && w.housing == s(&ginfo, "housing"),
+            "other" => !w.visit_group.is_empty() && w.visit_group != g,
+            _ => w.visit_group.is_empty(),
+        })
+        .filter(|w| ql.is_empty() || w.name.to_lowercase().contains(&ql) || w.a_number.contains(&ql))
+        .filter(|w| pool_trade().is_empty() || w.trade == pool_trade())
+        .filter(|w| pool_housing().is_empty() || w.housing == pool_housing())
+        .cloned()
+        .collect();
+    let distinct = |f: fn(&Worker) -> String| {
+        let mut v: Vec<String> = people.iter().map(f).filter(|x| !x.is_empty()).collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let trades = distinct(|w| w.trade.clone());
+    let housings = distinct(|w| w.housing.clone());
+    // Monthly sheet rows for a group (officers first, or left out).
+    let sheet_rows = {
+        let people = people.clone();
+        move |group: &str| -> Vec<Worker> {
+            let mut v: Vec<Worker> = people.iter().filter(|w| w.visit_group == group && (officers() || rank(&w.visit_role) == 9)).cloned().collect();
+            v.sort_by_key(|w| (rank(&w.visit_role), w.name.to_lowercase()));
+            v
+        }
+    };
     let set = move |w: Worker, group: String, role: String| async move {
         match api::put::<_, Worker>(&format!("/workers/{}/profile", w.id), &json!({ "visitationGroup": group, "visitationRole": role })).await {
             Ok(_) => *WORKERS_CHANGED.write() += 1,
@@ -833,10 +869,10 @@ pub fn VisitGroupMembers() -> Element {
     };
     let assign = {
         let g = g.clone();
-        let unassigned = unassigned.clone();
+        let all = people.clone();
         move |_| {
             let g = g.clone();
-            let chosen: Vec<Worker> = unassigned.iter().filter(|w| adding().contains(&w.id)).cloned().collect();
+            let chosen: Vec<Worker> = all.iter().filter(|w| adding().contains(&w.id)).cloned().collect();
             async move {
                 for w in chosen {
                     if let Err(e) = api::put::<_, Worker>(&format!("/workers/{}/profile", w.id), &json!({ "visitationGroup": g, "visitationRole": "Member" })).await {
@@ -867,8 +903,27 @@ pub fn VisitGroupMembers() -> Element {
                     label { class: "label", r#for: "vg-month", "Month" }
                     input { id: "vg-month", r#type: "month", class: "field", value: "{month}", oninput: move |e| month.set(e.value()) }
                 }
-                button { class: "btn-secondary", "data-testid": "vgroup-print-roster", onclick: move |_| { sheet.set(false); print_with("size: A4; margin: 10mm"); }, Icon { name: "archive" } "Print roster" }
-                button { class: "btn-secondary", "data-testid": "vgroup-print-month", onclick: move |_| { sheet.set(true); print_with("size: landscape; margin: 8mm"); }, Icon { name: "archive" } "Print monthly attendance sheet" }
+                button { class: "btn-secondary", "data-testid": "vgroup-print-roster", onclick: { let g = g.clone(); move |_| s5print("visitationRoster", json!([g])) }, Icon { name: "archive" } "Print roster" }
+                div {
+                    label { class: "label", r#for: "vg-paper", "Paper size" }
+                    select { id: "vg-paper", class: "field", "data-testid": "vgroup-paper", onchange: move |e| paper.set(e.value()),
+                        for (v, l) in [("folio", "Folio / Long (8.5 x 13 in)"), ("a4", "A4 (8.27 x 11.69 in)"), ("letter", "Letter (8.5 x 11 in)")] { option { key: "{v}", value: "{v}", selected: paper() == v, "{l}" } }
+                    }
+                }
+                label { class: "flex items-center gap-2 text-sm pb-2",
+                    input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "vgroup-officers", checked: officers(), onchange: move |e| officers.set(e.checked()) }
+                    "Include officers in rows"
+                }
+                button { class: "btn-secondary", "data-testid": "vgroup-print-month", onclick: { let g = g.clone(); move |_| s5print("monthlySheet", json!([{ "group": g, "year": y, "month": m - 1, "paperSize": paper(), "officers": officers() }])) }, Icon { name: "archive" } "Print active sheet" }
+                button { class: "btn-secondary", "data-testid": "vgroup-print-all", onclick: move |_| s5print("monthlySheet", json!([{ "all": true, "year": y, "month": m - 1, "paperSize": paper(), "officers": officers() }])), Icon { name: "archive" } "Batch print all groups" }
+                button { class: "btn-secondary", "data-testid": "vgroup-csv",
+                    onclick: { let rows = sheet_rows.clone(); let g = g.clone(); move |_| {
+                        let mut out = format!("Name,Role,Housing{}\n", (1..=days).map(|d| format!(",{d}")).collect::<String>());
+                        for w in rows(&g) {
+                            out += &format!("{},{},{}{}\n", crate::views::personnel::csv_cell(&w.name), if w.visit_role.is_empty() { "Member" } else { &w.visit_role }, crate::views::personnel::csv_cell(&w.housing), ",".repeat(days as usize));
+                        }
+                        crate::views::personnel::save_file(&format!("{}-{}.csv", g.replace(' ', "_"), month()), &out);
+                    } }, "Export CSV" }
             }
             p { class: "font-semibold no-print", "{g}" span { class: "text-muted font-normal", " · {util::plural(members.len(), \"member\")} · {s(&ginfo, \"housing\")}" } }
             ul { class: "card divide-y divide-line no-print",
@@ -880,13 +935,35 @@ pub fn VisitGroupMembers() -> Element {
                             onchange: { let w = w.clone(); let g = g.clone(); move |e: FormEvent| set(w.clone(), g.clone(), e.value()) },
                             for r in ["Katiwala", "II Katiwala", "Kalihim", "Member"] { option { key: "{r}", value: "{r}", selected: w.visit_role == r || (r == "Member" && w.visit_role.is_empty()), "{r}" } }
                         }
+                        select { class: "field w-auto h-8", "aria-label": "Move {w.name} to another group", "data-testid": "vgroup-transfer",
+                            onchange: { let w = w.clone(); move |e: FormEvent| { if e.value() != "__stay" { spawn(set(w.clone(), e.value(), if e.value().is_empty() { String::new() } else { "Member".into() })); } } },
+                            option { value: "__stay", selected: true, "Move to…" }
+                            option { value: "", "-- Unassigned (remove from group) --" }
+                            for n in names.iter().filter(|n| **n != g) { option { key: "{n}", value: "{n}", "{n}" } }
+                        }
                         button { class: "btn-ghost h-8", "data-testid": "vgroup-remove", onclick: { let w = w.clone(); move |_| set(w.clone(), String::new(), String::new()) }, "Remove" }
                     }
                 }
             }
-            if !unassigned.is_empty() {
+            div {
                 details { class: "card p-3 no-print",
-                    summary { class: "text-sm font-medium cursor-pointer", "Not in any group ({unassigned.len()})" }
+                    summary { class: "text-sm font-medium cursor-pointer", "Add members ({unassigned.len()})" }
+                    div { class: "flex flex-wrap gap-2 pt-2",
+                        for (k, l) in [("unassigned", "Unassigned only"), ("same", "Same housing"), ("other", "Other groups")] {
+                            button { key: "{k}", class: if pool() == k { "btn-primary h-8" } else { "btn-secondary h-8" }, "data-testid": "vgroup-pool-{k}", onclick: move |_| pool.set(k), "{l}" }
+                        }
+                        input { class: "field h-8 w-40", r#type: "search", placeholder: "Search…", "data-testid": "vgroup-pool-search", value: "{pool_q}", oninput: move |e| pool_q.set(e.value()) }
+                        select { class: "field h-8 w-auto", "aria-label": "Trade", "data-testid": "vgroup-pool-trade", onchange: move |e| pool_trade.set(e.value()),
+                            option { value: "", "All trades / skills" }
+                            for x in trades.iter() { option { key: "{x}", value: "{x}", "{x}" } }
+                        }
+                        select { class: "field h-8 w-auto", "aria-label": "Housing", "data-testid": "vgroup-pool-housing", onchange: move |e| pool_housing.set(e.value()),
+                            option { value: "", "All residences / housing" }
+                            for x in housings.iter() { option { key: "{x}", value: "{x}", "{x}" } }
+                        }
+                        button { class: "btn-ghost h-8", "data-testid": "vgroup-select-filtered", onclick: { let ids: Vec<uuid::Uuid> = unassigned.iter().map(|w| w.id).collect(); move |_| adding.write().extend(ids.iter().copied()) }, "Select all filtered" }
+                    }
+                    if unassigned.is_empty() { p { class: "text-sm text-muted pt-2", "No one matches." } }
                     div { class: "max-h-64 overflow-y-auto grid sm:grid-cols-2 gap-1 pt-2",
                         for w in unassigned.iter().cloned() {
                             label { key: "{w.id}", class: "flex items-center gap-2 text-sm py-1",
@@ -897,29 +974,7 @@ pub fn VisitGroupMembers() -> Element {
                             }
                         }
                     }
-                    button { class: "btn-primary mt-2", "data-testid": "vgroup-assign", disabled: adding().is_empty(), onclick: assign, "Add {adding().len()} to {g}" }
-                }
-            }
-            div { class: "print-only print-sheet",
-                p { class: "font-semibold", "{g}" if sheet() { " — monthly attendance {month}" } else { " — roster" } }
-                p { class: "text-xs", "Housing: {s(&ginfo, \"housing\")} · Prayer: {s(&ginfo, \"prayerDay\")} {s(&ginfo, \"prayerTime\")}" }
-                table { class: "w-full text-xs border-collapse mt-2",
-                    thead {
-                        tr { class: "text-left border-b",
-                            th { class: "p-1", "Name" }
-                            th { class: "p-1", "Role" }
-                            if sheet() { for d in 1..=days { th { key: "{d}", class: "p-0.5 text-center w-5", "{d}" } } } else { th { class: "p-1", "Housing" } th { class: "p-1", "Phone" } }
-                        }
-                    }
-                    tbody {
-                        for w in members.iter() {
-                            tr { key: "{w.id}", class: "border-b",
-                                td { class: "p-1 whitespace-nowrap", "{w.name}" }
-                                td { class: "p-1", {if w.visit_role.is_empty() { "Member".to_string() } else { w.visit_role.clone() }} }
-                                if sheet() { for d in 1..=days { td { key: "{d}", class: "border-l" } } } else { td { class: "p-1", "{w.housing}" } td { class: "p-1", "{w.phone}" } }
-                            }
-                        }
-                    }
+                    button { class: "btn-primary mt-2", "data-testid": "vgroup-assign", disabled: adding().is_empty(), onclick: assign, "Add selected ({adding().len()}) to {g}" }
                 }
             }
         }
@@ -952,6 +1007,31 @@ pub fn OtSummary() -> Element {
     let mut from = use_signal(|| Local::now().format("%Y-%m-01").to_string());
     let mut to = use_signal(today);
     let view = use_signal(|| "Per volunteer");
+    let app = use_app();
+    // Service 5 "Load from Yesterday": yesterday's people, area and task copied to today
+    // with hours reset to 0, and the range set to today.
+    let load_yesterday = move |_| async move {
+        let yesterday = (Local::now().date_naive() - Duration::days(1)).format("%Y-%m-%d").to_string();
+        let from_list: Vec<Value> = ot.read().clone().unwrap_or_default().into_iter().filter(|e| s(e, "date") == yesterday).collect();
+        if from_list.is_empty() {
+            return app.error(format!("No entries from {yesterday} to copy."));
+        }
+        for e in &from_list {
+            let mut next = e.clone();
+            next["id"] = json!(new_id("ot"));
+            next["date"] = json!(today());
+            next["hours"] = json!(0);
+            next["computedPay"] = json!(0);
+            next["status"] = json!("Planned");
+            next["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+            if let Err(err) = save_record(app, "ot_entries", &s(&next, "id"), &next).await {
+                return app.error(err);
+            }
+        }
+        from.set(today());
+        to.set(today());
+        app.success(format!("Loaded {} entries from yesterday ({yesterday}) to today. Hours reset to 0.", from_list.len()));
+    };
     let entries: Vec<Value> = ot.read().clone().unwrap_or_default().into_iter().filter(|e| s(e, "date") >= from() && s(e, "date") <= to()).collect();
     let mut per: BTreeMap<String, (usize, f64, f64)> = BTreeMap::new();
     let mut area: BTreeMap<String, (HashSet<String>, f64, f64)> = BTreeMap::new();
@@ -984,7 +1064,11 @@ pub fn OtSummary() -> Element {
             div { label { class: "label", r#for: "ots-from", "From" } input { id: "ots-from", r#type: "date", class: "field", "data-testid": "ots-from", value: "{from}", oninput: move |e| from.set(e.value()) } }
             div { label { class: "label", r#for: "ots-to", "To" } input { id: "ots-to", r#type: "date", class: "field", "data-testid": "ots-to", value: "{to}", oninput: move |e| to.set(e.value()) } }
             Segmented { options: vec!["Per volunteer", "By area", "Daily", "Matrix"], current: view, testid: "ots-view" }
-            button { class: "btn-secondary", "data-testid": "ots-print", onclick: move |_| print_with("size: landscape; margin: 8mm"), Icon { name: "archive" } "Print" }
+            if app.can(Permission::ManageOvertime) { button { class: "btn-secondary", "data-testid": "ots-load-yesterday", onclick: load_yesterday, "Load from yesterday" } }
+            // Service 5's three OT prints: schedule by area, timesheet matrix, daily breakdown.
+            button { class: "btn-primary", "data-testid": "ots-print", title: "Print Overtime Schedule (By Area)", onclick: move |_| s5print("overtime", json!([{ "kind": "schedule", "start": from(), "end": to() }])), Icon { name: "archive" } "OT Schedule" }
+            button { class: "btn-secondary", "data-testid": "ots-print-matrix", title: "Timesheet Matrix (per volunteer)", onclick: move |_| s5print("overtime", json!([{ "kind": "matrix", "start": from(), "end": to() }])), "Matrix" }
+            button { class: "btn-secondary", "data-testid": "ots-print-daily", title: "Daily Breakdown (by Date)", onclick: move |_| s5print("overtime", json!([{ "kind": "daily", "start": from(), "end": to() }])), "Daily Breakdown" }
         }
         p { class: "text-sm tabular", "data-testid": "ots-total", "{entries.len()} entries · {util::plural(per.len(), \"person\")} · total {money(total)}" }
         div { class: "print-sheet",
@@ -1033,7 +1117,6 @@ pub fn DutyMonth() -> Element {
     rsx! {
         div { class: "flex flex-wrap items-end gap-3 no-print",
             div { label { class: "label", r#for: "dm-month", "Month" } input { id: "dm-month", r#type: "month", class: "field", "data-testid": "duty-month", value: "{month}", oninput: move |e| month.set(e.value()) } }
-            button { class: "btn-secondary", "data-testid": "duty-month-print", onclick: move |_| print_with("size: landscape; margin: 8mm"), Icon { name: "archive" } "Print the month" }
         }
         div { class: "card overflow-x-auto print-sheet", "data-testid": "duty-month-table",
             p { class: "font-semibold px-3 pt-3 print-only", "Overnight duty — {month}" }

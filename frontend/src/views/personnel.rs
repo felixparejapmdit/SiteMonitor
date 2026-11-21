@@ -88,6 +88,30 @@ pub fn PersonnelView() -> Element {
     let column_choices: Vec<(&'static str, &'static str)> = EXTRA.iter().copied().filter(|(k, _)| *k != "medical" || clinic).collect();
     let csv_rows = if chosen.is_empty() { shown.clone() } else { chosen.clone() };
     let print_rows = csv_rows.clone();
+    // The same rows as an Excel workbook (Service 5 offers CSV and Excel).
+    let xlsx_rows = csv_rows.clone();
+    let pe_rows = csv_rows.clone();
+    let mut print_export = use_signal(|| false);
+    let export_xlsx = move |_| {
+        let mut head = vec!["A#", "Name", "Status", "Trade", "Department", "Area", "Project group", "Role", "Project", "Task", "Remarks", "Phone", "Spouse", "Residence", "Housing"];
+        if clinic {
+            head.push("Medical");
+        }
+        let body: Vec<Vec<String>> = xlsx_rows
+            .iter()
+            .map(|w| {
+                let mut cells = vec![
+                    w.a_number.clone(), w.name.clone(), w.status.label().to_string(), w.trade.clone(), w.department.clone(), w.area.clone(), w.project_group.clone(),
+                    w.group_role.clone(), w.project.clone(), w.task.clone(), w.remarks.clone(), w.phone.clone(), w.spouse.clone(), w.residence.clone(), w.housing.clone(),
+                ];
+                if clinic {
+                    cells.push(w.medical.clone());
+                }
+                cells
+            })
+            .collect();
+        save_file(&format!("personnel-{}.xls", chrono::Local::now().format("%Y-%m-%d")), &crate::views::profile::excel_xml("Personnel", &head, &body));
+    };
     let export_csv = move |_| {
         let mut head = vec!["A#", "Name", "Status", "Trade", "Department", "Area", "Project group", "Role", "Project", "Task", "Remarks", "Phone", "Spouse", "Residence", "Housing"];
         if clinic {
@@ -130,7 +154,12 @@ pub fn PersonnelView() -> Element {
                         }
                     }
                     button { class: "btn-secondary h-10", "data-testid": "export-csv", onclick: export_csv, Icon { name: "archive" } "Download CSV" }
-                    button { class: "btn-secondary h-10", "data-testid": "print-list", onclick: move |_| crate::views::workforce_ops::print_with("size: landscape; margin: 8mm"), Icon { name: "archive" } "Print list" }
+                    button { class: "btn-secondary h-10", "data-testid": "export-xlsx", onclick: export_xlsx, Icon { name: "archive" } "Download Excel" }
+                    // The picker reads full profiles: the same permissions as the family roster.
+                    if app.can(Permission::ManageWorkforce) || app.can(Permission::PrintWorkforce) {
+                        button { class: "btn-secondary h-10", "data-testid": "print-export-open", onclick: move |_| print_export.set(true), Icon { name: "layers" } "Print & export…" }
+                    }
+                    crate::views::assignments::PrintReportsMenu { ids: vec![], testid: "personnel" }
                     if can_edit {
                         button { class: "btn-primary h-10 px-4", "data-testid": "add-worker", onclick: move |_| editing.set(Some(None)),
                             Icon { name: "plus" }
@@ -293,8 +322,11 @@ pub fn PersonnelView() -> Element {
         if let Some(target) = editing() {
             WorkerModal { worker: target, on_close: move |_| editing.set(None) }
         }
+        if print_export() {
+            crate::views::print_export::PrintExportModal { people: pe_rows.clone(), on_close: move |_| print_export.set(false) }
+        }
         if let Some(w) = profiling() {
-            crate::views::workforce_more::ProfileModal { worker: w, on_close: move |_| profiling.set(None) }
+            crate::views::profile::ProfileModal { worker: w, on_close: move |_| profiling.set(None) }
         }
         if let Some(w) = reassigning() {
             crate::views::workforce_ops::ReassignModal { worker: w, on_close: move |_| reassigning.set(None) }
@@ -315,7 +347,15 @@ const COLS_KEY: &str = "sm-personnel-cols";
 pub const EXTRA: &[(&str, &str)] =
     &[("task", "Task"), ("project", "Project"), ("remarks", "Remarks"), ("medical", "Medical"), ("spouse", "Spouse"), ("residence", "Residence"), ("housing", "Housing")];
 /// Service 5's archive reasons.
-pub const ARCHIVE_CATEGORIES: &[&str] = &["Retired", "Dismissed", "Deceased"];
+pub const ARCHIVE_CATEGORIES: &[&str] = &["Dismissed", "Retired", "Deceased"];
+/// What each separation category means (Service 5's wording).
+pub fn archive_category_label(c: &str) -> &'static str {
+    match c {
+        "Dismissed" => "Dismissed (eligible for future re-employment)",
+        "Retired" => "Retired (honorably separated / eligible for rehire)",
+        _ => "Deceased (memorialized / permanent archive)",
+    }
+}
 
 pub fn extra_value(w: &Worker, k: &str) -> String {
     match k {
@@ -426,7 +466,9 @@ pub fn save_request(w: &Worker, archived: bool) -> SaveWorkerRequest {
 pub fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>) -> Element {
     let app = use_app();
     let mut busy = use_signal(|| false);
-    let mut category = use_signal(|| "Retired".to_string());
+    let mut category = use_signal(|| "Dismissed".to_string());
+    let mut when = use_signal(crate::views::workforce_ops::today);
+    let mut start_status = use_signal(|| "Present".to_string());
     let mut reason = use_signal(String::new);
     let mut group = use_signal(String::new);
     let mut area = use_signal(String::new);
@@ -461,27 +503,34 @@ pub fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>)
                         let req = ReassignRequest { project_group: pick(group(), &w.project_group), area: pick(area(), &w.area), department: w.department.clone(), reason: reason() };
                         api::put::<_, Worker>(&format!("/workers/{}/reassign", w.id), &req).await.map(|_| ())
                     }
-                    Bulk::Archive | Bulk::Restore => {
-                        let archive = kind == Bulk::Archive;
-                        match api::put::<_, Worker>(&format!("/workers/{}", w.id), &save_request(w, archive)).await {
-                            Ok(_) => {
-                                let patch = if archive { serde_json::json!({ "archiveCategory": category(), "archiveReason": reason() }) } else { serde_json::json!({ "archiveCategory": "", "archiveReason": "" }) };
-                                api::put::<_, Worker>(&format!("/workers/{}/profile", w.id), &patch).await.map(|_| ())
-                            }
-                            Err(e) => Err(e),
-                        }
-                    }
+                    // Service 5's separation and re-employment (each is logged on the server).
+                    Bulk::Archive => api::post::<_, Worker>(
+                        &format!("/workers/{}/archive", w.id),
+                        &serde_json::json!({ "category": category(), "date": when(), "remarks": reason() }),
+                    )
+                    .await
+                    .map(|_| ()),
+                    Bulk::Restore => api::post::<_, Worker>(
+                        &format!("/workers/{}/reemploy", w.id),
+                        &serde_json::json!({ "date": when(), "status": start_status(), "project_group": group(), "remarks": reason() }),
+                    )
+                    .await
+                    .map(|_| ()),
                     Bulk::Edit => match field().as_str() {
-                        // Area and department are assignments, so they go through reassign (logged).
-                        f @ ("area" | "department") => {
+                        // Area, department and project group are assignments, so they go through reassign (logged).
+                        f @ ("area" | "department" | "projectGroup") => {
                             let v = value().trim().to_string();
                             let req = ReassignRequest {
-                                project_group: w.project_group.clone(),
+                                project_group: if f == "projectGroup" { v.clone() } else { w.project_group.clone() },
                                 area: if f == "area" { v.clone() } else { w.area.clone() },
                                 department: if f == "department" { v } else { w.department.clone() },
                                 reason: reason(),
                             };
                             api::put::<_, Worker>(&format!("/workers/{}/reassign", w.id), &req).await.map(|_| ())
+                        }
+                        "dailyStatus" => {
+                            let s = WorkerStatus::from_legacy(value().trim());
+                            api::put::<_, Worker>(&format!("/workers/{}/status", w.id), &WorkerStatusRequest { status: s, reason: reason() }).await.map(|_| ())
                         }
                         f => api::put::<_, Worker>(&format!("/workers/{}/profile", w.id), &serde_json::json!({ f: value().trim() })).await.map(|_| ()),
                     },
@@ -512,10 +561,36 @@ pub fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>)
                 p { class: "text-sm text-muted", "{names}" }
                 match kind {
                     Bulk::Archive => rsx! {
-                        div {
-                            label { class: "label", r#for: "ba-cat", "Reason for archiving" }
-                            select { id: "ba-cat", class: "field", "data-testid": "bulk-category", onchange: move |e| category.set(e.value()),
-                                for c in ARCHIVE_CATEGORIES { option { key: "{c}", value: "{c}", selected: category() == *c, "{c}" } }
+                        div { class: "grid sm:grid-cols-2 gap-3",
+                            div {
+                                label { class: "label", r#for: "ba-cat", "Separation category" }
+                                select { id: "ba-cat", class: "field", "data-testid": "bulk-category", onchange: move |e| category.set(e.value()),
+                                    for c in ARCHIVE_CATEGORIES { option { key: "{c}", value: "{c}", selected: category() == *c, {archive_category_label(c)} } }
+                                }
+                            }
+                            div {
+                                label { class: "label", r#for: "ba-date", "Effective date" }
+                                input { id: "ba-date", r#type: "date", class: "field", "data-testid": "bulk-date", value: "{when}", oninput: move |e| when.set(e.value()) }
+                            }
+                        }
+                    },
+                    Bulk::Restore => rsx! {
+                        div { class: "grid sm:grid-cols-2 gap-3",
+                            div {
+                                label { class: "label", r#for: "ba-date", "Re-employment date" }
+                                input { id: "ba-date", r#type: "date", class: "field", "data-testid": "bulk-date", value: "{when}", oninput: move |e| when.set(e.value()) }
+                            }
+                            div {
+                                label { class: "label", r#for: "ba-start", "Initial daily status" }
+                                select { id: "ba-start", class: "field", "data-testid": "bulk-start-status", onchange: move |e| start_status.set(e.value()),
+                                    for (v, l) in [("Present", "Present (active work)"), ("Absent", "Absent (standby)"), ("Passes", "Passes")] {
+                                        option { key: "{v}", value: "{v}", selected: start_status() == v, "{l}" }
+                                    }
+                                }
+                            }
+                            div { class: "sm:col-span-2",
+                                label { class: "label", r#for: "ba-group", "Project group (optional)" }
+                                input { id: "ba-group", class: "field", "data-testid": "bulk-group", placeholder: "Leave blank to keep", value: "{group}", oninput: move |e| group.set(e.value()) }
                             }
                         }
                     },
@@ -530,7 +605,11 @@ pub fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>)
                             div {
                                 label { class: "label", r#for: "be-field", "Field" }
                                 select { id: "be-field", class: "field", "data-testid": "bulk-field", onchange: move |e| field.set(e.value()),
-                                    for (k, l) in [("specificTask", "Specific task"), ("project", "Project"), ("absentReason", "Remarks / reason"), ("area", "Area"), ("department", "Department"), ("visitationHousing", "Housing group")] {
+                                    for (k, l) in [
+                                        ("area", "Assigned area"), ("project", "Assigned project"), ("projectGroup", "Assigned project group"), ("specificTask", "Assigned task"),
+                                        ("dailyStatus", "Daily status (Present / Absent / Passes)"), ("department", "Department / category"), ("jOrder", "Issue job order (YES / NO)"),
+                                        ("absentReason", "Reason (for Absent / Passes)"), ("subDepartment", "Shop specialty"), ("visitationHousing", "Visitation housing group"),
+                                    ] {
                                         option { key: "{k}", value: "{k}", selected: field() == k, "{l}" }
                                     }
                                 }
@@ -544,9 +623,9 @@ pub fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>)
                     },
                     _ => rsx! {},
                 }
-                if !matches!(kind, Bulk::Delete | Bulk::Restore) {
+                if !matches!(kind, Bulk::Delete) {
                     div {
-                        label { class: "label", r#for: "ba-reason", "Reason (optional)" }
+                        label { class: "label", r#for: "ba-reason", match kind { Bulk::Archive => "Reason / remarks", Bulk::Restore => "Re-employment notes", _ => "Reason (optional)" } }
                         input { id: "ba-reason", class: "field", "data-testid": "bulk-reason", value: "{reason}", oninput: move |e| reason.set(e.value()) }
                     }
                 }
@@ -598,7 +677,7 @@ pub fn StartDayModal(on_close: EventHandler<()>) -> Element {
 pub fn WorkerModal(worker: Option<Worker>, on_close: EventHandler<()>) -> Element {
     let app = use_app();
     let id = worker.as_ref().map(|w| w.id);
-    let start = worker.map(|w| SaveWorkerRequest {
+    let start = worker.clone().map(|w| SaveWorkerRequest {
         a_number: w.a_number,
         name: w.name,
         phone: w.phone,
@@ -611,8 +690,28 @@ pub fn WorkerModal(worker: Option<Worker>, on_close: EventHandler<()>) -> Elemen
         archived: w.archived,
     });
     let mut form = use_signal(|| start.unwrap_or_default());
+    // Service 5's other Add / Edit fields, saved to the person's profile.
+    let mut extra = use_signal(|| match &worker {
+        Some(w) => serde_json::json!({ "project": w.project, "specificTask": w.task, "absentReason": w.remarks }),
+        None => serde_json::json!({ "jOrder": "YES", "disableStaleAlerts": true, "projectRole": "Member" }),
+    });
+    let mut loaded = use_signal(|| id.is_none());
+    let mut photo = use_signal(String::new);
     let mut busy = use_signal(|| false);
+    // Editing: start from the stored shop specialty.
+    use_effect(move || {
+        if let (Some(id), false) = (id, *loaded.peek()) {
+            spawn(async move {
+                if let Ok(p) = api::get::<serde_json::Value>(&format!("/workers/{id}/profile")).await {
+                    extra.write()["subDepartment"] = p["subDepartment"].clone();
+                }
+                loaded.set(true);
+            });
+        }
+    });
     let f = form();
+    let x = extra();
+    let ex = |k: &str| crate::views::workforce_ops::s(&x, k);
     let text = move |key: &'static str, label: &'static str, value: String, set: fn(&mut SaveWorkerRequest, String)| {
         rsx! {
             div {
@@ -621,11 +720,44 @@ pub fn WorkerModal(worker: Option<Worker>, on_close: EventHandler<()>) -> Elemen
             }
         }
     };
+    let extra_text = move |key: &'static str, label: &'static str, value: String| {
+        rsx! {
+            div {
+                label { class: "label", r#for: "wx-{key}", "{label}" }
+                input { id: "wx-{key}", class: "field", "data-testid": "worker-x-{key}", value: "{value}", oninput: move |e| extra.write()[key] = serde_json::json!(e.value()) }
+            }
+        }
+    };
+    let pick = move |key: &'static str, label: &'static str, value: String, opts: Vec<&'static str>, core: bool| {
+        let mut all: Vec<String> = opts.iter().map(|o| o.to_string()).collect();
+        if !value.is_empty() && !all.contains(&value) {
+            all.push(value.clone());
+        }
+        rsx! {
+            div {
+                label { class: "label", r#for: "wx-{key}", "{label}" }
+                select { id: "wx-{key}", class: "field", "data-testid": "worker-x-{key}",
+                    onchange: move |e| if core { form.write().department = e.value() } else { extra.write()[key] = serde_json::json!(e.value()) },
+                    for o in all { option { key: "{o}", value: "{o}", selected: o == value, if o.is_empty() { "-- None --" } else { "{o}" } } }
+                }
+            }
+        }
+    };
     let save = move |_| async move {
         busy.set(true);
         let result: Result<Worker, _> = match id {
             Some(id) => api::put(&format!("/workers/{id}"), &form()).await,
             None => api::post("/workers", &form()).await,
+        };
+        let result = match result {
+            Ok(w) => {
+                let mut patch = extra();
+                if !photo().is_empty() {
+                    patch["photoUrl"] = serde_json::json!(photo());
+                }
+                api::put::<_, Worker>(&format!("/workers/{}/profile", w.id), &patch).await.map(|_| w)
+            }
+            Err(e) => Err(e),
         };
         busy.set(false);
         match result {
@@ -637,21 +769,60 @@ pub fn WorkerModal(worker: Option<Worker>, on_close: EventHandler<()>) -> Elemen
             Err(e) => app.error(e.message()),
         }
     };
+    let departments = vec!["", "Job-site Construction", "Woodland Shops", "Garden", "Residential Only", "Electrical Rm", "Water System", "Woodland Office"];
+    let shops = vec!["", "Carpenter Shop", "Painter Shop", "Tinsmith Shop", "Steelman/Welder Shop", "Powder Coating Shop"];
     rsx! {
         Modal { title: if id.is_some() { "Edit worker" } else { "Add worker" }, wide: true, on_close: move |_| on_close.call(()),
             div { class: "space-y-4",
+                p { class: "eyebrow", "1 · Identity" }
                 div { class: "grid sm:grid-cols-2 gap-4",
-                    {text("name", "Name", f.name.clone(), |r, v| r.name = v)}
-                    {text("a-number", "A# (worker number)", f.a_number.clone(), |r, v| r.a_number = v)}
+                    {text("name", "Name (e.g. LASTNAME, Firstname M.)", f.name.clone(), |r, v| r.name = v)}
+                    {text("a-number", "A# (assigned number)", f.a_number.clone(), |r, v| r.a_number = v)}
                     {text("phone", "Phone", f.phone.clone(), |r, v| r.phone = v)}
-                    {text("trade", "Trade", f.trade.clone(), |r, v| r.trade = v)}
-                    {text("department", "Department", f.department.clone(), |r, v| r.department = v)}
-                    {text("area", "Area", f.area.clone(), |r, v| r.area = v)}
+                    if id.is_none() {
+                        div {
+                            label { class: "label", r#for: "w-photo", "Photo" }
+                            input { id: "w-photo", r#type: "file", accept: "image/jpeg,image/png,image/webp", class: "text-sm", "data-testid": "worker-photo",
+                                onchange: move |_| async move {
+                                    match media_canvas::file_as_data_url("w-photo", 2.0 * 1_048_576.0).await {
+                                        Ok(Some(url)) => photo.set(url),
+                                        Ok(None) => {}
+                                        Err(e) => app.error(e),
+                                    }
+                                } }
+                        }
+                    }
+                }
+                p { class: "eyebrow", "2 · Trade" }
+                div { class: "grid sm:grid-cols-2 gap-4",
+                    {text("trade", "Trade / skill", f.trade.clone(), |r, v| r.trade = v)}
+                    {pick("department", "Department / category", f.department.clone(), departments, true)}
+                    {pick("subDepartment", "Shop specialty", ex("subDepartment"), shops, false)}
+                    if id.is_none() {
+                        {extra_text("skillLevel", "Skill level", ex("skillLevel"))}
+                        {extra_text("tradeGroup", "Trade group name", ex("tradeGroup"))}
+                    }
+                }
+                p { class: "eyebrow", "3 · Placement" }
+                div { class: "grid sm:grid-cols-2 gap-4",
                     {text("group", "Project group", f.project_group.clone(), |r, v| r.project_group = v)}
-                    {text("role", "Role in group", f.group_role.clone(), |r, v| r.group_role = v)}
+                    if id.is_none() {
+                        {pick("projectRole", "Project role", ex("projectRole"), vec!["Member", "Asst. Project Leader", "Project Leader", "Project Overseer"], false)}
+                        {extra_text("visitationHousing", "Housing group", ex("visitationHousing"))}
+                        {extra_text("workResidence", "Work residence", ex("workResidence"))}
+                    } else {
+                        {text("role", "Role in group", f.group_role.clone(), |r, v| r.group_role = v)}
+                    }
+                    {text("area", "Assigned area", f.area.clone(), |r, v| r.area = v)}
+                    {extra_text("project", "Assigned project", ex("project"))}
+                    div { class: "sm:col-span-2",
+                        label { class: "label", r#for: "wx-specificTask", "Assigned task" }
+                        textarea { id: "wx-specificTask", class: "field", rows: "2", "data-testid": "worker-x-specificTask", value: "{ex(\"specificTask\")}",
+                            oninput: move |e| extra.write()["specificTask"] = serde_json::json!(e.value()) }
+                    }
                 }
                 div {
-                    p { class: "label", "Today" }
+                    p { class: "label", "Daily status" }
                     div { class: "flex flex-wrap gap-2",
                         for s in WorkerStatus::ALL {
                             button { key: "{s:?}", r#type: "button", class: if f.status == s { "btn-primary" } else { "btn-secondary" }, "data-testid": "worker-status-{s:?}",
@@ -659,13 +830,28 @@ pub fn WorkerModal(worker: Option<Worker>, on_close: EventHandler<()>) -> Elemen
                         }
                     }
                 }
-                label { class: "flex items-center gap-2 text-sm",
-                    input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "worker-archived", checked: f.archived, onchange: move |e| form.write().archived = e.checked() }
-                    "Archived (no longer working here; kept for the records)"
+                if f.status != WorkerStatus::Present {
+                    {extra_text("absentReason", "Reason (for Absent / Passes)", ex("absentReason"))}
+                }
+                div { class: "flex flex-wrap gap-6",
+                    label { class: "flex items-center gap-2 text-sm",
+                        input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "worker-jorder", checked: ex("jOrder") != "NO",
+                            onchange: move |e| extra.write()["jOrder"] = serde_json::json!(if e.checked() { "YES" } else { "NO" }) }
+                        "Issue job order?"
+                    }
+                    label { class: "flex items-center gap-2 text-sm",
+                        input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "worker-stale-alerts", checked: !(x["disableStaleAlerts"].as_bool() == Some(true)),
+                            onchange: move |e| extra.write()["disableStaleAlerts"] = serde_json::json!(!e.checked()) }
+                        "Enable stale task alerts?"
+                    }
+                    label { class: "flex items-center gap-2 text-sm",
+                        input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "worker-archived", checked: f.archived, onchange: move |e| form.write().archived = e.checked() }
+                        "Archived (no longer working here; kept for the records)"
+                    }
                 }
                 div { class: "modal-actions",
                     button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
-                    button { class: "btn-primary", "data-testid": "save-worker", disabled: busy() || f.name.trim().is_empty(), onclick: save,
+                    button { class: "btn-primary", "data-testid": "save-worker", disabled: busy() || f.name.trim().is_empty() || !loaded(), onclick: save,
                         if busy() { Spinner {} }
                         if id.is_some() { "Save changes" } else { "Add worker" }
                     }
@@ -688,15 +874,16 @@ pub fn WorkforceData(#[props(default = "all")] part: &'static str) -> Element {
     let mut report = use_signal(|| None::<WorkforceImportReport>);
     let mut confirm_restore = use_signal(|| None::<Uuid>);
 
-    let import = move |_| async move {
-        let file = match media_canvas::backup_file("workforce-file", 500.0 * 1_048_576.0) {
-            Ok(Some(f)) => f,
-            Ok(None) => return,
-            Err(e) => return app.error(e),
-        };
+    // A merge is reviewed first (Service 5's differential review); replacing skips it.
+    let mut review = use_signal(|| None::<(web_sys::File, serde_json::Value)>);
+    let run_import = move |file: web_sys::File, resolutions: String| async move {
         busy.set(Some("import"));
         let mode = if replace() { "Replace" } else { "Merge" };
-        let path = format!("/workforce/import?mode={mode}&file_name={}", js_sys::encode_uri_component(&file.name()));
+        let path = format!(
+            "/workforce/import?mode={mode}&file_name={}&resolutions={}",
+            js_sys::encode_uri_component(&file.name()),
+            js_sys::encode_uri_component(&resolutions)
+        );
         let headers = api::passphrase_header(&passphrase());
         match api::upload(&path, &file, &headers).await.and_then(|t| {
             serde_json::from_str::<WorkforceImportReport>(&t).map_err(|_| api::ApiFail::Server(0, "Unexpected reply from the server.".into()))
@@ -711,8 +898,27 @@ pub fn WorkforceData(#[props(default = "all")] part: &'static str) -> Element {
         }
         busy.set(None);
     };
+    let import = move |_| async move {
+        let file = match media_canvas::backup_file("workforce-file", 500.0 * 1_048_576.0) {
+            Ok(Some(f)) => f,
+            Ok(None) => return,
+            Err(e) => return app.error(e),
+        };
+        if replace() {
+            return run_import(file, String::new()).await;
+        }
+        busy.set(Some("import"));
+        let headers = api::passphrase_header(&passphrase());
+        match api::upload("/workforce/import/preview", &file, &headers).await.and_then(|t| {
+            serde_json::from_str::<serde_json::Value>(&t).map_err(|_| api::ApiFail::Server(0, "Unexpected reply from the server.".into()))
+        }) {
+            Ok(a) => review.set(Some((file, a))),
+            Err(e) => app.error(e.message()),
+        }
+        busy.set(None);
+    };
     // Personnel data only leaves encrypted: every download needs the passphrase.
-    let download = move |_| async move {
+    let download = move |_: ()| async move {
         if passphrase().chars().count() < 8 {
             return app.error("Type a passphrase of at least 8 characters first: the backup is encrypted with it.");
         }
@@ -758,7 +964,7 @@ pub fn WorkforceData(#[props(default = "all")] part: &'static str) -> Element {
                         if busy() == Some("import") { Spinner {} } else { Icon { name: "upload" } }
                         "Choose backup file"
                     } }
-                    if show_backup { button { class: "btn-secondary", "data-testid": "workforce-export", disabled: busy().is_some(), onclick: download,
+                    if show_backup { button { class: "btn-secondary", "data-testid": "workforce-export", disabled: busy().is_some(), onclick: move |_| download(()),
                         if busy() == Some("export") { Spinner {} } else { Icon { name: "archive" } }
                         "Download backup"
                     } }
@@ -774,6 +980,18 @@ pub fn WorkforceData(#[props(default = "all")] part: &'static str) -> Element {
                         }
                     }
                 } }
+                if let Some((file, a)) = review() {
+                    crate::views::sync_review::SyncReview {
+                        analysis: a,
+                        on_cancel: move |_| { review.set(None); app.success("Differential synchronization cancelled."); },
+                        on_checkpoint: move |_| { spawn(download(())); },
+                        on_apply: move |choices: std::collections::HashMap<String, String>| {
+                            review.set(None);
+                            let file = file.clone();
+                            spawn(run_import(file, serde_json::to_string(&choices).unwrap_or_default()));
+                        },
+                    }
+                }
                 if let Some(r) = report() {
                     div { class: "rounded-md bg-tag-green-bg text-tag-green-text text-sm px-4 py-3 space-y-1", "data-testid": "import-report",
                         p { class: "font-medium", "{r.detected}: {util::plural(r.workers, \"worker\")} imported" }

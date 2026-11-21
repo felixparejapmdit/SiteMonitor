@@ -17,7 +17,7 @@ use crate::services::media_canvas;
 use crate::state::use_app;
 use crate::util;
 use crate::views::personnel::REFRESH as WORKERS_CHANGED;
-use crate::views::workforce_ops::{new_id, print_with, s, save_record, today, use_records, use_workers};
+use crate::views::workforce_ops::{new_id, s, s5print, save_record, today, use_records, use_workers};
 
 fn groups_of(v: &Value) -> Vec<String> {
     v["projectGroups"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect()
@@ -219,13 +219,16 @@ pub fn SignatoriesBoard() -> Element {
 
 /// Who is behind a number (Service 5's roster pop-ups on the dashboard).
 #[component]
-pub fn RosterModal(title: String, people: Vec<Worker>, on_close: EventHandler<()>) -> Element {
+pub fn RosterModal(title: String, people: Vec<Worker>, on_close: EventHandler<()>, #[props(default)] present: bool) -> Element {
+    let ids: Vec<String> = people.iter().map(|w| w.id.to_string()).collect();
     rsx! {
         crate::components::ui::Modal { title: title.clone(), wide: true, on_close: move |_| on_close.call(()),
             div { class: "space-y-3", "data-testid": "roster-modal",
                 div { class: "flex justify-between items-center",
                     p { class: "text-sm text-muted", {util::plural(people.len(), "person")} }
-                    button { class: "btn-secondary no-print", onclick: move |_| print_with("size: A4; margin: 10mm"), Icon { name: "archive" } "Print" }
+                    if present {
+                        button { class: "btn-primary no-print", "data-testid": "roster-print", onclick: move |_| s5print("presentRoster", json!([ids.clone()])), "🖨️ Print All Present" }
+                    }
                 }
                 table { class: "w-full text-sm",
                     thead { tr { class: "text-left text-muted border-b border-line", th { class: "py-1.5", "Name" } th { "A#" } th { "Trade" } th { "Project group" } th { "Status" } } }
@@ -323,7 +326,8 @@ pub fn DashboardCharts() -> Element {
             }
         }
         if let Some((t, list)) = roster() {
-            RosterModal { title: t, people: list, on_close: move |_| roster.set(None) }
+            // Service 5 prints only the Present roster ("Print All Present").
+            RosterModal { present: arcs.iter().any(|a| a.1 == WorkerStatus::Present && a.0 == t.as_str()), title: t, people: list, on_close: move |_| roster.set(None) }
         }
     }
 }
@@ -684,9 +688,6 @@ pub fn ReallocationPanel() -> Element {
             section { class: "card p-5 space-y-3", "data-testid": "realloc-notice-card",
                 div { class: "flex items-center justify-between",
                     p { class: "font-semibold", "Reallocation notice" }
-                    if notice().is_some() {
-                        button { class: "btn-secondary", "data-testid": "realloc-print", onclick: move |_| print_with("size: A5 landscape; margin: 10mm"), Icon { name: "archive" } "Print / share" }
-                    }
                 }
                 if notice().is_none() { p { class: "text-sm text-muted", "After a move, the notice to share with the team appears here." } }
             }

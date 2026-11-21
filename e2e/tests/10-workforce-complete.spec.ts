@@ -39,7 +39,6 @@ const workers = async (request: any, token?: string) =>
   (await request.get("/api/workers", token ? { headers: { authorization: `Bearer ${token}` } } : {})).json();
 const records = async (request: any, list: string) => (await request.get(`/api/workforce/records/${list}`)).json();
 // An init script, so the stub survives any reload (e.g. a service-worker update).
-const stubPrint = (page: Page) => page.addInitScript(() => { (window as any).print = () => { (window as any).__printed = true; }; });
 
 test("Site Monitors only see people working in their zones (via area mapping)", async ({ page, request }) => {
   const jun = await userFor(request, "SiteMonitor", "Jun"); // looks after the hall, the garden and the pool
@@ -75,10 +74,12 @@ test("profile editor: personal details, health fields and a photo", async ({ pag
   await openAs(page, "OfficeAdmin", "/personnel");
   const row = page.getByTestId("worker-row").filter({ hasText: "Hall Worker One" });
   await row.getByTestId("profile-worker").click();
-  await page.getByTestId("rf-spouseName").fill("Maria One");
-  await page.getByTestId("rf-emergencyPhone").fill("0917 111 2222");
-  await page.getByTestId("rf-bloodType").selectOption("O+"); // Office Admins have clinic access
-  await page.getByTestId("rf-save").click();
+  await page.getByTestId("ptab-family").click();
+  await page.getByTestId("pf-spouseName").fill("Maria One");
+  await page.getByTestId("ptab-personal").click();
+  await page.getByTestId("pf-emergencyPhone").fill("0917 111 2222");
+  await page.getByTestId("pf-bloodType").selectOption("O+"); // Office Admins have clinic access
+  await page.getByTestId("profile-save").click();
   await expect(page.getByText("Saved").first()).toBeVisible();
   const w = (await workers(request)).find((x: any) => x.a_number === "201");
   const prof = await (await request.get(`/api/workers/${w.id}/profile`)).json();
@@ -103,12 +104,11 @@ test("dashboard, tomorrow's assignments, and bulk update by pasted names", async
 
   await page.goto("/operations");
   await page.getByTestId("tab-Encoder").click();
-  const group = page.getByTestId("tomorrow-group").filter({ hasText: "Team H" });
-  await group.getByTestId("tomorrow-fill-text").fill("Pour hall footing");
-  await group.getByTestId("tomorrow-fill").click();
-  await page.getByTestId("tomorrow-save").click();
-  await expect(page.getByText("Tomorrow's assignments saved").first()).toBeVisible();
-  expect((await workers(request)).filter((w: any) => w.tomorrow === "Pour hall footing").length).toBe(2);
+  await page.getByTestId("encoder-tomorrow").click();
+  await page.getByTestId("enc-slip-item").filter({ hasText: "Team H" }).click();
+  await page.getByTestId("enc-master-task").fill("Pour hall footing");
+  await page.getByTestId("enc-fill").click();
+  await expect.poll(async () => (await workers(request)).filter((w: any) => w.tomorrow === "Pour hall footing").length).toBe(2);
 
   await page.getByTestId("tab-Bulk Update").click();
   await page.getByTestId("bulk-text").fill("203\nNobody Here");
@@ -192,25 +192,18 @@ test("clinic: booster reminders, medications, contact becomes an episode", async
   expect(ep.workerId).toBe("203");
 });
 
-test("new print kinds: tomorrow's and residential job orders, family roster @safari", async ({ page, request }) => {
+test("tomorrow's job orders print with tomorrow's task (Service 5's print view) @safari", async ({ page, request }) => {
   // Runs alone in WebKit, so set its data up itself (same values the earlier tests save).
   for (const w of await workers(request)) {
     if (w.project_group !== "Team H") continue;
-    const data: any = { tomorrowAssignment: "Pour hall footing" };
+    const data: any = { tomorrowAssignment: { specificTask: "Pour hall footing" } };
     if (w.a_number === "201") data.spouseName = "Maria One";
     expect((await request.put(`/api/workers/${w.id}/profile`, { data })).ok()).toBeTruthy();
   }
-  await stubPrint(page);
   await openAs(page, "OfficeAdmin", "/operations");
   await page.getByTestId("tab-Print").click();
-  await page.getByTestId("print-kind").selectOption("tomorrow");
-  await expect(page.locator(".job-order")).toHaveCount(2);
-  await expect(page.locator(".job-order").first()).toContainText("Task: Pour hall footing");
-  await page.getByTestId("print-kind").selectOption("residential");
-  await expect(page.locator(".job-order").first()).toContainText("Residence: Bunk House");
-  await page.getByTestId("print-now").click();
-  await expect.poll(() => page.evaluate(() => document.getElementById("print-page")?.textContent)).toContain("8.5in 13in");
-  await expect.poll(() => page.evaluate(() => (window as any).__printed)).toBe(true); // print() runs 50 ms later
-  await page.getByTestId("print-kind").selectOption("family");
-  await expect(page.getByTestId("record-row").filter({ hasText: "Hall Worker One" })).toContainText("Maria One");
+  // Service 5's print view starts on tomorrow and uses the staged task.
+  const f = page.frameLocator("#s5-preview");
+  await expect(f.locator(".worker-form").filter({ hasText: "Pour hall footing" })).toHaveCount(2);
+  await expect(f.locator(".print-page")).toHaveCount(1);
 });

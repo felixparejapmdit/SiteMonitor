@@ -1,11 +1,11 @@
 /**
  * Sign-in, first-time password change, and the access matrix.
  */
-import { api, expect, openAs, resetDatabase, test, userFor } from "./helpers";
+import { api, DEMO_PASSWORD, expect, openAs, resetDatabase, test, userFor } from "./helpers";
 
 test.beforeAll(() => resetDatabase());
 
-test("sign-in: wrong password is refused, demo sign-in works, sign out ends the session", async ({ browser, request }) => {
+test("sign-in: wrong password is refused, username sign-in works, sign out ends the session", async ({ browser, request }) => {
   const admin = await userFor(request, "OfficeAdmin");
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -13,12 +13,15 @@ test("sign-in: wrong password is refused, demo sign-in works, sign out ends the 
   await expect(page.getByTestId("login-form")).toBeVisible();
   expect((await page.request.get("/api/estate/map")).status()).toBe(401);
 
-  await page.getByTestId("login-email").fill(admin.email);
+  await page.getByTestId("login-username").fill(admin.username);
   await page.getByTestId("login-password").fill("not-the-password");
   await page.getByTestId("login-submit").click();
   await expect(page.getByTestId("login-error")).toContainText("don't match");
 
-  await page.getByTestId("demo-OfficeAdmin").click();
+  // Live sign-in page: no account list, just username and password.
+  await expect(page.getByTestId("demo-accounts")).toHaveCount(0);
+  await page.getByTestId("login-password").fill(DEMO_PASSWORD);
+  await page.getByTestId("login-submit").click();
   await expect(page.getByTestId("signed-in-as")).toHaveText(admin.name);
   // Deep link survives sign-in.
   await expect(page.getByRole("heading", { name: "Map Studio" })).toBeVisible();
@@ -32,16 +35,16 @@ test("sign-in: wrong password is refused, demo sign-in works, sign out ends the 
 
 test("a new person must choose their own password; staff without access can't open admin pages", async ({ browser, request }) => {
   const admin = await userFor(request, "OfficeAdmin");
-  const email = `liza.${Date.now()}@ashford-estate.example`;
+  const username = `liza.${Date.now()}`;
   const created = await api(request, admin).post("/users", {
-    name: "Liza Marquez", role: "SiteMonitor", phone: "", email, assigned_area_ids: [], is_active: true, initial_password: "welcome-to-the-estate",
+    name: "Liza Marquez", role: "SiteMonitor", phone: "", username, assigned_area_ids: [], is_active: true, initial_password: "welcome-to-the-estate",
   });
   expect(created.ok(), await created.text()).toBeTruthy();
 
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto("/");
-  await page.getByTestId("login-email").fill(email);
+  await page.getByTestId("login-username").fill(username);
   await page.getByTestId("login-password").fill("welcome-to-the-estate");
   await page.getByTestId("login-submit").click();
   await expect(page.getByTestId("forced-password-change")).toBeVisible();

@@ -16,25 +16,29 @@ use crate::error::{AppError, AppResult};
 use crate::auth;
 use crate::state::{AppState, CurrentUser};
 
+/// A username: 3 to 40 characters, letters, digits, dot, dash or underscore.
+pub fn username_ok(u: &str) -> bool {
+    (3..=40).contains(&u.chars().count()) && u.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
 /// Trims and checks the form; returns the cleaned values.
 async fn validate(state: &AppState, req: &SaveUserRequest, editing: Option<Uuid>) -> AppResult<(String, UserRole, String, String, Vec<Uuid>)> {
     let name = req.name.trim().to_string();
-    let email = req.email.trim().to_lowercase();
+    let username = req.username.trim().to_lowercase();
     let phone = req.phone.trim().to_string();
     if name.is_empty() {
         return Err(AppError::bad("Please enter the person's name."));
     }
     let Some(role) = req.role else { return Err(AppError::bad("Please choose a role.")) };
-    let at = email.find('@');
-    if !matches!(at, Some(i) if i > 0 && email[i + 1..].contains('.')) || email.contains(' ') {
-        return Err(AppError::bad("Please enter a valid email address, e.g. name@example.com."));
+    if !username_ok(&username) {
+        return Err(AppError::bad("Please enter a username of 3 to 40 letters, digits, dots, dashes or underscores (no spaces)."));
     }
-    let mut taken = Users::find().filter(user::Column::Email.eq(email.clone()));
+    let mut taken = Users::find().filter(user::Column::Username.eq(username.clone()));
     if let Some(id) = editing {
         taken = taken.filter(user::Column::Id.ne(id));
     }
     if taken.count(&state.db).await? > 0 {
-        return Err(AppError::bad("Someone already uses that email address."));
+        return Err(AppError::bad("Someone already uses that username."));
     }
     let areas = if role == UserRole::SiteMonitor { req.assigned_area_ids.clone() } else { vec![] };
     if !areas.is_empty() {
@@ -43,15 +47,15 @@ async fn validate(state: &AppState, req: &SaveUserRequest, editing: Option<Uuid>
             return Err(AppError::bad("One of the chosen zones no longer exists. Please refresh and try again."));
         }
     }
-    Ok((name, role, phone, email, areas))
+    Ok((name, role, phone, username, areas))
 }
 
 /// `POST /api/users` — add a person (Office Admin).
 pub async fn create(State(state): State<AppState>, me: CurrentUser, Json(req): Json<SaveUserRequest>) -> AppResult<Json<User>> {
     me.require(Permission::ManagePeople)?;
-    let (name, role, phone, email, areas) = validate(&state, &req, None).await?;
+    let (name, role, phone, username, areas) = validate(&state, &req, None).await?;
     let first = req.initial_password.clone().unwrap_or_default();
-    if let Some(p) = password_problem(&first, &email) {
+    if let Some(p) = password_problem(&first, &username) {
         return Err(AppError::bad(format!("First password: {p}")));
     }
     let hash = auth::hash_blocking(first.trim().to_string()).await?;
@@ -60,7 +64,7 @@ pub async fn create(State(state): State<AppState>, me: CurrentUser, Json(req): J
         name: Set(name),
         role: Set(enc(&role)),
         phone: Set(phone),
-        email: Set(email),
+        username: Set(username),
         assigned_area_ids: Set(to_json(&areas)),
         is_active: Set(true),
         password_hash: Set(Some(hash)),
@@ -84,7 +88,7 @@ pub async fn update(
 ) -> AppResult<Json<User>> {
     me.require(Permission::ManagePeople)?;
     let row = Users::find_by_id(id).one(&state.db).await?.ok_or_else(|| AppError::not_found("person"))?;
-    let (name, role, phone, email, areas) = validate(&state, &req, Some(id)).await?;
+    let (name, role, phone, username, areas) = validate(&state, &req, Some(id)).await?;
     let before = convert::user(row.clone());
     if id == me.0.id && (!req.is_active || role != before.role) {
         return Err(AppError::bad("You can't deactivate yourself or change your own role. Ask another Office Admin."));
@@ -106,7 +110,7 @@ pub async fn update(
     a.name = Set(name);
     a.role = Set(enc(&role));
     a.phone = Set(phone);
-    a.email = Set(email);
+    a.username = Set(username);
     a.assigned_area_ids = Set(to_json(&areas));
     a.is_active = Set(req.is_active);
     let saved = a.update(&state.db).await?;
@@ -266,4 +270,19 @@ pub async fn save_access(
     txn.commit().await?;
     state.hub.changed(&[DataScope::Users]).await;
     Ok(Json(matrix(&state).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::username_ok;
+
+    #[test]
+    fn usernames() {
+        for ok in ["marco", "jun.dela-cruz", "ana_2", "abc"] {
+            assert!(username_ok(ok), "{ok}");
+        }
+        for bad in ["ab", "has space", "name@example.com", "", &"x".repeat(41)] {
+            assert!(!username_ok(bad), "{bad}");
+        }
+    }
 }

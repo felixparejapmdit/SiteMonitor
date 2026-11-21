@@ -9,7 +9,7 @@ pub struct Model {
     pub name: String,
     pub role: String,
     pub phone: String,
-    pub email: String,
+    pub username: String,
     pub assigned_area_ids: Json,
     pub is_active: bool,
     /// Argon2 PHC string; never leaves the server.

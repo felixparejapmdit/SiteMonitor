@@ -147,6 +147,9 @@ pub enum ImportMode {
 pub struct ImportOptions {
     #[serde(default)]
     pub file_name: String,
+    /// The merge review's choices, as JSON: conflict id -> keep_local / accept_incoming / smart_merge.
+    #[serde(default)]
+    pub resolutions: String,
     #[serde(default)]
     pub mode: ImportMode,
     /// Lets a file with no workforce data through (anti-wipe override).
@@ -493,7 +496,7 @@ pub struct SaveUserRequest {
     pub name: String,
     pub role: Option<UserRole>,
     pub phone: String,
-    pub email: String,
+    pub username: String,
     /// Zones a Site Monitor looks after (ignored for other roles).
     pub assigned_area_ids: Vec<Uuid>,
     pub is_active: bool,
@@ -506,7 +509,7 @@ pub struct SaveUserRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LoginRequest {
-    pub email: String,
+    pub username: String,
     pub password: String,
 }
 
@@ -534,7 +537,7 @@ pub struct ResetPasswordResponse {
 pub struct DemoAccount {
     pub name: String,
     pub role: UserRole,
-    pub email: String,
+    pub username: String,
 }
 
 /// What the sign-in page may show before anyone is signed in.

@@ -10,8 +10,8 @@
  * - The live API and WebSocket are never cached; offline writes are queued
  *   by the app in IndexedDB instead.
  */
-const VERSION = "sitemonitor-v1";
-const SHELL = ["/", "/manifest.json", "/fonts/inter-variable.woff2", "/icons/icon.svg", "/seed/estate-map-v1.svg"];
+const VERSION = "sitemonitor-v2";
+const SHELL = ["/", "/manifest.json", "/fonts/inter-variable.woff2", "/icons/icon.svg", "/seed/estate-map-v1.svg", "/print/s5print.js", "/print/s5print.css"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -29,6 +29,8 @@ self.addEventListener("activate", (event) => {
 });
 
 function isImmutable(url) {
+  // Service 5's print kit keeps its name across updates, so it is revalidated.
+  if (url.pathname.startsWith("/print/")) return false;
   return (
     url.pathname.startsWith("/assets/") ||
     url.pathname.startsWith("/wasm/") ||

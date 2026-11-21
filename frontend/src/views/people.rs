@@ -94,7 +94,7 @@ fn PersonRow(user: User, zones: String, is_me: bool, on_edit: EventHandler<User>
                     if is_me { Pill { tone: Tone::Blue, text: "You" } }
                     if !user.is_active { Pill { tone: Tone::Gray, text: "Deactivated" } }
                 }
-                p { class: "text-sm text-muted truncate", "{user.email} · {user.phone}" }
+                p { class: "text-sm text-muted truncate", "{user.username} · {user.phone}" }
                 if zones.starts_with('⚠') {
                     p { class: "text-xs text-tag-amber-text mt-0.5 truncate", "data-testid": "person-no-zones", "{zones}" }
                 } else if !zones.is_empty() {
@@ -113,23 +113,23 @@ fn PersonRow(user: User, zones: String, is_me: bool, on_edit: EventHandler<User>
 fn PersonModal(editing: Editing, on_close: EventHandler<()>) -> Element {
     let app = use_app();
     let (id, start) = match &editing {
-        Editing::New => (None, User { id: Uuid::nil(), name: String::new(), role: UserRole::SiteMonitor, phone: String::new(), email: String::new(), assigned_area_ids: vec![], is_active: true, access: Default::default(), permissions: vec![], must_change_password: false, last_sign_in_at: None }),
+        Editing::New => (None, User { id: Uuid::nil(), name: String::new(), role: UserRole::SiteMonitor, phone: String::new(), username: String::new(), assigned_area_ids: vec![], is_active: true, access: Default::default(), permissions: vec![], must_change_password: false, last_sign_in_at: None }),
         Editing::Existing(u) => (Some(u.id), u.clone()),
     };
     let is_me = id.is_some() && id == app.user_id();
     let mut name = use_signal(|| start.name.clone());
     let mut role = use_signal(|| start.role);
     let mut phone = use_signal(|| start.phone.clone());
-    let mut email = use_signal(|| start.email.clone());
+    let mut username = use_signal(|| start.username.clone());
     let mut zones = use_signal(|| start.assigned_area_ids.clone());
     let mut active = use_signal(|| start.is_active);
     let mut first_password = use_signal(String::new);
     let mut temp_password = use_signal(|| None::<String>);
     let mut confirm_reset = use_signal(|| false);
     let mut busy = use_signal(|| false);
-    let password_issue = if id.is_none() && !first_password().is_empty() { shared::access::password_problem(&first_password(), &email()) } else { None };
+    let password_issue = if id.is_none() && !first_password().is_empty() { shared::access::password_problem(&first_password(), &username()) } else { None };
     let areas: Vec<util::FlatArea> = app.flat_areas().into_iter().filter(|a| !a.area.is_archived).collect();
-    let can_save = !name().trim().is_empty() && !email().trim().is_empty() && !busy()
+    let can_save = !name().trim().is_empty() && !username().trim().is_empty() && !busy()
         && (id.is_some() || (!first_password().is_empty() && password_issue.is_none()));
     let title = if id.is_some() { format!("Edit {}", start.name) } else { "Add a person".to_string() };
 
@@ -139,7 +139,7 @@ fn PersonModal(editing: Editing, on_close: EventHandler<()>) -> Element {
             name: name(),
             role: Some(role()),
             phone: phone(),
-            email: email(),
+            username: username(),
             assigned_area_ids: zones(),
             is_active: active(),
             initial_password: id.is_none().then(|| first_password()),
@@ -185,8 +185,8 @@ fn PersonModal(editing: Editing, on_close: EventHandler<()>) -> Element {
                 }
                 div { class: "grid sm:grid-cols-2 gap-4",
                     div {
-                        label { class: "label", r#for: "person-email", "Email" }
-                        input { id: "person-email", r#type: "email", class: "field", "data-testid": "person-email", placeholder: "name@example.com", value: "{email}", oninput: move |e| email.set(e.value()) }
+                        label { class: "label", r#for: "person-username", "Username" }
+                        input { id: "person-username", r#type: "text", class: "field", autocapitalize: "none", spellcheck: "false", "data-testid": "person-username", placeholder: "e.g. liza", value: "{username}", oninput: move |e| username.set(e.value()) }
                     }
                     div {
                         label { class: "label", r#for: "person-phone", "Phone" }
@@ -222,7 +222,7 @@ fn PersonModal(editing: Editing, on_close: EventHandler<()>) -> Element {
                     div {
                         label { class: "label", r#for: "person-password", "First password" }
                         input { id: "person-password", r#type: "text", class: "field font-mono", autocomplete: "off", "data-testid": "person-password",
-                            placeholder: "At least 10 characters", value: "{first_password}", oninput: move |e| first_password.set(e.value()) }
+                            placeholder: "At least 8 characters", value: "{first_password}", oninput: move |e| first_password.set(e.value()) }
                         p { class: if password_issue.is_some() { "hint text-tag-red-text" } else { "hint" },
                             {password_issue.unwrap_or("Give it to them in person. They'll be asked to choose their own the first time they sign in.")}
                         }

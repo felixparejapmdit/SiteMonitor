@@ -221,7 +221,14 @@
   .id-card { break-inside: avoid; page-break-inside: avoid; min-height: 54mm; }
   .print-sheet table { font-size: 7pt; }
   .print-sheet .sticky { position: static; }
+  /* A print started inside a dialog (e.g. the profile's dossier): only its
+     .print-solo block prints, and the dialog around it stops clipping. */
+  body:has(.print-solo) *:not(:has(.print-solo)):not(.print-solo):not(.print-solo *) { display: none !important; }
+  body:has(.print-solo) *:has(.print-solo) { position: static !important; max-height: none !important; overflow: visible !important; transform: none !important; animation: none !important; padding: 0 !important; margin: 0 !important; box-shadow: none !important; background: #fff !important; }
+  body:has(.print-solo) .print-solo, body:has(.print-solo) .print-solo * { visibility: visible !important; }
+  .print-solo { display: block !important; }
 }
+.print-solo { display: none; }
 
 /* ---------- live feel ---------- */
 .live-dot { position: relative; display: inline-block; width: 8px; height: 8px; border-radius: 9999px; background: #10b981; flex-shrink: 0; }

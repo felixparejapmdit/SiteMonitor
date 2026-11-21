@@ -13,12 +13,12 @@ use shared::*;
 use uuid::Uuid;
 
 use crate::api;
-use crate::components::ui::{EmptyState, Icon, Modal, Spinner};
+use crate::components::ui::{EmptyState, Icon, Modal};
 use crate::services::sync::{self, Outcome};
 use crate::state::use_app;
 use crate::util;
 use crate::views::personnel::REFRESH as WORKERS_CHANGED;
-use crate::views::workforce_ops::{by_a_number, choice, f, name_of, new_id, s, save_record, today, use_records, use_workers, Field, Kind, RecordModal, Table};
+use crate::views::workforce_ops::{by_a_number, choice, f, name_of, new_id, s, s5print, save_record, today, use_records, use_workers, Field, Kind, RecordModal, Table};
 
 // ---------------------------------------------------------------- dashboard
 
@@ -156,78 +156,6 @@ async fn save_profile(app: AppState, id: Uuid, patch: Value) -> Result<(), Strin
     }
 }
 use crate::state::AppState;
-
-/// Service 5's encoder: set everyone's assignment for tomorrow, group by group,
-/// with "fill the whole group". Job orders for tomorrow print from the Print tab.
-#[component]
-pub fn TomorrowTab() -> Element {
-    let app = use_app();
-    let workers = use_workers();
-    let mut drafts = use_signal(HashMap::<Uuid, String>::new);
-    let mut fill = use_signal(HashMap::<String, String>::new);
-    let mut busy = use_signal(|| false);
-    let mut groups: BTreeMap<String, Vec<Worker>> = BTreeMap::new();
-    for w in workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived) {
-        groups.entry(if w.project_group.is_empty() { "No group".into() } else { w.project_group.clone() }).or_default().push(w);
-    }
-    let all: Vec<Worker> = groups.values().flatten().cloned().collect();
-    let changed: Vec<(Uuid, String)> = drafts().into_iter().filter(|(id, v)| all.iter().any(|w| w.id == *id && w.tomorrow != *v)).collect();
-    let n = changed.len();
-    let save = move |_| {
-        let changed = changed.clone();
-        let all = all.clone();
-        async move {
-            busy.set(true);
-            for (id, v) in changed {
-                // Service 5's staged assignment: Start New Day makes it today's task.
-                let staged = staged_tomorrow(all.iter().find(|w| w.id == id), &v);
-                if let Err(e) = save_profile(app, id, json!({ "tomorrowAssignment": staged })).await {
-                    app.error(e);
-                    busy.set(false);
-                    return;
-                }
-            }
-            drafts.write().clear();
-            app.success("Tomorrow's assignments saved");
-            busy.set(false);
-        }
-    };
-    rsx! {
-        div { class: "flex flex-wrap items-center justify-between gap-3",
-            p { class: "text-sm text-muted", "Tomorrow ({util::day(chrono::Utc::now() + Duration::days(1))}): what each person will do. Fill a whole group at once, then adjust." }
-            button { class: "btn-primary", "data-testid": "tomorrow-save", disabled: n == 0 || busy(), onclick: save,
-                if busy() { Spinner {} }
-                "Save {n} changes"
-            }
-        }
-        for (group, members) in groups {
-            section { key: "{group}", class: "card p-4 space-y-2", "data-testid": "tomorrow-group",
-                div { class: "flex flex-wrap items-center gap-2",
-                    p { class: "font-semibold flex-1", "{group}" }
-                    input { class: "field w-auto min-w-[14rem]", "aria-label": "Assignment for all of {group}", "data-testid": "tomorrow-fill-text", placeholder: "Same task for the whole group",
-                        value: "{fill().get(&group).cloned().unwrap_or_default()}",
-                        oninput: { let g = group.clone(); move |e: FormEvent| { fill.write().insert(g.clone(), e.value()); } } }
-                    button { class: "btn-secondary", "data-testid": "tomorrow-fill",
-                        onclick: { let g = group.clone(); let ids: Vec<Uuid> = members.iter().map(|w| w.id).collect(); move |_| {
-                            let v = fill().get(&g).cloned().unwrap_or_default();
-                            let mut d = drafts.write();
-                            for id in &ids { d.insert(*id, v.clone()); }
-                        } },
-                        "Fill group"
-                    }
-                }
-                for w in members.clone() {
-                    div { key: "{w.id}", class: "grid sm:grid-cols-[14rem_1fr] items-center gap-2",
-                        label { class: "text-sm truncate", r#for: "tm-{w.id}", "{w.name}" }
-                        input { id: "tm-{w.id}", class: "field", "data-testid": "tomorrow-input",
-                            value: "{drafts().get(&w.id).cloned().unwrap_or_else(|| w.tomorrow.clone())}",
-                            oninput: move |e| { drafts.write().insert(w.id, e.value()); } }
-                    }
-                }
-            }
-        }
-    }
-}
 
 // ------------------------------------------------------------- bulk update
 
@@ -511,6 +439,7 @@ pub fn VisitGroupsTab() -> Element {
                 div { class: "flex justify-between items-center",
                     p { class: "font-semibold", "Visitation groups" }
                     button { class: "btn-secondary", "data-testid": "vgroup-add", onclick: move |_| editing.set(Some(("visitation_groups", new_id("vg"), json!({ "createdAt": chrono::Utc::now().to_rfc3339() })))), Icon { name: "plus" } "Add group" }
+                    button { class: "btn-secondary", "data-testid": "vgroup-print-all-rosters", onclick: move |_| s5print("visitationSummary", json!([])), Icon { name: "archive" } "Print All Rosters" }
                 }
                 Table { head: vec!["Group", "Housing", "Prayer day", "Time"], rows: grows, on_edit: move |id: String| {
                     if let Some(v) = glist.iter().find(|g| s(g, "id") == id) { editing.set(Some(("visitation_groups", id, v.clone()))) }
@@ -529,81 +458,5 @@ pub fn VisitGroupsTab() -> Element {
         if let Some((list, id, v)) = editing() {
             RecordModal { title: if list == "ministers" { "Minister".to_string() } else { "Visitation group".to_string() }, list, id, fields: if list == "ministers" { mfields.clone() } else { gfields.clone() }, initial: v, on_close: move |_| editing.set(None) }
         }
-    }
-}
-
-// ------------------------------------------------------------ profile editor
-
-/// Everything Service 5 records about a person beyond the basics. Health fields
-/// appear only for people with "Clinic ledger" (the server enforces it too).
-#[component]
-pub fn ProfileModal(worker: Worker, on_close: EventHandler<()>) -> Element {
-    let app = use_app();
-    let id = worker.id;
-    let profile = use_resource(move || async move { api::get::<Value>(&format!("/workers/{id}/profile")).await });
-    let mut photo_busy = use_signal(|| false);
-    let clinic = app.can(Permission::ManageClinic);
-    let mut fields = vec![
-        f("birthday", "Birthday", Kind::Date),
-        f("civilStatus", "Civil status", choice(&["", "Single", "Married", "Widowed", "Separated"])),
-        f("address", "Home address", Kind::Text),
-        f("residence", "Residence", Kind::Text),
-        f("workResidence", "Work residence", Kind::Text),
-        f("language", "Language", Kind::Text),
-        f("fatherName", "Father's name", Kind::Text),
-        f("motherName", "Mother's name", Kind::Text),
-        f("spouseName", "Spouse's name", Kind::Text),
-        f("spouseBirthday", "Spouse's birthday", Kind::Date),
-        f("spouseContact", "Spouse's phone", Kind::Text),
-        f("weddingDate", "Wedding date", Kind::Date),
-        f("emergencyContact", "Emergency contact", Kind::Text),
-        f("emergencyRelationship", "Relationship", Kind::Text),
-        f("emergencyPhone", "Emergency phone", Kind::Text),
-        f("skillLevel", "Skill level", Kind::Text),
-        f("hourlyRate", "Hourly rate", Kind::Number),
-        f("subDepartment", "Sub-department", Kind::Text),
-        f("jOrder", "Issue a job order", choice(&["YES", "NO"])),
-        f("project", "Project", Kind::Text),
-        f("specificTask", "Specific task", Kind::Text),
-        f("absentReason", "Remarks / reason", Kind::Text),
-        f("assignedUnit", "Housing unit / room", Kind::Text),
-        f("visitationHousing", "Housing group", Kind::Text),
-        f("visitationGroup", "Visitation group", Kind::Text),
-        f("visitationRole", "Visitation role", choice(&["", "Katiwala", "II Katiwala", "Kalihim", "Member"])),
-    ];
-    if clinic {
-        fields.extend([f("bloodType", "Blood type", choice(&["", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"])), f("medical", "Medical conditions", Kind::Text), f("medicalNotes", "Medical notes", Kind::Long)]);
-    }
-    let upload = move |_| async move {
-        let file = match crate::services::media_canvas::file_as_data_url("profile-photo", 2.0 * 1_048_576.0).await {
-            Ok(Some(f)) => f,
-            Ok(None) => return,
-            Err(e) => return app.error(e),
-        };
-        photo_busy.set(true);
-        match save_profile(app, id, json!({ "photoUrl": file })).await {
-            Ok(_) => app.success("Photo saved"),
-            Err(e) => app.error(e),
-        }
-        photo_busy.set(false);
-    };
-    let loaded: Option<Result<Value, String>> = profile.read().as_ref().map(|r| r.clone().map_err(|e| e.message()));
-    match loaded {
-        None => rsx! { Modal { title: worker.name.clone(), on_close: move |_| on_close.call(()), div { class: "p-6 flex justify-center", Spinner { size: 20 } } } },
-        Some(Err(e)) => rsx! { Modal { title: worker.name.clone(), on_close: move |_| on_close.call(()), p { class: "text-sm text-tag-red-text", "{e}" } } },
-        Some(Ok(p)) => rsx! {
-            div { class: "contents", "data-testid": "profile-modal",
-                RecordModal { title: format!("{} — profile", worker.name), list: "workers", id: id.to_string(), fields, initial: p,
-                    endpoint: Some(format!("/workers/{id}/profile")), deletable: false, on_close: move |_| on_close.call(()) }
-            }
-            div { class: "fixed bottom-6 left-6 z-[60] card p-3 flex items-center gap-3 shadow-float",
-                if worker.has_photo { img { src: "/api/workers/{id}/photo", alt: "", class: "w-12 h-12 rounded-full object-cover" } }
-                input { id: "profile-photo", r#type: "file", accept: "image/jpeg,image/png,image/webp", class: "hidden", onchange: upload }
-                label { r#for: "profile-photo", class: "btn-secondary cursor-pointer", "data-testid": "profile-photo-upload",
-                    if photo_busy() { Spinner {} } else { Icon { name: "camera" } }
-                    if worker.has_photo { "Change photo" } else { "Add photo" }
-                }
-            }
-        },
     }
 }

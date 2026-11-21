@@ -57,7 +57,7 @@ pub fn user(m: user::Model) -> User {
         name: m.name,
         role,
         phone: m.phone,
-        email: m.email,
+        username: m.username,
         assigned_area_ids: from_json::<Vec<Uuid>>(&m.assigned_area_ids),
         is_active: m.is_active,
         permissions: permissions(&access, role),

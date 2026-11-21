@@ -222,16 +222,16 @@ pub fn can_see_report(user: &User, report: &DecisionAlert) -> bool {
 }
 
 /// Minimum rules for a password; `None` when it's acceptable.
-pub fn password_problem(password: &str, email: &str) -> Option<&'static str> {
+pub fn password_problem(password: &str, username: &str) -> Option<&'static str> {
     let p = password.trim();
-    if p.chars().count() < 10 {
-        return Some("Use at least 10 characters.");
+    if p.chars().count() < 8 {
+        return Some("Use at least 8 characters.");
     }
     if p.chars().count() > 128 {
         return Some("Use at most 128 characters.");
     }
-    if !email.is_empty() && p.eq_ignore_ascii_case(email.trim()) {
-        return Some("Don't use your email address as your password.");
+    if !username.is_empty() && p.eq_ignore_ascii_case(username.trim()) {
+        return Some("Don't use your username as your password.");
     }
     let first = p.chars().next().unwrap_or(' ');
     if p.chars().all(|c| c == first) {
@@ -266,7 +266,7 @@ mod tests {
         let (garden, rose, pool) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
         let parent = |z: Uuid| (z == rose).then_some(garden);
         let mut u: User = serde_json::from_value(serde_json::json!({
-            "id": Uuid::from_u128(9), "name": "Ana", "role": "SiteMonitor", "phone": "", "email": "a@x",
+            "id": Uuid::from_u128(9), "name": "Ana", "role": "SiteMonitor", "phone": "", "username": "ana",
             "assigned_area_ids": [garden], "is_active": true
         }))
         .unwrap();
@@ -315,7 +315,7 @@ mod tests {
                 name: "x".into(),
                 role,
                 phone: String::new(),
-                email: String::new(),
+                username: String::new(),
                 assigned_area_ids: vec![],
                 is_active: true,
                 permissions: access.effective(role),

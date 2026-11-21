@@ -81,7 +81,7 @@ pub fn AccessView() -> Element {
         .iter()
         .filter(|u| show_inactive() || u.is_active)
         .filter(|u| role_filter().map(|r| r == u.role).unwrap_or(true))
-        .filter(|u| q.is_empty() || u.name.to_lowercase().contains(&q) || u.email.to_lowercase().contains(&q))
+        .filter(|u| q.is_empty() || u.name.to_lowercase().contains(&q) || u.username.to_lowercase().contains(&q))
         .cloned()
         .collect();
     let customised = m.users.iter().filter(|u| u.is_active && !u.access.is_default()).count();

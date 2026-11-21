@@ -25,6 +25,8 @@
       @keyframes boot { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
       body.app-ready #boot { opacity: 0; pointer-events: none; }
     </style>
+    <!-- Service 5's own print templates (see frontend/public/print). -->
+    <script src="/print/s5print.js" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {

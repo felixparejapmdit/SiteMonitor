@@ -40,6 +40,9 @@ pub struct Normalized {
     pub collections: BTreeMap<String, Vec<(String, Value)>>,
     /// Service 5's own daily snapshots found in a service5.db: (date, data).
     pub legacy_snapshots: Vec<(String, Value)>,
+    /// Where the backup came from and when (Service 5 `syncMetadata`), for the merge review.
+    pub source_device: String,
+    pub exported_at: String,
 }
 
 // ------------------------------------------------------------------ reading
@@ -207,6 +210,11 @@ pub fn normalize(raw: Value) -> AppResult<Normalized> {
         _ => return Err(AppError::bad("This file isn't a Service 5 backup.")),
     };
     let ours = obj.get("format").and_then(Value::as_str) == Some("sitemonitor-workforce");
+    let source_device = obj.get("syncMetadata").map(|m| str_of(m, "sourceDeviceId")).unwrap_or_default();
+    let exported_at = [obj.get("syncMetadata").map(|m| str_of(m, "exportTimestamp")).unwrap_or_default(), obj.get("exportedAt").and_then(scalar).unwrap_or_default()]
+        .into_iter()
+        .find(|x| !x.is_empty())
+        .unwrap_or_default();
     let mut workers: HashMap<String, Value> = HashMap::new();
     let mut lists: BTreeMap<String, HashMap<String, Value>> = BTreeMap::new();
     let mut dicts: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
@@ -244,7 +252,7 @@ pub fn normalize(raw: Value) -> AppResult<Normalized> {
                 let slot = lists.entry(c.clone()).or_default();
                 for item in items.into_iter().filter(|v| !v.is_null()) {
                     let item = if c == "volunteer_vaccines" { migrate_vaccine(item) } else { item };
-                    let id = item_id(&item);
+                    let id = list_key(&c, &item);
                     let keep_old = slot.get(&id).is_some_and(|old| stamp(old) > stamp(&item));
                     if !keep_old {
                         slot.insert(id, item);
@@ -267,7 +275,7 @@ pub fn normalize(raw: Value) -> AppResult<Normalized> {
 
     let mut collections: BTreeMap<String, Vec<(String, Value)>> = BTreeMap::new();
     for (c, items) in lists {
-        let mut v: Vec<(String, Value)> = items.into_iter().collect();
+        let mut v: Vec<(String, Value)> = items.into_values().map(|item| (item_id(&item), item)).collect();
         v.sort_by(|a, b| a.0.cmp(&b.0));
         collections.insert(c, v);
     }
@@ -277,7 +285,7 @@ pub fn normalize(raw: Value) -> AppResult<Normalized> {
     let mut workers: Vec<Value> = workers.into_values().collect();
     workers.sort_by_key(|w| str_of(w, "name").to_lowercase());
     let label = if ours { "SiteMonitor workforce backup".into() } else { format!("Service 5 backup (v{version})") };
-    Ok(Normalized { label, workers, collections, legacy_snapshots: vec![] })
+    Ok(Normalized { label, workers, collections, legacy_snapshots: vec![], source_device, exported_at })
 }
 
 /// Service 5's per-worker backfills (`normalizeBackupData`), minus random ids:
@@ -337,6 +345,16 @@ fn migrate_vaccine(v: Value) -> Value {
     })
 }
 
+/// Where two key generations hold the same item. Visitation groups are re-created
+/// with new ids in each generation (Service 5 shows only `wc_visitation_groups`),
+/// so a group is one per name; everything else is one per id.
+fn list_key(collection: &str, item: &Value) -> String {
+    match collection {
+        "visitation_groups" if !str_of(item, "name").trim().is_empty() => format!("name:{}", str_of(item, "name").trim().to_lowercase()),
+        _ => item_id(item),
+    }
+}
+
 /// Items keep their own id; id-less ones (e.g. duty rosters) are keyed by
 /// content, so the same item from two key generations collapses into one.
 fn item_id(v: &Value) -> String {
@@ -364,7 +382,8 @@ fn stamp(v: &Value) -> i64 {
 
 fn leading_int(v: &Value) -> Option<u32> {
     match v {
-        Value::Number(n) => n.as_u64().map(|n| n as u32),
+        // Service 5 wrote both 4 and 1.0.
+        Value::Number(n) => n.as_u64().map(|n| n as u32).or_else(|| n.as_f64().filter(|f| *f >= 0.0).map(|f| f as u32)),
         Value::String(s) => s.trim().split(|c: char| !c.is_ascii_digit()).next().and_then(|d| d.parse().ok()),
         _ => None,
     }
@@ -416,6 +435,7 @@ pub fn worker_of(x: &Person) -> shared::Worker {
         t if !t.is_empty() => t,
         _ => w.get("trades").and_then(Value::as_array).and_then(|a| a.first()).and_then(scalar).unwrap_or_default(),
     };
+    let plan = |k: &str| w["tomorrowAssignment"].get(k).and_then(scalar).unwrap_or_default();
     let tomorrow = match &w["tomorrowAssignment"] {
         Value::Object(o) => o.get("specificTask").and_then(scalar).unwrap_or_default(),
         Value::String(t) => t.clone(),
@@ -436,6 +456,10 @@ pub fn worker_of(x: &Person) -> shared::Worker {
         updated_at: x.updated_at,
         has_photo: s("photoUrl").starts_with("data:image/"),
         tomorrow,
+        tomorrow_area: plan("area"),
+        tomorrow_project: plan("project"),
+        tomorrow_status: plan("dailyStatus"),
+        tomorrow_reason: plan("absentReason"),
         residence: first("workResidence", "residence"),
         task: s("specificTask"),
         project: s("project"),
@@ -556,7 +580,7 @@ fn worker_id(w: &Value) -> Uuid {
 /// Imports normalized data. Merge adds and updates (never deletes). Replace
 /// swaps each collection the file has for the file's copy. Either way, a
 /// collection that is empty in the file never wipes one that has data.
-pub async fn import(db: &DatabaseConnection, data: Normalized, mode: ImportMode, allow_empty: bool) -> AppResult<WorkforceImportReport> {
+pub async fn import(db: &DatabaseConnection, data: Normalized, mode: ImportMode, allow_empty: bool, resolutions: &Map<String, Value>) -> AppResult<WorkforceImportReport> {
     if data.workers.is_empty() && data.collections.values().all(Vec::is_empty) && !allow_empty {
         return Err(AppError::bad("This file has no workforce data in it, so nothing was changed."));
     }
@@ -572,13 +596,20 @@ pub async fn import(db: &DatabaseConnection, data: Normalized, mode: ImportMode,
         }
     } else {
         // A# matches keep the ids of workers that were added in SiteMonitor first.
-        let by_a: HashMap<String, Uuid> = people(&txn).await?.into_iter().map(|x| (str_of(&x.p, "aNumber"), x.id)).filter(|(a, _)| !a.is_empty()).collect();
+        let here = people(&txn).await?;
+        let by_a: HashMap<String, Uuid> = here.iter().map(|x| (str_of(&x.p, "aNumber"), x.id)).filter(|(a, _)| !a.is_empty()).collect();
         if mode == ImportMode::Replace {
             txn.execute_unprepared("DELETE FROM workers").await?;
         }
+        // Merge: someone already here is merged section by section (Service 5's sync merge).
+        let local: Vec<Value> = here.iter().map(|x| { let mut p = x.p.clone(); p["workerId"] = json!(x.id.to_string()); p }).collect();
+        let now = Utc::now().to_rfc3339();
         for w in &data.workers {
-            let mut w = w.clone();
-            let id = by_a.get(&str_of(&w, "aNumber")).copied().unwrap_or_else(|| worker_id(&w));
+            let existing = (mode == ImportMode::Merge).then(|| crate::services::sync_merge::match_local(&local, w)).flatten();
+            let (id, mut w) = match existing {
+                Some(cw) => (Uuid::parse_str(&str_of(cw, "workerId")).unwrap_or_else(|_| worker_id(w)), crate::services::sync_merge::merge_pair(cw, w, resolutions, &now)),
+                None => (by_a.get(&str_of(w, "aNumber")).copied().unwrap_or_else(|| worker_id(w)), w.clone()),
+            };
             w["workerId"] = json!(id);
             save_person(&txn, id, &w).await?;
         }
@@ -782,6 +813,94 @@ async fn query_pairs<C: ConnectionTrait>(db: &C, sql: &str) -> AppResult<Vec<(St
 mod tests {
     use super::*;
 
+    /// Every key in Service 5's LEGACY_KEY_MAP (js/backup.js) lands where Service 5 puts it.
+    #[test]
+    fn service5_legacy_key_map_is_honoured() {
+        let map = [
+            ("workersData", "workers"), ("wc_workers_data", "workers"), ("workers_data", "workers"),
+            ("signatoriesData", "signatories"), ("wc_signatories", "signatories"), ("signatories_data", "signatories"), ("wc_signatories_data", "signatories"),
+            ("ministersData", "ministers"), ("wc_ministers", "ministers"), ("ministers_data", "ministers"), ("wc_ministers_data", "ministers"),
+            ("visitationsData", "visitations"), ("wc_visitations", "visitations"), ("visitations_data", "visitations"), ("wc_visitations_data", "visitations"),
+            ("visitationGroups", "visitation_groups"), ("visitationGroupsData", "visitation_groups"), ("wc_visitation_groups", "visitation_groups"), ("visitation_groups_data", "visitation_groups"),
+            ("historyData", "history"), ("wc_history_data", "history"), ("history_data", "history"), ("wc_history_logs", "history"), ("history_logs", "history"),
+            ("attendanceLog", "attendance_log"), ("wc_attendance_log", "attendance_log"), ("attendance_log_data", "attendance_log"),
+            ("assignmentLog", "assignment_log"), ("wc_assignment_log", "assignment_log"), ("assignment_log_data", "assignment_log"),
+            ("groupChanges", "group_changes"), ("group_changes_log", "group_changes"), ("group_changes_data", "group_changes"), ("wc_group_changes", "group_changes"),
+            ("dutyAreas", "duty_areas"), ("wc_duty_areas", "duty_areas"), ("duty_areas_data", "duty_areas"),
+            ("dutyRosters", "duty_rosters"), ("wc_duty_rosters", "duty_rosters"), ("duty_rosters_data", "duty_rosters"),
+            ("dutySchedules", "duty_schedules"), ("wc_duty_schedules", "duty_schedules"), ("duty_schedules_data", "duty_schedules"),
+            ("healthEvents", "health_events"), ("wc_health_events", "health_events"), ("health_events_data", "health_events"),
+            ("contactTraces", "contact_traces"), ("wc_contact_traces", "contact_traces"), ("contact_traces_data", "contact_traces"),
+            ("vaccines", "volunteer_vaccines"), ("wc_vaccines", "volunteer_vaccines"), ("volunteerVaccines", "volunteer_vaccines"), ("wc_volunteer_vaccines", "volunteer_vaccines"), ("volunteer_vaccines_data", "volunteer_vaccines"),
+            ("volunteerMedications", "volunteer_medications"), ("wc_volunteer_medications", "volunteer_medications"),
+            ("wc_volunteer_health_logs", "volunteer_health_logs"), ("wc_medical_audit_logs", "medical_audit_logs"), ("wc_ot_entries", "ot_entries"),
+            ("wc_project_groups_meta", "project_groups_meta"), ("wc_custom_trades", "custom_trades"),
+        ];
+        for (from, to) in map {
+            assert_eq!(canonical(from), to, "{from}");
+        }
+    }
+
+    /// One backup per Service 5 generation, each with a person, a log entry and a list item.
+    #[test]
+    fn every_service5_backup_generation_imports() {
+        let person = |a: &str| json!({ "aNumber": a, "name": format!("Person {a}"), "dailyStatus": "Present" });
+        let generations = [
+            ("v1 bare worker array", json!([person("1")])),
+            ("v2 camelCase stores", json!({ "version": 2, "workersData": [person("1")], "attendanceLog": [{ "id": "att1", "aNumber": "1", "date": "2026-01-02", "newStatus": "Absent" }], "ministersData": [{ "id": "m1", "name": "Bro. A" }] })),
+            ("v3 string version, v5 vaccine shape", json!({ "version": "3.0", "workers": [person("1")], "vaccines": [{ "workerId": "1", "vaccineName": "Flu", "dateGiven": "2026-01-01", "nextDueDate": "2026-01-31" }] })),
+            ("v4 canonical stores with syncMetadata", json!({ "version": 4, "schemaVersion": 2, "syncMetadata": { "sourceDeviceId": "Station-7", "exportTimestamp": "2026-05-01T00:00:00Z" }, "workers": [person("1")], "duty_areas": [{ "id": "d1", "name": "Gate" }] })),
+            ("v11 storage keys (service5.db records)", json!({ "version": 11, "workers": [person("1")], "wc_ot_entries": [{ "id": "ot1", "volunteerId": "1", "hours": 2 }], "wc_custom_woodland_shops": ["Glass Shop"] })),
+            ("daily snapshot file (version 1.0)", json!({ "version": 1.0, "exportedAt": "2026-11-19T23:59:00Z", "workers": [person("1")], "dashboard_dismissed": { "eventIds": ["x"] }, "history": [{ "id": "h1", "dateStr": "Nov 19" }] })),
+        ];
+        for (label, raw) in generations {
+            let n = normalize(raw).unwrap_or_else(|e| panic!("{label}: {e:?}"));
+            assert_eq!(n.workers.len(), 1, "{label}");
+            assert_eq!(str_of(&n.workers[0], "aNumber"), "1", "{label}");
+            assert!(!str_of(&n.workers[0], "workerId").is_empty(), "{label}: a stable workerId is backfilled");
+            assert_eq!(str_of(&n.workers[0], "projectRole"), "Member", "{label}: Service 5 backfills");
+            assert!(n.workers[0]["attendanceHistory"].is_array(), "{label}");
+            assert!(!n.collections.contains_key("dashboard_dismissed"), "{label}: per-device state is skipped");
+        }
+        let v2 = normalize(json!({ "version": 2, "workersData": [person("1")], "attendanceLog": [{ "id": "att1" }], "ministersData": [{ "id": "m1" }] })).unwrap();
+        assert_eq!(v2.collections["attendance_log"].len(), 1);
+        assert_eq!(v2.collections["ministers"].len(), 1);
+        let v3 = normalize(json!({ "version": "3.0", "vaccines": [{ "workerId": "1", "vaccineName": "Flu", "dateGiven": "2026-01-01", "nextDueDate": "2026-01-31" }] })).unwrap();
+        let vx = &v3.collections["volunteer_vaccines"][0].1;
+        assert_eq!((vx["volunteerId"].as_str(), vx["boosterIntervalDays"].as_i64()), (Some("1"), Some(30)));
+        let v4 = normalize(json!({ "version": 4, "syncMetadata": { "sourceDeviceId": "Station-7", "exportTimestamp": "2026-05-01T00:00:00Z" }, "workers": [] })).unwrap();
+        assert_eq!((v4.source_device.as_str(), v4.exported_at.as_str()), ("Station-7", "2026-05-01T00:00:00Z"));
+        assert_eq!(v4.label, "Service 5 backup (v4)");
+        let v11 = normalize(json!({ "version": 11, "wc_custom_woodland_shops": ["Glass Shop"] })).unwrap();
+        assert_eq!(v11.collections["custom_datalists"][0].1["woodlandShops"], json!(["Glass Shop"]));
+        assert_eq!(normalize(json!({ "version": 4.0, "workers": [] })).unwrap().label, "Service 5 backup (v4)");
+    }
+
+    /// Service 5's encrypted .agwcz backups (js/crypto.js) open with the passphrase, and only with it.
+    #[test]
+    fn encrypted_agwcz_backups_round_trip() {
+        let backup = json!({ "version": 4, "workers": [{ "aNumber": "9", "name": "Enc Person" }] });
+        let env = encrypt_agwcz(&backup, "correct horse").unwrap();
+        assert_eq!((env["_isAgwcEncrypted"].as_bool(), env["format"].as_str()), (Some(true), Some("agwcz")));
+        let bytes = serde_json::to_vec(&env).unwrap();
+        let n = read(&bytes, Some("correct horse")).unwrap();
+        assert_eq!(n.workers.len(), 1);
+        assert!(read(&bytes, Some("wrong pass")).is_err());
+        assert!(read(&bytes, None).is_err());
+    }
+
+    #[test]
+    fn visitation_groups_from_two_key_generations_are_one_per_name() {
+        let n = normalize(json!({
+            "visitation_groups": [{ "id": "vg_old", "name": "Group A", "createdAt": "2026-08-17T09:56:30Z", "notes": "old" }],
+            "wc_visitation_groups": [{ "id": "vg_new", "name": "group a ", "createdAt": "2026-11-17T07:48:02Z", "notes": "new" }, { "id": "vg_b", "name": "Group B" }],
+        }))
+        .unwrap();
+        let groups = &n.collections["visitation_groups"];
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().any(|(_, g)| g["id"] == "vg_new" && g["notes"] == "new"));
+    }
+
     #[test]
     fn every_key_generation_lands_in_one_collection() {
         for k in ["workers", "workersData", "wc_workers_data"] {
@@ -862,5 +981,146 @@ mod tests {
         let mut bad = env.clone();
         bad["sha256"] = json!("00");
         assert!(read(bad.to_string().as_bytes(), Some("open sesame")).is_err());
+    }
+}
+
+// ------------------------------------------------------------------ parity check
+
+/// Every leaf of `v` as (path, value); arrays index by position.
+fn leaves(v: &Value, path: String, out: &mut Vec<(String, Value)>) {
+    match v {
+        Value::Object(m) if !m.is_empty() => m.iter().for_each(|(k, x)| leaves(x, if path.is_empty() { k.clone() } else { format!("{path}.{k}") }, out)),
+        Value::Array(a) if !a.is_empty() => a.iter().enumerate().for_each(|(i, x)| leaves(x, format!("{path}[{i}]"), out)),
+        _ => out.push((path, v.clone())),
+    }
+}
+
+/// Follows a `a.b[2].c` path.
+fn at<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.').try_fold(v, |cur, seg| {
+        let (key, rest) = match seg.find('[') {
+            Some(i) => (&seg[..i], &seg[i..]),
+            None => (seg, ""),
+        };
+        let mut cur = if key.is_empty() { cur } else { cur.get(key)? };
+        for n in rest.split(['[', ']']).filter(|s| !s.is_empty()) {
+            cur = cur.get(n.parse::<usize>().ok()?)?;
+        }
+        Some(cur)
+    })
+}
+
+fn blank(v: &Value) -> bool {
+    v.is_null() || v.as_str() == Some("") || v.as_array().is_some_and(Vec::is_empty) || v.as_object().is_some_and(Map::is_empty)
+}
+
+/// Paths of `src` whose value `stored` doesn't hold (strings compared trimmed).
+fn lost_paths(src: &Value, stored: &Value, skip: &[&str]) -> Vec<String> {
+    let mut l = vec![];
+    leaves(src, String::new(), &mut l);
+    l.into_iter()
+        .filter(|(p, _)| !skip.contains(&p.as_str()))
+        .filter(|(p, v)| match (at(stored, p), v) {
+            (Some(Value::String(a)), Value::String(b)) => a.trim() != b.trim(),
+            // The importer keeps an A# as text ("123"); the number is the same.
+            (Some(Value::String(a)), Value::Number(n)) => a.trim() != n.to_string(),
+            (Some(g), v) => g != v,
+            (None, v) => !blank(v),
+        })
+        .map(|(p, _)| p)
+        .collect()
+}
+
+fn sample(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    format!(" - fields: {}", paths.iter().take(12).cloned().collect::<Vec<_>>().join(", "))
+}
+
+/// Checks that everything in a Service 5 file (service5.db or JSON backup) is held
+/// in this database: per collection, items missing and fields lost or changed.
+/// Prints collection names, counts and field paths only, never personal values.
+pub async fn parity(db: &DatabaseConnection, bytes: &[u8]) -> AppResult<String> {
+    let raw = if bytes.starts_with(b"SQLite format 3\0") {
+        read_sqlite(bytes)?.0
+    } else {
+        serde_json::from_slice(bytes).map_err(|_| AppError::bad("not a Service 5 file"))?
+    };
+    let stored = export(db).await?;
+    let mut report = String::new();
+    let mut total_lost = 0;
+    // Every key generation of a collection is checked against where it lands; when two
+    // generations hold the same item, only the newest copy has to be kept intact.
+    let mut groups: BTreeMap<String, Vec<(String, Value)>> = BTreeMap::new();
+    for (key, value) in raw.as_object().into_iter().flatten() {
+        let c = canonical(key);
+        if META.contains(&key.as_str()) || SKIP.contains(&c.as_str()) {
+            continue;
+        }
+        groups.entry(c).or_default().push((key.clone(), value.clone()));
+    }
+    for (c, sources) in groups {
+        let (target, field) = match custom_list_field(&c) {
+            Some(f) => ("custom_datalists".to_string(), Some(f)),
+            None => (c.clone(), None),
+        };
+        let have = stored.get(&target).cloned().unwrap_or(Value::Null);
+        let keys = sources.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ");
+        let (msg, lost) = if let Some(field) = field {
+            let src: Vec<Value> = sources.iter().filter_map(|(_, v)| v.as_array()).flatten().cloned().collect();
+            let held = have[field].as_array().cloned().unwrap_or_default();
+            (format!("{} items, {} held", src.len(), held.len()), src.iter().filter(|v| !held.contains(v)).count())
+        } else if sources.iter().all(|(_, v)| v.is_object()) {
+            let mut lost: Vec<String> = sources.iter().flat_map(|(_, v)| lost_paths(v, &have, &[])).collect();
+            lost.sort();
+            lost.dedup();
+            let n = sources.iter().filter_map(|(_, v)| v.as_object()).map(Map::len).max().unwrap_or(0);
+            (format!("{n} keys{}", sample(&lost)), lost.len())
+        } else {
+            let is_workers = c == "workers";
+            let id_of = |v: &Value| if is_workers { v.get("aNumber").and_then(scalar).unwrap_or_default() } else { list_key(&c, v) };
+            let mut newest: HashMap<String, Value> = HashMap::new();
+            for item in sources.iter().filter_map(|(_, v)| v.as_array()).flatten().filter(|v| !v.is_null()) {
+                let item = if c == "volunteer_vaccines" { migrate_vaccine(item.clone()) } else { item.clone() };
+                let id = id_of(&item);
+                if newest.get(&id).is_none_or(|old| stamp(old) <= stamp(&item)) {
+                    newest.insert(id, item);
+                }
+            }
+            let held: HashMap<String, &Value> = have.as_array().into_iter().flatten().map(|v| (id_of(v), v)).collect();
+            let (mut missing, mut changed, mut paths) = (0, 0, vec![]);
+            for (id, item) in &newest {
+                match held.get(id) {
+                    None => missing += 1,
+                    Some(h) => {
+                        let lost = lost_paths(item, h, if is_workers { &["workerId"] } else { &[] });
+                        if !lost.is_empty() {
+                            changed += 1;
+                            paths.extend(lost.into_iter().map(|p| p.split('[').next().unwrap_or_default().to_string()));
+                        }
+                    }
+                }
+            }
+            paths.sort();
+            paths.dedup();
+            (format!("{} items, {} held, {missing} missing, {changed} changed{}", newest.len(), held.len(), sample(&paths)), missing + changed)
+        };
+        total_lost += lost;
+        report.push_str(&format!("{} {target:<24} <- {keys:<50} {msg}\n", if lost == 0 { "ok  " } else { "LOST" }));
+    }
+    report.push_str(if total_lost == 0 { "\nPARITY OK: every item and field in the file is held.\n" } else { "\nPARITY FAILED: see the LOST lines.\n" });
+    Ok(report)
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+
+    #[test]
+    fn lost_paths_finds_dropped_and_changed_fields() {
+        let src = json!({ "a": 1, "b": { "c": "x ", "d": [1, 2] }, "e": "" });
+        assert!(lost_paths(&src, &json!({ "a": 1, "b": { "c": "x", "d": [1, 2] }, "extra": 3 }), &[]).is_empty());
+        assert_eq!(lost_paths(&src, &json!({ "a": 2, "b": { "d": [1] } }), &[]), vec!["a", "b.c", "b.d[1]"]);
     }
 }

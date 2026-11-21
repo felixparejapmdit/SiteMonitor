@@ -74,7 +74,12 @@ const PROFILE_FIELDS: &[&str] = &[
     "emergencyRelationship", "skillLevel", "hourlyRate", "subDepartment", "specificTask", "tomorrowAssignment", "assignment",
     "visitationGroup", "visitationHousing", "visitationRole", "photoUrl", "project", "absentReason", "archiveCategory", "archiveReason",
     "jOrder", "trades", "tradeGroup", "assignedUnit", "disableStaleAlerts",
+    // Service 5's personnel modal also edits these (Personal, Residence and Trade tabs).
+    "name", "aNumber", "phone", "trade", "department", "projectGroup", "projectRole", "tradeRole", "caEligible",
+    "spouseKasalSaIglesia", "spouseNagsasama",
 ];
+/// Clinic details inside attendance history entries (kept for the clinic only).
+const HEALTH_ENTRY_FIELDS: &[&str] = &["chiefComplaint", "diagnosis", "medicalLogId", "vitals"];
 const HEALTH_FIELDS: &[&str] = &["bloodType", "medicalNotes", "maintenanceMeds", "healthClearance", "medical", "healthAndClearance"];
 
 async fn person(state: &AppState, id: Uuid) -> AppResult<Person> {
@@ -86,7 +91,17 @@ async fn one(state: &AppState, user: &CurrentUser, id: Uuid) -> AppResult<Worker
 }
 
 /// Merges fields into a stored person (`profile || patch`) and saves it encrypted.
+/// Profile edits read the whole (encrypted) record and write it back, so two at
+/// once would lose one of them; they take turns.
+static PATCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn patch(state: &AppState, id: Uuid, patch: &Value) -> AppResult<Person> {
+    let _turn = PATCH_LOCK.lock().await;
+    patch_locked(state, id, patch).await
+}
+
+/// `patch` for a caller that already holds `PATCH_LOCK`.
+async fn patch_locked(state: &AppState, id: Uuid, patch: &Value) -> AppResult<Person> {
     let mut x = person(state, id).await?;
     if let (Some(p), Some(add)) = (x.p.as_object_mut(), patch.as_object()) {
         for (k, v) in add {
@@ -113,10 +128,18 @@ pub async fn photo(State(state): State<AppState>, user: CurrentUser, Path(id): P
 pub async fn profile(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<Value>> {
     user.require(Permission::ManageWorkforce)?;
     let mut p = person(&state, id).await?.p;
+    let clinic = user.0.can(Permission::ManageClinic);
     if let Some(m) = p.as_object_mut() {
-        m.remove("attendanceHistory");
         m.remove("assignmentHistory");
-        if !user.0.can(Permission::ManageClinic) {
+        // The profile's Attendance tab shows the history; its clinic details stay with the clinic.
+        if let Some(Value::Array(h)) = m.get_mut("attendanceHistory") {
+            for e in h.iter_mut().filter_map(Value::as_object_mut).filter(|_| !clinic) {
+                for k in HEALTH_ENTRY_FIELDS {
+                    e.remove(*k);
+                }
+            }
+        }
+        if !clinic {
             for k in HEALTH_FIELDS {
                 m.remove(*k);
             }
@@ -135,6 +158,22 @@ pub async fn save_profile(State(state): State<AppState>, user: CurrentUser, Path
             fields.insert(k.clone(), v.clone());
         }
     }
+    if let Some(name) = fields.get("name") {
+        let name = name.as_str().unwrap_or_default().trim().to_string();
+        if name.is_empty() || name.chars().count() > 120 {
+            return Err(AppError::bad("Please enter the person's name (up to 120 characters)."));
+        }
+        fields.insert("name".into(), json!(name));
+    }
+    if let Some(a) = fields.get("aNumber").map(|a| a.as_str().map(str::to_string).unwrap_or_else(|| a.to_string())) {
+        let a = a.trim().trim_matches('"').to_string();
+        if !a.is_empty() {
+            if let Some(other) = workforce::people(&state.db).await?.into_iter().find(|x| x.id != id && text(&x.p, "aNumber") == a) {
+                return Err(AppError::bad(format!("A# {a} already belongs to {}.", text(&other.p, "name"))));
+            }
+        }
+        fields.insert("aNumber".into(), json!(a));
+    }
     if let Some(p) = fields.get("photoUrl").and_then(Value::as_str) {
         if !p.is_empty() && (!p.starts_with("data:image/") || p.len() > 3_000_000) {
             return Err(AppError::bad("The photo must be a picture under 2 MB."));
@@ -151,6 +190,150 @@ pub async fn save_profile(State(state): State<AppState>, user: CurrentUser, Path
         )
         .await?;
     }
+    announce(&state, None).await;
+    Ok(Json(for_user(workforce::worker_of(&x), &user)))
+}
+
+#[derive(serde::Deserialize)]
+pub struct AssignmentRequest {
+    area: Option<String>,
+    project: Option<String>,
+    specific_task: Option<String>,
+}
+
+/// `PUT /api/workers/{id}/assignment` — the encoder's today edits (Service 5's
+/// `updateWorkerAssignment`): each changed field is kept on the person and in their
+/// `assignment`, they count as assigned today, the task clock restarts when the area
+/// or task changes, and every change goes in the assignment log.
+pub async fn set_assignment(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, headers: HeaderMap, Json(req): Json<AssignmentRequest>) -> AppResult<Json<Worker>> {
+    user.require(Permission::ManageWorkforce)?;
+    let turn = PATCH_LOCK.lock().await;
+    let before = person(&state, id).await?.p;
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut fields = Map::new();
+    let mut assignment = before.get("assignment").filter(|a| a.is_object()).cloned().unwrap_or_else(|| json!({}));
+    let mut changed = vec![];
+    for (key, v) in [("area", &req.area), ("project", &req.project), ("specificTask", &req.specific_task)] {
+        let Some(v) = v else { continue };
+        let v = v.trim().to_string();
+        let old = text(&before, key);
+        if old != v {
+            changed.push((key, old, v.clone()));
+        }
+        fields.insert(key.into(), json!(v));
+        assignment[key] = json!(v);
+    }
+    assignment["updatedAt"] = json!(now);
+    fields.insert("assignment".into(), assignment);
+    fields.insert("isAssignedToday".into(), json!(true));
+    fields.insert("updatedAt".into(), json!(now));
+    if changed.iter().any(|(k, _, _)| *k == "area" || *k == "specificTask") {
+        fields.insert("taskStartedAt".into(), json!(now));
+    }
+    let x = patch_locked(&state, id, &Value::Object(fields)).await?;
+    drop(turn);
+    for (field, old, new) in changed {
+        workforce::append(
+            &state.db,
+            "assignment_log",
+            json!({ "aNumber": text(&x.p, "aNumber"), "workerName": text(&x.p, "name"), "date": today(), "field": field, "oldValue": old, "newValue": new,
+                    "timestamp": chrono::Utc::now().timestamp_millis(), "by": user.0.name }),
+        )
+        .await?;
+    }
+    announce(&state, Some(&headers)).await;
+    Ok(Json(for_user(workforce::worker_of(&x), &user)))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ArchiveRequest {
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    remarks: String,
+}
+
+/// A date the form sent, or today.
+fn date_or_today(d: &str) -> String {
+    match chrono::NaiveDate::parse_from_str(d.trim(), "%Y-%m-%d") {
+        Ok(_) => d.trim().to_string(),
+        Err(_) => today(),
+    }
+}
+
+/// `POST /api/workers/{id}/archive` — Service 5's separation: the person is marked
+/// absent for good, unassigned, without a job order, and the move is logged.
+pub async fn archive(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(req): Json<ArchiveRequest>) -> AppResult<Json<Worker>> {
+    user.require(Permission::ManageWorkforce)?;
+    let category = req.category.trim();
+    if !["Dismissed", "Retired", "Deceased"].contains(&category) {
+        return Err(AppError::bad("Please choose a separation category: Dismissed, Retired or Deceased."));
+    }
+    let date = date_or_today(&req.date);
+    let remarks = req.remarks.trim();
+    let x = patch(
+        &state,
+        id,
+        &json!({
+            "archived": true, "isArchived": true, "archiveCategory": category, "archiveReason": category,
+            "archivedAt": date, "archivedRemarks": remarks, "dailyStatus": "Absent", "status": "Absent",
+            "absentReason": category, "isAssignedToday": false, "jOrder": "NO", "area": "", "project": "", "specificTask": "",
+        }),
+    )
+    .await?;
+    workforce::append(
+        &state.db,
+        "assignment_log",
+        json!({ "timestamp": chrono::Utc::now().timestamp_millis(), "workerName": text(&x.p, "name"), "aNumber": text(&x.p, "aNumber"),
+                "action": "archive", "category": category, "date": date, "remarks": remarks }),
+    )
+    .await?;
+    announce(&state, None).await;
+    Ok(Json(for_user(workforce::worker_of(&x), &user)))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ReemployRequest {
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    project_group: String,
+    #[serde(default)]
+    remarks: String,
+}
+
+/// `POST /api/workers/{id}/reemploy` — brings an archived person back, with a
+/// starting status, optionally a new project group, and job orders allowed again.
+pub async fn reemploy(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(req): Json<ReemployRequest>) -> AppResult<Json<Worker>> {
+    user.require(Permission::ManageWorkforce)?;
+    let status = match req.status.trim() {
+        "" | "Present" => "Present",
+        "Absent" => "Absent",
+        "Passes" => "Passes",
+        _ => return Err(AppError::bad("The starting status must be Present, Absent or Passes.")),
+    };
+    let date = date_or_today(&req.date);
+    let prior = text(&person(&state, id).await?.p, "archiveCategory");
+    let mut fields = json!({
+        "archived": false, "isArchived": false, "archiveCategory": "", "archiveReason": "", "dailyStatus": status, "status": status,
+        "absentReason": "", "jOrder": "", "reemployedAt": date, "reemployedRemarks": req.remarks.trim(),
+    });
+    if !req.project_group.trim().is_empty() {
+        fields["projectGroup"] = json!(req.project_group.trim());
+    }
+    let x = patch(&state, id, &fields).await?;
+    workforce::append(
+        &state.db,
+        "assignment_log",
+        json!({ "timestamp": chrono::Utc::now().timestamp_millis(), "workerName": text(&x.p, "name"), "aNumber": text(&x.p, "aNumber"),
+                "action": "reemploy", "priorCategory": if prior.is_empty() { "Dismissed".to_string() } else { prior }, "date": date,
+                "status": status, "remarks": req.remarks.trim() }),
+    )
+    .await?;
     announce(&state, None).await;
     Ok(Json(for_user(workforce::worker_of(&x), &user)))
 }
@@ -225,6 +408,10 @@ pub async fn family_roster(State(state): State<AppState>, user: CurrentUser) -> 
             m.insert("aNumber".into(), json!(w.a_number));
             m.insert("group".into(), json!(w.project_group));
             m.insert("trade".into(), json!(w.trade));
+            // Service 5's print templates show photos; send a link, not the picture itself.
+            if w.has_photo {
+                m.insert("photoUrl".into(), json!(format!("/api/workers/{}/photo", x.id)));
+            }
             Some(p)
         })
         .collect();
@@ -519,10 +706,29 @@ pub async fn import(
     let data = tokio::task::spawn_blocking(move || workforce::read(&bytes, pass.as_deref()))
         .await
         .map_err(|e| AppError::bad(format!("The import stopped unexpectedly: {e}")))??;
-    let report = workforce::import(&state.db, data, req.mode, req.allow_empty).await?;
+    let resolutions: Map<String, Value> = serde_json::from_str(&req.resolutions).unwrap_or_default();
+    let report = workforce::import(&state.db, data, req.mode, req.allow_empty, &resolutions).await?;
     announce(&state, None).await;
     tracing::info!(by = %user.0.name, file = %req.file_name, detected = %report.detected, workers = report.workers, "workforce import");
     Ok(Json(report))
+}
+
+/// `POST /api/workforce/import/preview` — Service 5's merge review: what merging the
+/// file would bring (new people, new attendance, newer sections) and the collisions to decide.
+pub async fn import_preview(State(state): State<AppState>, user: CurrentUser, headers: HeaderMap, bytes: Bytes) -> AppResult<Json<Value>> {
+    user.require(Permission::BackupWorkforce)?;
+    if bytes.is_empty() {
+        return Err(AppError::bad("The file was empty. Please choose the backup again."));
+    }
+    let pass = passphrase(&headers);
+    let data = tokio::task::spawn_blocking(move || workforce::read(&bytes, pass.as_deref()))
+        .await
+        .map_err(|e| AppError::bad(format!("The check stopped unexpectedly: {e}")))??;
+    let local: Vec<Value> = workforce::people(&state.db).await?.into_iter().map(|x| { let mut p = x.p; p["workerId"] = json!(x.id.to_string()); p }).collect();
+    let mut a = crate::services::sync_merge::analyze(&local, &data.workers, &data.source_device, &data.exported_at);
+    a["detected"] = json!(data.label);
+    a["collections"] = json!(data.collections.iter().map(|(c, v)| (c.clone(), v.len())).collect::<Vec<_>>());
+    Ok(Json(a))
 }
 
 /// `GET /api/workforce/export` — one file with every workforce record, encrypted
@@ -683,7 +889,7 @@ pub async fn restore_snapshot(State(state): State<AppState>, user: CurrentUser, 
     let data = workforce::snapshot_data(&state.db, id).await?.ok_or_else(|| AppError::not_found("snapshot"))?;
     let mut n = workforce::normalize(data)?;
     n.label = "Snapshot restore".into();
-    let report = workforce::import(&state.db, n, ImportMode::Replace, false).await?;
+    let report = workforce::import(&state.db, n, ImportMode::Replace, false, &serde_json::Map::new()).await?;
     announce(&state, None).await;
     Ok(Json(report))
 }

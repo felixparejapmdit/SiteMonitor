@@ -52,3 +52,6 @@ keys/
 # Local tooling
 .serena/
 PLAN_MERGE_SERVICE5.md
+
+# Python bytecode
+__pycache__/

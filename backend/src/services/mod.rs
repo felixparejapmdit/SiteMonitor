@@ -7,6 +7,7 @@ pub mod package;
 pub mod scheduler;
 pub mod vault;
 pub mod status;
+pub mod sync_merge;
 pub mod workforce;
 pub mod workforce_sample;
 

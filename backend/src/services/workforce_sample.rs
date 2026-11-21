@@ -202,7 +202,7 @@ pub async fn load(db: &DatabaseConnection) -> AppResult<()> {
     let find = |list: &Vec<(String, String)>, name: &str| list.iter().find(|(n, _)| n == name).map(|(_, id)| id.clone());
     let raw = backup(|z| find(&zones, z), |j| find(&jobs, j));
     db.execute_unprepared("DELETE FROM workforce_records; DELETE FROM workers").await?;
-    workforce::import(db, workforce::normalize(raw)?, shared::api::ImportMode::Merge, true).await?;
+    workforce::import(db, workforce::normalize(raw)?, shared::api::ImportMode::Merge, true, &serde_json::Map::new()).await?;
     Ok(())
 }
 

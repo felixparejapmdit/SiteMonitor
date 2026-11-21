@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use dioxus::prelude::*;
-use serde_json::Value;
+use serde_json::{json, Value};
 use shared::*;
 use uuid::Uuid;
 
@@ -17,6 +17,7 @@ use crate::state::use_app;
 use crate::util;
 use crate::views::personnel::{extra_value, Bulk, BulkModal, FilterSelect, StartDayModal, WorkerModal, ARCHIVE_CATEGORIES, REFRESH};
 use crate::views::workforce_ops::{s, today, ReassignModal, StatusButtons};
+use crate::views::workforce_ops::s5print;
 use crate::views::workforce_print::PRINT_REQUEST;
 use crate::Route;
 
@@ -109,7 +110,6 @@ pub fn AssignmentsView(#[props(default = "active")] initial_status: &'static str
     let mut cards = use_signal(|| false);
     let mut wrap = use_signal(|| false);
     let mut show_cols = use_signal(|| false);
-    let mut show_reports = use_signal(|| false);
     let mut sort = use_signal(|| ("name".to_string(), true));
     let mut per_page = use_signal(|| 15usize);
     let mut page = use_signal(|| 0usize);
@@ -235,20 +235,7 @@ pub fn AssignmentsView(#[props(default = "active")] initial_status: &'static str
                         onclick: move |_| { PAGE_TABS.write().insert("operations", "Tomorrow"); nav.push(Route::Operations {}); },
                         Icon { name: "edit" } "Encoder mode"
                     }
-                    div { class: "relative",
-                        button { class: "btn-secondary", "aria-expanded": show_reports(), "data-testid": "assign-reports", onclick: move |_| show_reports.toggle(), Icon { name: "archive" } "Print reports" }
-                        if show_reports() {
-                            div { class: "absolute left-0 top-11 z-30 w-72 card shadow-pop p-1.5 scale-in", "data-testid": "assign-reports-menu",
-                                for (k, l) in [("family", "Volunteer & family roster"), ("list", "List & attendance generator"), ("forms", "Semi-annual records update forms"), ("id", "ID cards")] {
-                                    button { key: "{k}", class: "w-full text-left px-3 py-2 rounded text-sm hover:bg-hover", "data-testid": "assign-report-{k}",
-                                        onclick: { let ids = picked_ids.clone(); move |_| open_print(k, ids.clone()) },
-                                        "{l}"
-                                        if n_picked > 0 { span { class: "text-muted", " ({n_picked} ticked)" } }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    PrintReportsMenu { ids: picked_ids.clone(), testid: "assign" }
                     button { class: "btn-secondary", "data-testid": "assign-add", onclick: move |_| editing.set(Some(None)), Icon { name: "plus" } "Add volunteer" }
                     span { class: "w-px h-6 bg-line mx-1" }
                     {bulk_btn("Reassign", "assign-bulk-reassign", "move", Bulk::Reassign)}
@@ -260,8 +247,9 @@ pub fn AssignmentsView(#[props(default = "active")] initial_status: &'static str
                         {bulk_btn("Archive", "assign-bulk-archive", "archive", Bulk::Archive)}
                     }
                     button { class: "btn-ghost text-tag-red-text", "data-testid": "assign-bulk-delete", disabled: n_picked == 0, onclick: move |_| action.set(Some(Bulk::Delete)), Icon { name: "trash" } "Delete" }
+                    // Service 5's "Generate Forms": the job order print view for the ticked people.
                     button { class: "btn-primary", "data-testid": "assign-forms", disabled: n_picked == 0,
-                        onclick: move |_| open_print("forms", picked_ids2.clone()),
+                        onclick: move |_| open_print("jo", picked_ids2.clone()),
                         Icon { name: "archive" } "Generate forms"
                         span { class: "pill bg-surface/30 ml-1 tabular", "{n_picked}" }
                     }
@@ -424,7 +412,7 @@ pub fn AssignmentsView(#[props(default = "active")] initial_status: &'static str
         if new_day() { StartDayModal { on_close: move |_| new_day.set(false) } }
         if let Some(target) = editing() { WorkerModal { worker: target, on_close: move |_| editing.set(None) } }
         if let Some(w) = reassigning() { ReassignModal { worker: w, on_close: move |_| reassigning.set(None) } }
-        if let Some(w) = profiling() { crate::views::workforce_more::ProfileModal { worker: w, on_close: move |_| profiling.set(None) } }
+        if let Some(w) = profiling() { crate::views::profile::ProfileModal { worker: w, on_close: move |_| profiling.set(None) } }
     }
 }
 
@@ -443,5 +431,44 @@ mod tests {
         assert_eq!(status_on(&log, "1", "2026-11-11", WorkerStatus::Present), WorkerStatus::Absent);
         assert_eq!(status_on(&log, "1", "2026-11-20", WorkerStatus::Present), WorkerStatus::OnPass);
         assert_eq!(status_on(&log, "2", "2026-11-11", WorkerStatus::Absent), WorkerStatus::Absent); // no history: today
+    }
+}
+
+/// Service 5's "Print Reports" menu (Assignments and Personnel), in its order
+/// and wording; the family roster uses the ticked people, or everyone.
+#[component]
+pub fn PrintReportsMenu(ids: Vec<Uuid>, testid: &'static str) -> Element {
+    let nav = use_navigator();
+    let mut open = use_signal(|| false);
+    let n = ids.len();
+    rsx! {
+        div { class: "relative",
+            button { class: "btn-secondary", "aria-expanded": open(), "data-testid": "{testid}-reports", onclick: move |_| open.toggle(), Icon { name: "archive" } "Print Reports" }
+            if open() {
+                div { class: "absolute left-0 top-11 z-30 w-72 card shadow-pop p-1.5 scale-in", "data-testid": "{testid}-reports-menu",
+                    p { class: "px-3 pt-1 pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted", "Select Grouping" }
+                    button { class: "w-full text-left px-3 py-2 rounded text-sm hover:bg-hover", "data-testid": "{testid}-report-family",
+                        onclick: move |_| { open.set(false); s5print("familyRoster", json!([{ "ids": ids.iter().map(Uuid::to_string).collect::<Vec<_>>() }])); },
+                        "📋 Volunteer & Family Roster"
+                        if n > 0 { span { class: "text-muted", " ({n} ticked)" } }
+                    }
+                    button { class: "w-full text-left px-3 py-2 rounded text-sm hover:bg-hover", "data-testid": "{testid}-report-list",
+                        onclick: move |_| { PAGE_TABS.write().insert("workforce", "Attendance Gen"); nav.push(Route::Workforce {}); },
+                        "📋 List & Attendance Generator"
+                    }
+                    button { class: "w-full text-left px-3 py-2 rounded text-sm hover:bg-hover", "data-testid": "{testid}-report-forms",
+                        onclick: move |_| { PAGE_TABS.write().insert("workforce", "Update Forms"); nav.push(Route::Workforce {}); },
+                        "📝 Semi-Annual Records Update Forms"
+                    }
+                    div { class: "my-1 border-t border-line" }
+                    for (k, l) in [("trade", "By Trade"), ("group", "By Project Group"), ("housing", "By Housing")] {
+                        button { key: "{k}", class: "w-full text-left px-3 py-2 rounded text-sm hover:bg-hover", "data-testid": "{testid}-report-by-{k}",
+                            onclick: move |_| { open.set(false); s5print("personnelReport", json!([k])); },
+                            "{l}"
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -10,6 +10,7 @@ mod m20261116_000005_map_tiles;
 mod m20261116_000006_report_photo_and_author;
 mod m20261116_000007_report_office_note;
 mod m20261119_000008_workforce;
+mod m20261120_000009_username;
 
 pub struct Migrator;
 
@@ -25,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261116_000006_report_photo_and_author::Migration),
             Box::new(m20261116_000007_report_office_note::Migration),
             Box::new(m20261119_000008_workforce::Migration),
+            Box::new(m20261120_000009_username::Migration),
         ]
     }
 }

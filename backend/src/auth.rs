@@ -31,7 +31,7 @@ use crate::state::{AppState, CurrentUser};
 
 /// How long a session lasts without use.
 const SESSION_DAYS: i64 = 14;
-/// Failed sign-ins allowed per email before a cool-down.
+/// Failed sign-ins allowed per username before a cool-down.
 const MAX_FAILURES: u32 = 5;
 const LOCKOUT: StdDuration = StdDuration::from_secs(15 * 60);
 /// Password for the seeded demo accounts (shown on the sign-in page in demo mode).
@@ -67,7 +67,7 @@ pub async fn hash_blocking(password: String) -> AppResult<String> {
 }
 
 async fn verify_blocking(password: String, hash: Option<String>) -> bool {
-    // Unknown accounts still pay for one verify so timing doesn't reveal which emails exist.
+    // Unknown accounts still pay for one verify so timing doesn't reveal which usernames exist.
     let hash = hash.unwrap_or_else(|| {
         "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$5V6ZpRMLEJdGJ0vKpFbLz0mZsXv3wCwq0V0FfE7rT3s".into()
     });
@@ -183,20 +183,20 @@ pub async fn audit(db: &impl ConnectionTrait, actor: Uuid, target: Uuid, summary
 
 // ------------------------------------------------------------------ throttle
 
-/// Per-email failure counter (in memory: resets when the server restarts).
+/// Per-username failure counter (in memory: resets when the server restarts).
 #[derive(Clone, Default)]
 pub struct LoginThrottle(Arc<Mutex<HashMap<String, (u32, Instant)>>>);
 
 impl LoginThrottle {
-    fn locked_for(&self, email: &str) -> Option<u64> {
+    fn locked_for(&self, username: &str) -> Option<u64> {
         let map = self.0.lock().ok()?;
-        let (fails, since) = map.get(email)?;
+        let (fails, since) = map.get(username)?;
         let left = LOCKOUT.checked_sub(since.elapsed())?;
         (*fails >= MAX_FAILURES).then(|| left.as_secs() / 60 + 1)
     }
-    fn fail(&self, email: &str) {
+    fn fail(&self, username: &str) {
         if let Ok(mut map) = self.0.lock() {
-            let e = map.entry(email.to_string()).or_insert((0, Instant::now()));
+            let e = map.entry(username.to_string()).or_insert((0, Instant::now()));
             if e.1.elapsed() > LOCKOUT {
                 *e = (0, Instant::now());
             }
@@ -204,9 +204,9 @@ impl LoginThrottle {
             e.1 = Instant::now();
         }
     }
-    fn clear(&self, email: &str) {
+    fn clear(&self, username: &str) {
         if let Ok(mut map) = self.0.lock() {
-            map.remove(email);
+            map.remove(username);
         }
     }
 }
@@ -244,7 +244,7 @@ pub async fn options(State(state): State<AppState>) -> AppResult<Json<AuthOption
         .await?
         .into_iter()
         .filter(|u| u.is_active)
-        .map(|u| DemoAccount { name: u.name, role: convert::dec(&u.role), email: u.email })
+        .map(|u| DemoAccount { name: u.name, role: convert::dec(&u.role), username: u.username })
         .collect();
     demo_accounts.sort_by_key(|a| (UserRole::ALL.iter().position(|r| *r == a.role), a.name.clone()));
     Ok(Json(AuthOptions { demo_accounts, demo_password: Some(DEMO_PASSWORD.into()) }))
@@ -252,11 +252,11 @@ pub async fn options(State(state): State<AppState>) -> AppResult<Json<AuthOption
 
 /// `POST /api/auth/login`
 pub async fn login(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<LoginRequest>) -> AppResult<Response> {
-    let email = req.email.trim().to_lowercase();
-    if email.is_empty() || req.password.is_empty() {
-        return Err(AppError::bad("Please enter your email and password."));
+    let username = req.username.trim().to_lowercase();
+    if username.is_empty() || req.password.is_empty() {
+        return Err(AppError::bad("Please enter your username and password."));
     }
-    if let Some(mins) = state.throttle.locked_for(&email) {
+    if let Some(mins) = state.throttle.locked_for(&username) {
         return Err(AppError::TooMany(format!(
             "Too many attempts. For your security, try again in {mins} minute{}.",
             if mins == 1 { "" } else { "s" }
@@ -266,8 +266,8 @@ pub async fn login(State(state): State<AppState>, headers: HeaderMap, Json(req):
         .db
         .query_one(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            "SELECT id FROM users WHERE lower(email) = $1",
-            [email.clone().into()],
+            "SELECT id FROM users WHERE lower(username) = $1",
+            [username.clone().into()],
         ))
         .await?;
     let row = match found {
@@ -276,13 +276,13 @@ pub async fn login(State(state): State<AppState>, headers: HeaderMap, Json(req):
     };
     let ok = verify_blocking(req.password.clone(), row.as_ref().and_then(|u| u.password_hash.clone())).await;
     let Some(row) = row.filter(|_| ok) else {
-        state.throttle.fail(&email);
-        return Err(AppError::Unauthorized("That email and password don't match. Please try again.".into()));
+        state.throttle.fail(&username);
+        return Err(AppError::Unauthorized("That username and password don't match. Please try again.".into()));
     };
     if !row.is_active {
         return Err(AppError::forbidden("This account has been deactivated. Please contact the Office Admin."));
     }
-    state.throttle.clear(&email);
+    state.throttle.clear(&username);
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or_default();
     let token = start_session(&state.db, row.id, ua).await?;
     let mut a = row.into_active_model();
@@ -328,7 +328,7 @@ pub async fn change_password(
     if !verify_blocking(req.current_password.clone(), row.password_hash.clone()).await {
         return Err(AppError::bad("Your current password isn't right."));
     }
-    if let Some(problem) = password_problem(&req.new_password, &row.email) {
+    if let Some(problem) = password_problem(&req.new_password, &row.username) {
         return Err(AppError::bad(problem));
     }
     if req.new_password == req.current_password {
@@ -370,27 +370,27 @@ pub async fn ensure_passwords(db: &impl ConnectionTrait) -> AppResult<()> {
         tracing::info!("gave {missing} account(s) the demo password");
     } else {
         tracing::warn!(
-            "{missing} account(s) have no password and can't sign in. Set one with: backend set-password <email> <password>"
+            "{missing} account(s) have no password and can't sign in. Set one with: backend set-password <username> <password>"
         );
     }
     Ok(())
 }
 
-/// `backend set-password <email> <password>` — recovery from the command line.
-pub async fn set_password_cli(db: &impl ConnectionTrait, email: &str, password: &str) -> anyhow::Result<()> {
-    if let Some(p) = password_problem(password, email) {
+/// `backend set-password <username> <password>` — recovery from the command line.
+pub async fn set_password_cli(db: &impl ConnectionTrait, username: &str, password: &str) -> anyhow::Result<()> {
+    if let Some(p) = password_problem(password, username) {
         anyhow::bail!("{p}");
     }
     let hash = hash_password(password).map_err(|e| anyhow::anyhow!("{e}"))?;
     let res = db
         .execute(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            "UPDATE users SET password_hash = $1, must_change_password = FALSE, is_active = TRUE WHERE lower(email) = lower($2)",
-            [hash.into(), email.to_string().into()],
+            "UPDATE users SET password_hash = $1, must_change_password = FALSE, is_active = TRUE WHERE lower(username) = lower($2)",
+            [hash.into(), username.to_string().into()],
         ))
         .await?;
     if res.rows_affected() == 0 {
-        anyhow::bail!("no account uses {email}");
+        anyhow::bail!("no account uses {username}");
     }
     Ok(())
 }

@@ -19,8 +19,9 @@ if (-not (Test-Path $exe)) {
     node (Join-Path $root "scripts\build.mjs")
 }
 New-Item -ItemType Directory -Force (Join-Path $root "data") | Out-Null
-# Demo mode: the sign-in page lists the demo accounts. Set SITEMONITOR_DEMO=0 for real use.
-if (-not $env:SITEMONITOR_DEMO) { $env:SITEMONITOR_DEMO = "1" }
+# Live mode by default. Set SITEMONITOR_DEMO=1 before running this script to list the
+# demo accounts on the sign-in page (the end-to-end tests need that).
+if (-not $env:SITEMONITOR_DEMO) { $env:SITEMONITOR_DEMO = "0" }
 Start-Process -FilePath $exe -WorkingDirectory $root -WindowStyle Hidden `
     -RedirectStandardOutput (Join-Path $root "data\backend.log") `
     -RedirectStandardError (Join-Path $root "data\backend.err.log")

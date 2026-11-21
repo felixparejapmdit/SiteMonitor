@@ -24,7 +24,6 @@ const BACKUP = {
   project_groups_meta: { "Team A": "Site A", "Team B": "Site B" },
 };
 
-const stubPrint = (page: Page) => page.evaluate(() => { (window as any).print = () => { (window as any).__printed = true; }; });
 
 test.beforeAll(async () => {
   resetDatabase();
@@ -155,21 +154,23 @@ test("live refresh: another open screen sees an attendance change without reload
   await b.close();
 });
 
-test("print set-ups: landscape attendance sheet and 4-up folio job orders @safari", async ({ page }) => {
+test("print set-ups: Service 5's 4-up folio job orders @safari", async ({ page }) => {
   await openAs(page, "OfficeAdmin", "/operations");
-  await stubPrint(page);
   await page.getByTestId("tab-Monthly Attendance").click();
   await expect(page.getByTestId("attendance-sheet")).toContainText("Pedro Leader");
-  await page.getByTestId("print-attendance").click();
-  await expect.poll(() => page.evaluate(() => document.getElementById("print-page")?.textContent)).toContain("landscape");
+  // Service 5 has no print for this grid.
+  await expect(page.getByTestId("print-attendance")).toHaveCount(0);
 
   await page.getByTestId("tab-Print").click();
-  await page.getByTestId("print-kind").selectOption("jo");
-  // Job orders go only to people present today (Service 5 eligibility); the rest are listed.
-  await expect(page.locator(".job-order").filter({ hasText: "Pedro Leader" })).toHaveCount(1);
-  await expect(page.locator(".job-order").filter({ hasText: "Ben Member" })).toHaveCount(0);
-  await expect(page.getByTestId("print-left-out")).toContainText("Ben Member (absent)");
-  await page.getByTestId("print-now").click();
-  await expect.poll(() => page.evaluate(() => document.getElementById("print-page")?.textContent)).toContain("8.5in 13in");
+  // Job orders go only to people who can get one (Service 5's eligibility); its banner counts the rest.
+  const f = page.frameLocator("#s5-preview");
+  await expect(f.locator(".worker-form").filter({ hasText: "Pedro Leader" })).toHaveCount(1);
+  await expect(f.locator(".worker-form").filter({ hasText: "Ben Member" })).toHaveCount(0);
+  await expect(f.locator(".print-summary-feedback")).toContainText("skipped due to settings, pass, day-off, or absence");
+  await page.evaluate(() => {
+    const fr = document.getElementById("s5-preview") as HTMLIFrameElement;
+    (fr.contentWindow as any).print = () => { (window as any).__printed = true; };
+  });
+  await page.getByTestId("s5-print-now").click();
   expect(await page.evaluate(() => (window as any).__printed)).toBe(true);
 });

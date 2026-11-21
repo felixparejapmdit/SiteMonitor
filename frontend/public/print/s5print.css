@@ -1,0 +1,930 @@
+/* Service 5 print styles, verbatim: css/print.css, then css/database.css lines 3565-3653 and 4295-4656. */
+/* ==========================================================================
+   AGWC PWA MASTER PRINT STYLESHEET
+   W3C CSS Paged Media Module Level 3 Standard Implementation
+   ========================================================================== */
+
+@media print {
+  /* ── Folio Default Page Box (Philippine Standard: 8.5in x 13.0in) ── */
+  @page {
+    size: 8.5in 13.0in;
+    margin: 0;
+  }
+
+  /* ── Interactive Chrome & Health Overlay Suppression ── */
+  nav, header, .topbar, .top-nav, .actions, .search-box, .filters,
+  .selection-tray, .floating-action-bar, .toast-container, .modal-overlay,
+  .context-menu, .dropdown, .dropdown-content, .nav-dropdown,
+  .pagination, .table-header-tools, .btn, .action-btn, button, .action-bar,
+  .page-btn, .btn-primary, .btn-secondary, .btn-danger, .no-print,
+  .print-actions, .mobile-bottom-nav, .search-global-modal,
+  .health-drawer, .health-drawer-backdrop, .health-hover-card, .batch-health-bar,
+  #quick-clearance-drawer, #quick-clearance-backdrop, #health-hover-card,
+  #zone-details-drawer, .zone-drawer-backdrop,
+  #personnel-batch-health-bar, #pb-sync-indicator, .modal-system {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* ── Root & Viewport Overflow Unchaining ── */
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 10pt !important;
+    line-height: 1.35 !important;
+    padding: 0 !important;
+    margin: 0 auto !important;
+    box-sizing: border-box !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  /* Release the app shell from 100dvh viewport/scroll locks */
+  #app,
+  .app-container,
+  .app-fixed-height,
+  main,
+  #print-view,
+  #visitation-print-view,
+  #print-container,
+  .print-container {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+    position: static !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: transparent !important;
+  }
+
+  .view {
+    display: none !important;
+  }
+  .view.print-view,
+  .view.print-view.active,
+  #print-view,
+  #visitation-print-view {
+    display: block !important;
+  }
+
+  .hide-on-screen {
+    display: block !important;
+  }
+
+  /* ── Universal Table Pagination & Repeat Headers ── */
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    font-size: 8pt !important;
+    break-inside: auto !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+    break-inside: avoid !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+    break-inside: avoid !important;
+  }
+
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  th, td {
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+  }
+
+  th:not(.worker-form th), td:not(.worker-form td) {
+    border: 1px solid #cbd5e1 !important;
+    padding: 4px 6px !important;
+    text-align: left !important;
+  }
+
+  thead th {
+    background: #f1f5f9 !important;
+    font-weight: 700 !important;
+    color: #1e293b !important;
+  }
+
+  /* ── Structural Block Isolation & Heading Guard ── */
+  h1, h2, h3, h4, h5, h6 {
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  .card, .table-card, .metric-card, .dist-card, .sign-off-grid, .sign-box {
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: none !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    background: #ffffff !important;
+  }
+
+  .print-break {
+    break-before: page !important;
+    page-break-before: always !important;
+  }
+
+  img {
+    max-width: 100% !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    image-rendering: -webkit-optimize-contrast;
+  }
+
+  /* ── Form Field & Typography Normalization ── */
+  .print-field-input,
+  .sig-name-input,
+  input.print-field-input,
+  input.sig-name-input {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    padding: 0 !important;
+    color: #000000 !important;
+    font-family: 'Inter', Arial, sans-serif !important;
+  }
+
+  .sig-name-input,
+  input.sig-name-input {
+    width: 220px !important;
+    max-width: 220px !important;
+  }
+
+  .supervisor-sig-dropzone {
+    border: none !important;
+    background: transparent !important;
+  }
+
+  .sig-placeholder-text {
+    display: none !important;
+  }
+
+  .supervisor-sig-container {
+    position: relative !important;
+  }
+
+  .sig-auth-seal {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  /* ── 4-Up Folio Job Order Grid Specification ── */
+  .print-page {
+    width: 8.5in !important;
+    height: 13.0in !important;
+    max-height: 13.0in !important;
+    min-height: 13.0in !important;
+    box-sizing: border-box !important;
+    padding: 0.20in 0.30in !important;
+    margin: 0 auto !important;
+    background: #ffffff !important;
+    border: none !important;
+    box-shadow: none !important;
+    
+    /* Strict 4-Row Grid */
+    display: grid !important;
+    grid-template-rows: repeat(4, 1fr) !important;
+    gap: 0 !important;
+    
+    /* Page Boundary & Page Break Enforcement */
+    overflow: hidden !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    break-after: page !important;
+    page-break-after: always !important;
+  }
+
+  .print-page:last-child {
+    break-after: auto !important;
+    page-break-after: auto !important;
+  }
+
+  .worker-form {
+    box-sizing: border-box !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    padding: 2px 0 4px 0 !important;
+    border: none !important;
+    border-bottom: 1px dashed #444444 !important;
+    overflow: visible !important;
+    position: relative !important;
+  }
+
+  .worker-form:last-child,
+  .worker-form:nth-child(4n) {
+    border-bottom: none !important;
+  }
+
+  /* Eliminate bleed-inducing pseudo-element cut markers */
+  .worker-form::after {
+    content: "" !important;
+    display: none !important;
+  }
+
+  .worker-form table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+
+  .worker-form .form-table {
+    border: 1.5px solid #000000 !important;
+    table-layout: fixed !important;
+    font-family: 'Inter', Arial, sans-serif !important;
+  }
+
+  .worker-form th,
+  .worker-form td {
+    border-color: #000000 !important;
+    box-sizing: border-box !important;
+    font-family: 'Inter', Arial, sans-serif !important;
+    line-height: 1.15 !important;
+  }
+
+  .worker-form td[style*="border-right: 1px dotted"],
+  .worker-form td[style*="border-right:1px dotted"] {
+    border-right: 1px dotted #000000 !important;
+  }
+  .worker-form td[style*="border-bottom: 1px dotted"],
+  .worker-form td[style*="border-bottom:1px dotted"] {
+    border-bottom: 1px dotted #000000 !important;
+  }
+  .worker-form td[style*="border-bottom: 1px solid"],
+  .worker-form td[style*="border-bottom:1px solid"] {
+    border-bottom: 1px solid #000000 !important;
+  }
+  .worker-form td[style*="border-bottom: 1.5px solid"],
+  .worker-form td[style*="border-bottom:1.5px solid"] {
+    border-bottom: 1.5px solid #000000 !important;
+  }
+
+  .worker-form td.tasking-cell,
+  .worker-form td.area-cell,
+  .worker-form td.name-cell,
+  .worker-form td.trade-cell,
+  .worker-form td.anum-cell {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+    vertical-align: middle !important;
+  }
+
+  .worker-form .print-field-task,
+  .worker-form .print-field-area,
+  .worker-form .print-field-name,
+  .worker-form .print-field-trade {
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    line-height: 1.15 !important;
+  }
+
+  .task-text-standard { font-size: 11px !important; }
+  .task-text-md { font-size: 9.5px !important; }
+  .task-text-sm { font-size: 8.5px !important; }
+  .task-text-xs { font-size: 7.5px !important; line-height: 1.15 !important; }
+  .task-text-xxs { font-size: 7px !important; line-height: 1.1 !important; }
+
+  /* ── OT Project Cards & Dashboard - hide in print ── */
+  .ot-create-project-bar,
+  .ot-project-filter-bar,
+  .ot-project-grid,
+  .ot-tabs-wrapper,
+  .ot-toolbar,
+  .ot-date-jump-bar,
+  .ot-frequent-bar,
+  .ot-batch-bar,
+  .ot-entries-footer-bar,
+  .ot-project-actions {
+    display: none !important;
+  }
+}
+
+@media screen {
+  .hide-on-screen {
+    display: none !important;
+  }
+}
+
+/* =========================================
+   OT DAILY BREAKDOWN PRINT STYLES
+   ========================================= */
+
+@media print {
+  .ot-daily-breakdown-print {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    color: #0f172a;
+    line-height: 1.4;
+  }
+
+  .ot-daily-breakdown-print .project-section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 24px;
+  }
+
+  .sign-off-grid, .signatures, .sig-line-container, .ot-daily-breakdown-print .signatures {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .ot-daily-breakdown-print .project-header {
+    background: #1e3a5f !important;
+    color: white !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    padding: 12px 16px !important;
+    border-radius: 6px 6px 0 0 !important;
+  }
+
+  .ot-daily-breakdown-print .project-header h2 {
+    margin: 0 0 4px 0;
+    font-size: 1.1rem;
+  }
+
+  .ot-daily-breakdown-print .project-header .meta {
+    font-size: 0.85rem;
+    opacity: 0.9;
+  }
+
+  .ot-daily-breakdown-print .date-table {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 16px;
+  }
+
+  .ot-daily-breakdown-print .date-header {
+    background: #f1f5f9 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    padding: 8px 12px !important;
+    border-bottom: 1px solid #cbd5e1 !important;
+    font-weight: 600;
+    color: #0f172a;
+  }
+
+  .ot-daily-breakdown-print .date-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+
+  .ot-daily-breakdown-print .date-table th,
+  .ot-daily-breakdown-print .date-table td {
+    border: 1px solid #cbd5e1 !important;
+    padding: 6px 8px !important;
+  }
+
+  .ot-daily-breakdown-print .date-table th {
+    background: #f8fafc !important;
+    color: #475569 !important;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+  }
+
+  .ot-daily-breakdown-print .date-table td[style*="text-align:right"],
+  .ot-daily-breakdown-print .date-table td[style*="text-align: right"] {
+    text-align: right !important;
+  }
+
+  .ot-daily-breakdown-print .totals-row {
+    background: #f0f9ff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    font-weight: 700;
+  }
+
+  .ot-daily-breakdown-print .grand-total {
+    text-align: right;
+    background: #f0f9ff !important;
+    border: 1px solid #bae6fd !important;
+    border-radius: 6px;
+    padding: 8px 16px;
+    margin-top: 16px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .ot-daily-breakdown-print .grand-total .label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: #0369a1;
+    font-weight: 700;
+  }
+
+  .ot-daily-breakdown-print .grand-total .value {
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: #0284c7;
+  }
+
+  .ot-daily-breakdown-print .signatures {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 36px;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .ot-daily-breakdown-print .sig-line {
+    text-align: center;
+  }
+
+  .ot-daily-breakdown-print .sig-line .line {
+    border-top: 1px solid #334155;
+    width: 220px;
+    margin: 0 auto 6px;
+  }
+
+  .ot-daily-breakdown-print .sig-line .label {
+    font-size: 0.78rem;
+    color: #475569;
+  }
+}
+
+#print-container {
+  margin: 0 auto;
+  max-width: 8.5in;
+}
+
+.worker-form {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro", Arial, sans-serif;
+  width: 100%;
+  border: none;
+  border-bottom: 1px dashed #000;
+  box-sizing: border-box;
+  background: transparent;
+  margin-bottom: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  position: relative;
+  overflow: visible;
+}
+
+.worker-form::after {
+  content: '' !important;
+  display: none !important;
+}
+
+.worker-form:first-child {
+  padding-top: 0;
+}
+
+.worker-form:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.worker-form:last-child::after {
+  content: '';
+}
+
+.form-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9.5px;
+  border: 1.5px solid #000;
+  table-layout: fixed;
+}
+
+.form-table td,
+.form-table th {
+  border: 1px solid #000;
+  padding: 2px 4px;
+  vertical-align: top;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.05;
+  height: auto !important;
+  min-height: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.worker-form .form-table td,
+.worker-form .form-table th {
+  overflow: visible !important;
+  text-overflow: unset !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+.worker-form table,
+.worker-form table tr,
+.worker-form table th,
+.worker-form table td {
+  height: auto !important;
+  min-height: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.worker-form table td {
+  max-width: none !important;
+}
+
+.form-table td[style*="padding: 0"],
+.form-table td[style*="padding:0"],
+.form-table td[style*="padding: 0px"],
+.form-table td[style*="padding:0px"] {
+  padding: 0 !important;
+
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+
+  html, body {
+    background-color: white !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: auto !important;
+  }
+
+  .app-container,
+  #app,
+  .app-fixed-height {
+    padding: 0;
+    max-width: none;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .no-print,
+  .health-drawer,
+  .health-drawer-backdrop,
+  .health-hover-card,
+  .batch-health-bar,
+  #quick-clearance-drawer,
+  #quick-clearance-backdrop,
+  #health-hover-card,
+  #personnel-batch-health-bar,
+  #pb-sync-indicator {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+  }
+
+  .page-break {
+    page-break-after: always;
+  }
+
+  .sig-placeholder-text {
+    display: none !important;
+  }
+
+  .supervisor-sig-dropzone {
+    border: none !important;
+    background: transparent !important;
+  }
+
+  .sig-name-input {
+    border: none !important;
+  }
+
+  #print-container {
+    box-shadow: none;
+    margin: 0;
+    padding: 0;
+    max-width: none;
+  }
+
+  .dist-card-body {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /* .print-page dimensions are fully managed by distribution.js #global-page-spec injection.
+     Only safe base rules that do NOT conflict with height/padding/flex are declared here. */
+  .print-page {
+    box-sizing: border-box !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  .print-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+    margin-bottom: 0 !important;
+  }
+
+  .worker-form {
+    border: none !important;
+    border-bottom: 1px dashed #000 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .worker-form::after {
+    content: '' !important;
+    display: none !important;
+  }
+
+  .form-table {
+    border: 1.5px solid #000 !important;
+  }
+
+  .form-table td,
+  .form-table th {
+    border-color: #000 !important;
+    padding: 2px 4px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .form-table td[style*="padding: 0"],
+  .form-table td[style*="padding:0"],
+  .form-table td[style*="padding: 0px"],
+  .form-table td[style*="padding:0px"] {
+    padding: 0 !important;
+  }
+
+  .worker-form table,
+  .worker-form table tr,
+  .worker-form table th,
+  .worker-form table td {
+    height: auto !important;
+    min-height: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .worker-form table td {
+    max-width: none !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+  }
+
+  table {
+    page-break-inside: auto;
+  }
+
+  .no-break {
+    page-break-inside: avoid !important;
+  }
+
+  .force-break {
+    page-break-after: always !important;
+  }
+
+  .distribution-grid {
+    display: block !important;
+    overflow: visible !important;
+  }
+
+  .dist-card {
+    margin-bottom: 24px !important;
+    page-break-inside: avoid !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: none !important;
+    display: block !important;
+    height: auto !important;
+  }
+
+  .dist-card-body {
+    max-height: none !important;
+    overflow: visible !important;
+    height: auto !important;
+    display: block !important;
+  }
+
+  #distribution-grid-view,
+  #distribution-container {
+    height: auto !important;
+    overflow: visible !important;
+    display: block !important;
+    flex: none !important;
+  }
+
+  .app-container.app-fixed-height,
+  #app.app-fixed-height,
+  .view.active {
+    height: auto !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  .top-nav,
+  .topbar .actions,
+  .tab-btn,
+  #distribution-analytics-view {
+    display: none !important;
+  }
+
+  .header-row.dark td,
+  .header-row.medium td,
+  .header-row.light td,
+  .break-title,
+  .break-table th,
+  .dist-card-header {
+    print-color-adjust: exact !important;
+  }
+
+  /* Org chart print */
+  html, body, .app-fixed-height, .view.active {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  .org-chart-grid {
+    display: block !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  .org-group-section {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    margin-bottom: 24px !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: none !important;
+    padding: 20px !important;
+    width: 100% !important;
+    border-radius: var(--radius-sm) !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  .org-hierarchy-tree::before,
+  .org-tree-row::before {
+    display: none !important;
+    content: none !important;
+  }
+
+  .org-member-card {
+    border: 1px solid #cbd5e1 !important;
+    background: #ffffff !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    max-width: none !important;
+    padding: 6px 10px !important;
+    border-radius: var(--radius-sm) !important;
+    position: relative !important;
+    z-index: var(--z-base) !important;
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .org-member-card.leader {
+    border: 1.5px solid #1b4332 !important;
+    border-left: 5px solid #1b4332 !important;
+    background: #f0fdf4 !important;
+  }
+
+  .org-members-grid {
+    background: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    display: grid !important;
+    padding: 8px !important;
+    gap: 6px !important;
+    border-radius: var(--radius-sm) !important;
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .group-title-badge {
+    background: #f1f5f9 !important;
+    border: 1.5px solid #cbd5e1 !important;
+    padding: 4px 14px !important;
+    border-radius: var(--radius-sm) !important;
+  }
+
+  .group-title-badge h3 {
+    font-size: var(--text-lg) !important;
+    color: #1b4332 !important;
+    font-weight: 800 !important;
+  }
+
+  .org-member-name {
+    font-size: var(--text-sm) !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+    overflow: visible !important;
+    white-space: normal !important;
+  }
+
+  .org-member-trade {
+    font-size: var(--text-xs) !important;
+    color: #475569 !important;
+  }
+
+  .org-member-avatar {
+    width: 28px !important;
+    height: 28px !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: var(--radius-sm) !important;
+    overflow: hidden !important;
+    flex-shrink: 0 !important;
+  }
+
+  .org-group-section:last-child {
+    page-break-after: auto !important;
+  }
+
+  .no-print, .actions, #btn-print-org-charts, .nav-container, .topbar {
+    display: none !important;
+  }
+
+  /* Woodland workforce premium print rules */
+  .table-header-tools,
+  .pagination-footer,
+  #selection-tray,
+  .selection-tray,
+  .floating-action-bar,
+  .dropdown,
+  #columns-dropdown-content,
+  .print-actions {
+    display: none !important;
+  }
+
+  #workers-table th:first-child, #workers-table td:first-child,
+  #workers-table th:last-child, #workers-table td:last-child,
+  #personnel-table th:first-child, #personnel-table td:first-child,
+  #personnel-table th:last-child, #personnel-table td:last-child,
+  #visitations-table th:last-child, #visitations-table td:last-child {
+    display: none !important;
+  }
+
+  #workers-table, #personnel-table, #visitations-table {
+    width: 100% !important;
+    max-width: 100% !important;
+    table-layout: auto !important;
+    border-collapse: collapse !important;
+  }
+
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  * {
+    print-color-adjust: exact !important;
+  }
+}

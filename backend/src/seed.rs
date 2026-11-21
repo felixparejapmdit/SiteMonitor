@@ -386,18 +386,18 @@ async fn accounts(txn: &DatabaseTransaction) -> anyhow::Result<[user::Model; 4]>
     // Demo accounts share one password (shown on the sign-in page in demo mode).
     let demo_hash = crate::auth::hash_password(crate::auth::DEMO_PASSWORD)?;
     let mut people = Vec::new();
-    for (name, role, phone, email) in [
-        ("Victoria Ashford", UserRole::VipClient, "+63 917 555 0001", "victoria@ashford-estate.example"),
-        ("Marco Villanueva", UserRole::OfficeAdmin, "+63 917 555 0101", "marco@ashford-estate.example"),
-        ("Jun Dela Cruz", UserRole::SiteMonitor, "+63 917 555 0202", "jun@ashford-estate.example"),
-        ("Ana Santos", UserRole::SiteMonitor, "+63 917 555 0203", "ana@ashford-estate.example"),
+    for (name, role, phone, username) in [
+        ("Victoria Ashford", UserRole::VipClient, "+63 917 555 0001", "victoria"),
+        ("Marco Villanueva", UserRole::OfficeAdmin, "+63 917 555 0101", "marco"),
+        ("Jun Dela Cruz", UserRole::SiteMonitor, "+63 917 555 0202", "jun"),
+        ("Ana Santos", UserRole::SiteMonitor, "+63 917 555 0203", "ana"),
     ] {
         let person = user::ActiveModel {
             id: Set(Uuid::new_v4()),
             name: Set(name.into()),
             role: Set(enc(&role)),
             phone: Set(phone.into()),
-            email: Set(email.into()),
+            username: Set(username.into()),
             assigned_area_ids: Set(to_json(&Vec::<Uuid>::new())),
             is_active: Set(true),
             password_hash: Set(Some(demo_hash.clone())),
