@@ -60,6 +60,7 @@ pub fn api(state: AppState) -> Router<AppState> {
         .route("/workers/delete", post(workforce::delete_workers))
         .route("/workforce/start-day", post(workforce::start_day))
         .route("/workforce/project-history", get(workforce::project_history))
+        .route("/workforce/dependability", get(workforce::dependability))
         .route("/workforce/groups", get(workforce::groups).put(workforce::link_group))
         .route("/workforce/records/{collection}", get(workforce::records))
         .route("/workforce/records/{collection}/{id}", put(workforce::put_record).delete(workforce::delete_record))

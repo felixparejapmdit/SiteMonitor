@@ -323,6 +323,16 @@ Two differences from Service 5, both because its own code fails there: its atten
 
 When Service 5's templates change, regenerate the kit with `python scripts/s5print/build.py` (Service 5 is only read), then rebuild.
 
+### Service 5 pages inside SiteMonitor
+
+Five pages are Service 5's own screens, shown in their tab: **Departments**, **Overnight Duty**, **OT Calculator**, **OT Entries** and **Signatories** (`frontend/public/print/s5view-*.html`, built by the same script from Service 5's page markup, styles and code). They read SiteMonitor's records, and their changes save to SiteMonitor through the normal API (each changed duty schedule, duty area, OT entry or signatory is saved on its own, with the server's usual permission checks). Service 5's copies in the browser's local storage are switched off, so no personnel data is kept in the browser.
+
+Departments shows Service 5's department cards exactly, including one of its quirks: each card's "/ N present" total stays at 0, because Service 5 never counts it.
+
+### Quick search (Ctrl+K)
+
+Ctrl+K (⌘K on a Mac) on any page, including inside the Service 5 pages, opens quick search: every page and tab you can open, and people by name, A#, trade or project group. Arrow keys move, Enter opens (a person opens their profile), Esc closes.
+
 ---
 
 ## Data privacy and backups

@@ -172,132 +172,7 @@ pub fn DashboardMore() -> Element {
     }
 }
 
-/// Service 5's "Work residences & housing" (on the Departments tab).
-#[component]
-pub fn HousingTables() -> Element {
-    let workers = use_workers();
-    let people = active(&workers);
-    let table = |key: fn(&Worker) -> &String| -> Vec<(String, Vec<String>)> {
-        let mut by: BTreeMap<String, [usize; 4]> = BTreeMap::new();
-        for w in &people {
-            let k = if key(w).trim().is_empty() { "Not set".to_string() } else { key(w).trim().to_string() };
-            let e = by.entry(k).or_default();
-            e[0] += 1;
-            e[match w.status {
-                WorkerStatus::Present => 1,
-                WorkerStatus::Absent => 2,
-                WorkerStatus::OnPass => 3,
-            }] += 1;
-        }
-        by.into_iter().map(|(k, n)| (k.clone(), vec![k, n[0].to_string(), n[1].to_string(), n[2].to_string(), n[3].to_string()])).collect()
-    };
-    rsx! {
-        p { class: "font-semibold pt-2", "Work residences" }
-        Table { head: vec!["Residence", "People", "Present", "Absent", "On pass"], rows: table(|w| &w.residence) }
-        p { class: "font-semibold pt-2", "Housing groups" }
-        Table { head: vec!["Housing", "People", "Present", "Absent", "On pass"], rows: table(|w| &w.housing) }
-    }
-}
-
 // ------------------------------------------------------------- signatories
-
-/// Service 5's "Bulk assign groups": tick the project groups one signatory signs
-/// for. A group has one signatory, so it leaves anyone else's list.
-#[component]
-pub fn SignatoryAssign(on_close: EventHandler<()>, #[props(default)] preselect: String) -> Element {
-    let app = use_app();
-    let sigs = use_records("signatories");
-    let workers = use_workers();
-    let mut who = use_signal(String::new);
-    let mut ticked = use_signal(HashSet::<String>::new);
-    let mut busy = use_signal(|| false);
-    let list = sigs.read().clone().unwrap_or_default();
-    // Opened from one signatory's card: start on that signatory and its groups.
-    if !preselect.is_empty() && who.peek().is_empty() {
-        if let Some(v) = list.iter().find(|v| s(v, "id") == preselect) {
-            ticked.set(v["projectGroups"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect());
-            who.set(preselect.clone());
-        }
-    }
-    let mut groups: Vec<String> = active(&workers).into_iter().map(|w| w.project_group).filter(|g| !g.is_empty()).collect();
-    for v in &list {
-        groups.extend(v["projectGroups"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)));
-    }
-    groups.sort();
-    groups.dedup();
-    let owner: HashMap<String, String> =
-        list.iter().flat_map(|v| v["projectGroups"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).map(|g| (g.to_string(), s(v, "name"))).collect::<Vec<_>>()).collect();
-    let pick = {
-        let list = list.clone();
-        move |e: FormEvent| {
-            let id = e.value();
-            let mine: HashSet<String> = list
-                .iter()
-                .find(|v| s(v, "id") == id)
-                .and_then(|v| v["projectGroups"].as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect();
-            ticked.set(mine);
-            who.set(id);
-        }
-    };
-    let save = move |_| {
-        let list = list.clone();
-        async move {
-            busy.set(true);
-            let mine = ticked();
-            for v in list {
-                let id = s(&v, "id");
-                let before: Vec<String> = v["projectGroups"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
-                let mut after: Vec<String> = if id == who() { mine.iter().cloned().collect() } else { before.iter().filter(|g| !mine.contains(*g)).cloned().collect() };
-                after.sort();
-                if after != before {
-                    let mut next = v.clone();
-                    next["projectGroups"] = json!(after);
-                    if let Err(e) = save_record(app, "signatories", &id, &next).await {
-                        app.error(e);
-                        busy.set(false);
-                        return;
-                    }
-                }
-            }
-            app.success("Groups assigned");
-            busy.set(false);
-            on_close.call(());
-        }
-    };
-    rsx! {
-        Modal { title: "Assign project groups to a signatory", wide: true, on_close: move |_| on_close.call(()),
-            div { class: "space-y-4", "data-testid": "sig-assign",
-                div {
-                    label { class: "label", r#for: "sa-who", "Signatory" }
-                    select { id: "sa-who", class: "field", "data-testid": "sig-assign-who", onchange: pick,
-                        option { value: "", "Choose…" }
-                        for v in sigs.read().clone().unwrap_or_default() { option { key: "{s(&v, \"id\")}", value: "{s(&v, \"id\")}", selected: s(&v, "id") == who(), {s(&v, "name")} } }
-                    }
-                }
-                if !who().is_empty() {
-                    div { class: "max-h-80 overflow-y-auto grid sm:grid-cols-2 gap-1",
-                        for g in groups {
-                            label { key: "{g}", class: "flex items-center gap-2 text-sm py-1",
-                                input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "sig-assign-group", checked: ticked().contains(&g),
-                                    onchange: { let g = g.clone(); move |e: FormEvent| { if e.checked() { ticked.write().insert(g.clone()); } else { ticked.write().remove(&g); } } } }
-                                span { class: "flex-1", "{g}" }
-                                if let Some(o) = owner.get(&g) { span { class: "text-xs text-muted truncate", "{o}" } }
-                            }
-                        }
-                    }
-                }
-                div { class: "modal-actions",
-                    button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
-                    button { class: "btn-primary", "data-testid": "sig-assign-save", disabled: who().is_empty() || busy(), onclick: save, if busy() { Spinner {} } "Save" }
-                }
-            }
-        }
-    }
-}
 
 // ----------------------------------------------------------- project groups
 
@@ -438,38 +313,6 @@ pub fn GroupModal(name: Option<String>, on_close: EventHandler<()>) -> Element {
                     }
                     button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
                     button { class: "btn-primary", "data-testid": "gm-save", disabled: busy(), onclick: move |_| save(false), if busy() { Spinner {} } "Save" }
-                }
-            }
-        }
-    }
-}
-
-/// Every group's roster on paper (print-only), grouped by area when asked.
-#[component]
-pub fn GroupRosters(by_area: bool) -> Element {
-    let workers = use_workers();
-    let meta = use_records("project_groups_meta");
-    let meta_map: Value = meta.read().clone().unwrap_or_default().into_iter().next().unwrap_or(json!({}));
-    let mut groups: BTreeMap<(String, String), Vec<Worker>> = BTreeMap::new();
-    for w in active(&workers).into_iter().filter(|w| !w.project_group.is_empty()) {
-        let area = if by_area { s(&meta_map, &w.project_group) } else { String::new() };
-        groups.entry((area, w.project_group.clone())).or_default().push(w);
-    }
-    rsx! {
-        div { class: "print-only space-y-4",
-            p { class: "font-semibold", "Project group rosters — {util::long_day(chrono::Utc::now())}" }
-            for ((area, g), list) in groups {
-                section { key: "{area}{g}", class: "break-inside-avoid",
-                    p { class: "font-medium text-sm", "{g}" if !area.is_empty() { span { class: "text-muted", " · {area}" } } }
-                    table { class: "w-full text-xs border-collapse",
-                        tbody {
-                            for w in list {
-                                tr { key: "{w.id}", class: "border-b",
-                                    td { class: "p-1 w-16", "{w.a_number}" } td { class: "p-1", "{w.name}" } td { class: "p-1", "{w.group_role}" } td { class: "p-1", "{w.trade}" } td { class: "p-1", "{w.status.label()}" }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -703,10 +546,56 @@ pub fn VisitationsHub() -> Element {
         f("completionDetails.photoDataUrl", "Photo evidence", Kind::Photo),
         f("notes", "Notes / purpose", Kind::Long),
     ];
-    let print_rows = |rows: &[Value]| -> Vec<(String, Vec<String>)> { rows.iter().map(|v| (s(v, "id"), vec![s(v, "date"), who(v), s(v, "ministerName"), s(v, "status"), s(v, "notes")])).collect() };
     // Service 5's visit sheets: "scheduled", "week", or one visit's id.
     let mut printing = use_signal(String::new);
+    // Service 5's metrics: upcoming visits, done this month, ministers.
+    let month_start = Local::now().format("%Y-%m-01").to_string();
+    let upcoming = list.iter().filter(|v| s(v, "status") == "scheduled").count();
+    let done_month = list.iter().filter(|v| s(v, "status") == "completed" && s(v, "completedAt").get(..10).unwrap_or("") >= month_start.as_str()).count();
+    let housing_of = |v: &Value| map.get(&s(v, "aNumber")).map(|w| if w.housing.is_empty() { w.residence.clone() } else { w.housing.clone() }).unwrap_or_default();
+    let visit_table = |rows: &[Value], testid: &'static str| -> Element {
+        rsx! {
+            div { class: "card overflow-x-auto no-print",
+                table { class: "w-full text-sm", "data-testid": "{testid}",
+                    thead { tr { class: "text-left text-muted border-b border-line",
+                        for h in ["DATE", "VOLUNTEER", "HOUSING", "MINISTER", "STATUS", "ACTIONS"] { th { key: "{h}", class: "px-3 py-2 font-medium text-xs tracking-wide", "{h}" } }
+                    } }
+                    tbody { class: "divide-y divide-line",
+                        for v in rows.iter().cloned() {
+                            tr { key: "{s(&v, \"id\")}", "data-testid": "visit-row",
+                                td { class: "px-3 py-2 tabular whitespace-nowrap", {s(&v, "date")} }
+                                td { class: "px-3 py-2", {who(&v)} }
+                                td { class: "px-3 py-2", {housing_of(&v)} }
+                                td { class: "px-3 py-2", {s(&v, "ministerName")} }
+                                td { class: "px-3 py-2", span { class: match s(&v, "status").as_str() { "completed" => "pill bg-tag-green-bg text-tag-green-text", "scheduled" => "pill bg-tag-blue-bg text-tag-blue-text", _ => "pill bg-tag-gray-bg text-tag-gray-text" }, {s(&v, "status")} } }
+                                td { class: "px-3 py-2 whitespace-nowrap",
+                                    if can_edit && s(&v, "status") == "scheduled" {
+                                        button { class: "btn-secondary h-8", "data-testid": "visit-done", onclick: { let v = v.clone(); move |_| set_status(v.clone(), "completed") }, Icon { name: "check" } "Complete" }
+                                        button { class: "btn-ghost h-8", "data-testid": "visit-cancel", onclick: { let v = v.clone(); move |_| set_status(v.clone(), "canceled") }, "Cancel" }
+                                    }
+                                    if s(&v, "status") == "scheduled" {
+                                        button { class: "btn-ghost h-8", "data-testid": "visit-print-form", onclick: { let id = s(&v, "id"); move |_| printing.set(id.clone()) }, Icon { name: "archive" } "Print form" }
+                                    }
+                                    if can_edit {
+                                        button { class: "btn-icon btn-ghost", "aria-label": "Edit visit", "data-testid": "record-edit", onclick: { let v = v.clone(); move |_| editing.set(Some((s(&v, "id"), v.clone()))) }, Icon { name: "edit" } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
     rsx! {
+        div { class: "grid grid-cols-3 gap-3 no-print", "data-testid": "visit-metrics",
+            for (l, n, id) in [("Upcoming Visits", upcoming, "metric-upcoming-visits"), ("Done This Month", done_month, "metric-completed-month"), ("Total Ministers", names.len(), "metric-total-ministers")] {
+                div { key: "{id}", class: "card p-4", "data-testid": "{id}",
+                    p { class: "text-sm text-muted", "{l}" }
+                    p { class: "text-2xl font-semibold tabular", "{n}" }
+                }
+            }
+        }
         div { class: "flex flex-wrap items-center gap-3 no-print",
             Segmented { options: vec!["Schedule", "History", "Coverage", "Groups"], current: view, testid: "visit-view" }
             if can_edit {
@@ -740,28 +629,13 @@ pub fn VisitationsHub() -> Element {
         }
         match view() {
             "Schedule" => rsx! {
-                p { class: "text-sm text-muted no-print", "{scheduled.len()} scheduled" }
+                p { class: "text-sm no-print", span { class: "font-semibold", "Scheduled Visitations" } span { class: "pill bg-hover ml-2", "{scheduled.len()} visits" } }
                 if scheduled.is_empty() { div { class: "card no-print", EmptyState { icon: "calendar", title: "No visits scheduled", body: "Schedule one, or change the filters." } } }
-                ul { class: "card divide-y divide-line no-print", "data-testid": "visit-schedule",
-                    for v in scheduled.iter().cloned() {
-                        li { key: "{s(&v, \"id\")}", class: "flex flex-wrap items-center gap-3 px-4 py-2.5", "data-testid": "visit-row",
-                            span { class: "tabular text-sm w-24", {s(&v, "date")} }
-                            span { class: "flex-1 min-w-[10rem]", {who(&v)} span { class: "text-muted text-sm ml-2", {s(&v, "ministerName")} } }
-                            if can_edit {
-                                button { class: "btn-secondary h-8", "data-testid": "visit-done", onclick: { let v = v.clone(); move |_| set_status(v.clone(), "completed") }, Icon { name: "check" } "Done" }
-                                button { class: "btn-ghost h-8", "data-testid": "visit-cancel", onclick: { let v = v.clone(); move |_| set_status(v.clone(), "canceled") }, "Cancel" }
-                                button { class: "btn-ghost h-8", "data-testid": "visit-print-form", onclick: { let id = s(&v, "id"); move |_| printing.set(id.clone()) }, Icon { name: "archive" } "Print form" }
-                                button { class: "btn-icon btn-ghost", "aria-label": "Edit visit", onclick: { let v = v.clone(); move |_| editing.set(Some((s(&v, "id"), v.clone()))) }, Icon { name: "edit" } }
-                            }
-                        }
-                    }
-                }
+                {visit_table(&scheduled, "visit-schedule")}
             },
             "History" => rsx! {
-                div { class: "no-print",
-                    Table { head: vec!["Date", "Person", "Minister", "Status", "Notes"], rows: print_rows(&history), empty: "No past visits.",
-                        on_edit: move |id: String| { if can_edit { if let Some(v) = list.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) } } } }
-                }
+                p { class: "text-sm no-print", span { class: "font-semibold", "Visitation History" } span { class: "pill bg-hover ml-2", "{history.len()} records" } }
+                {visit_table(&history, "visit-history")}
             },
             "Groups" => rsx! {},
             _ => rsx! {
@@ -983,121 +857,6 @@ pub fn VisitGroupMembers() -> Element {
 
 // ------------------------------------------------------------------ overtime
 
-/// One overtime entry's share per person: (A#, hours, pay, area). Service 5 has
-/// single entries (one person) and group sessions (a list of volunteers).
-pub fn ot_shares(e: &Value) -> Vec<(String, f64, f64, String)> {
-    let hours = e["hours"].as_f64().unwrap_or(0.0);
-    let pay = e["computedPay"].as_f64().unwrap_or(0.0);
-    let area = [s(e, "otArea"), s(e, "title")].into_iter().find(|x| !x.is_empty()).unwrap_or_default();
-    if !s(e, "volunteerId").is_empty() {
-        return vec![(s(e, "volunteerId"), hours, pay, area)];
-    }
-    let vols = e["volunteers"].as_array().cloned().unwrap_or_default();
-    let n = vols.len().max(1) as f64;
-    vols.iter().map(|v| (s(v, "aNumber"), hours, pay / n, if s(v, "area").is_empty() { area.clone() } else { s(v, "area") })).collect()
-}
-
-/// Service 5's OT calculator over a date range: per volunteer, by area, by day,
-/// and the volunteer × day matrix.
-#[component]
-pub fn OtSummary() -> Element {
-    let ot = use_records("ot_entries");
-    let workers = use_workers();
-    let map = by_a_number(&workers.read().clone().unwrap_or_default());
-    let mut from = use_signal(|| Local::now().format("%Y-%m-01").to_string());
-    let mut to = use_signal(today);
-    let view = use_signal(|| "Per volunteer");
-    let app = use_app();
-    // Service 5 "Load from Yesterday": yesterday's people, area and task copied to today
-    // with hours reset to 0, and the range set to today.
-    let load_yesterday = move |_| async move {
-        let yesterday = (Local::now().date_naive() - Duration::days(1)).format("%Y-%m-%d").to_string();
-        let from_list: Vec<Value> = ot.read().clone().unwrap_or_default().into_iter().filter(|e| s(e, "date") == yesterday).collect();
-        if from_list.is_empty() {
-            return app.error(format!("No entries from {yesterday} to copy."));
-        }
-        for e in &from_list {
-            let mut next = e.clone();
-            next["id"] = json!(new_id("ot"));
-            next["date"] = json!(today());
-            next["hours"] = json!(0);
-            next["computedPay"] = json!(0);
-            next["status"] = json!("Planned");
-            next["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
-            if let Err(err) = save_record(app, "ot_entries", &s(&next, "id"), &next).await {
-                return app.error(err);
-            }
-        }
-        from.set(today());
-        to.set(today());
-        app.success(format!("Loaded {} entries from yesterday ({yesterday}) to today. Hours reset to 0.", from_list.len()));
-    };
-    let entries: Vec<Value> = ot.read().clone().unwrap_or_default().into_iter().filter(|e| s(e, "date") >= from() && s(e, "date") <= to()).collect();
-    let mut per: BTreeMap<String, (usize, f64, f64)> = BTreeMap::new();
-    let mut area: BTreeMap<String, (HashSet<String>, f64, f64)> = BTreeMap::new();
-    let mut daily: BTreeMap<String, (usize, f64, f64)> = BTreeMap::new();
-    let mut matrix: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
-    for e in &entries {
-        let d = s(e, "date");
-        let shares = ot_shares(e);
-        let day = daily.entry(d.clone()).or_default();
-        day.0 += 1;
-        for (a, h, p, ar) in shares {
-            let x = per.entry(a.clone()).or_default();
-            x.0 += 1;
-            x.1 += h;
-            x.2 += p;
-            let y = area.entry(if ar.is_empty() { "—".into() } else { ar }).or_default();
-            y.0.insert(a.clone());
-            y.1 += h;
-            y.2 += p;
-            day.1 += h;
-            day.2 += p;
-            *matrix.entry(a).or_default().entry(d.clone()).or_default() += h;
-        }
-    }
-    let total: f64 = per.values().map(|x| x.2).sum();
-    let dates: Vec<String> = daily.keys().cloned().collect();
-    let money = |p: f64| format!("₱{p:.2}");
-    rsx! {
-        div { class: "flex flex-wrap items-end gap-3 no-print",
-            div { label { class: "label", r#for: "ots-from", "From" } input { id: "ots-from", r#type: "date", class: "field", "data-testid": "ots-from", value: "{from}", oninput: move |e| from.set(e.value()) } }
-            div { label { class: "label", r#for: "ots-to", "To" } input { id: "ots-to", r#type: "date", class: "field", "data-testid": "ots-to", value: "{to}", oninput: move |e| to.set(e.value()) } }
-            Segmented { options: vec!["Per volunteer", "By area", "Daily", "Matrix"], current: view, testid: "ots-view" }
-            if app.can(Permission::ManageOvertime) { button { class: "btn-secondary", "data-testid": "ots-load-yesterday", onclick: load_yesterday, "Load from yesterday" } }
-            // Service 5's three OT prints: schedule by area, timesheet matrix, daily breakdown.
-            button { class: "btn-primary", "data-testid": "ots-print", title: "Print Overtime Schedule (By Area)", onclick: move |_| s5print("overtime", json!([{ "kind": "schedule", "start": from(), "end": to() }])), Icon { name: "archive" } "OT Schedule" }
-            button { class: "btn-secondary", "data-testid": "ots-print-matrix", title: "Timesheet Matrix (per volunteer)", onclick: move |_| s5print("overtime", json!([{ "kind": "matrix", "start": from(), "end": to() }])), "Matrix" }
-            button { class: "btn-secondary", "data-testid": "ots-print-daily", title: "Daily Breakdown (by Date)", onclick: move |_| s5print("overtime", json!([{ "kind": "daily", "start": from(), "end": to() }])), "Daily Breakdown" }
-        }
-        p { class: "text-sm tabular", "data-testid": "ots-total", "{entries.len()} entries · {util::plural(per.len(), \"person\")} · total {money(total)}" }
-        div { class: "print-sheet",
-            p { class: "font-semibold print-only", "Overtime {view()} — {from()} to {to()}" }
-            match view() {
-                "By area" => rsx! { Table { head: vec!["Area / work", "People", "Hours", "Pay"], rows: area.into_iter().map(|(a, (p, h, m))| (a.clone(), vec![a, p.len().to_string(), format!("{h:.1}"), money(m)])).collect() } },
-                "Daily" => rsx! { Table { head: vec!["Date", "Entries", "Hours", "Pay"], rows: daily.into_iter().map(|(d, (n, h, m))| (d.clone(), vec![d, n.to_string(), format!("{h:.1}"), money(m)])).collect() } },
-                "Matrix" => rsx! {
-                    div { class: "card overflow-x-auto",
-                        table { class: "text-xs tabular", "data-testid": "ots-matrix",
-                            thead { tr { th { class: "px-2 py-1 text-left", "Person" } for d in dates.iter() { th { key: "{d}", class: "px-1 py-1", {d.get(5..).unwrap_or_default().to_string()} } } th { class: "px-2", "Total" } } }
-                            tbody {
-                                for (a, row) in matrix.iter() {
-                                    tr { key: "{a}", class: "border-t border-line",
-                                        td { class: "px-2 py-1 whitespace-nowrap", {name_of(&map, a)} }
-                                        for d in dates.iter() { td { key: "{d}", class: "px-1 text-center", {row.get(d).map(|h| format!("{h:.1}")).unwrap_or_default()} } }
-                                        td { class: "px-2 font-medium", {format!("{:.1}", row.values().sum::<f64>())} }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                _ => rsx! { Table { head: vec!["Person", "Entries", "Hours", "Pay"], rows: per.iter().map(|(a, (n, h, m))| (a.clone(), vec![name_of(&map, a), n.to_string(), format!("{h:.1}"), money(*m)])).collect() } },
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------- duty
 
 /// The duty roster for a whole month (dates × duty areas), printable.
@@ -1191,14 +950,6 @@ pub fn BackupPicker(on_save: EventHandler<String>) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn group_sessions_split_pay_and_single_entries_keep_it() {
-        let single = json!({ "volunteerId": "7", "hours": 2.0, "computedPay": 200.0, "otArea": "Hall" });
-        assert_eq!(ot_shares(&single), vec![("7".to_string(), 2.0, 200.0, "Hall".to_string())]);
-        let session = json!({ "title": "Pool", "hours": 3.0, "computedPay": 300.0, "volunteers": [{ "aNumber": "1" }, { "aNumber": "2", "area": "Deck" }] });
-        assert_eq!(ot_shares(&session), vec![("1".to_string(), 3.0, 150.0, "Pool".to_string()), ("2".to_string(), 3.0, 150.0, "Deck".to_string())]);
-    }
 
     #[test]
     fn timeframes() {

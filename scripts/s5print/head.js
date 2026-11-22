@@ -10,6 +10,13 @@
 (function () {
 if (window.S5Print) return;
 
+// Inside SiteMonitor's page frames, Ctrl+K opens SiteMonitor's quick search.
+if (window.parent !== window) {
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); window.parent.postMessage('s5-quick-search', location.origin); }
+  });
+}
+
 // Service 5's global data arrays, filled by the bridge before each print.
 var workersData = [];
 var signatoriesData = [];

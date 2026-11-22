@@ -108,32 +108,16 @@ test("encoder: tomorrow's schedule from the grid and card views", async ({ page,
   expect((await byA(request, "703")).tomorrow).toBe("Paint gate"); // the earlier field is kept
 });
 
-test("OT: trade and volunteer filters, rate column, Load from yesterday, Clear", async ({ page, request }) => {
+test("OT: the original Service 5 entries page, Load Yesterday saved to SiteMonitor", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/operations");
   await page.getByTestId("tab-OT Entries").click();
-  await page.getByTestId("ot-prev").click();
-  await expect(page.getByTestId("ot-total")).toContainText("2 entries");
-  await page.getByTestId("ot-trade").selectOption("Painter");
-  await expect(page.getByTestId("ot-total")).toContainText("1 entries");
-  await page.getByTestId("ot-trade").selectOption("");
-  await page.getByTestId("ot-who").fill("Abad");
-  await expect(page.getByTestId("ot-total")).toContainText("1 entries");
-  await page.getByTestId("ot-who").fill("");
-  await expect(page.locator("th", { hasText: /^Rate$/ })).toHaveCount(1);
-  await page.getByTestId("ot-show-rate").uncheck();
-  await expect(page.locator("th", { hasText: /^Rate$/ })).toHaveCount(0);
-
-  await page.getByTestId("tab-OT Calculator").click();
-  await page.getByTestId("ots-load-yesterday").click();
+  const ote = page.frameLocator("[data-testid=s5-page-ot-entries]");
+  await expect(ote.locator("body[data-ready=\"1\"]")).toBeAttached({ timeout: 20_000 });
+  await ote.getByRole("button", { name: "Load Yesterday" }).click();
   await expect.poll(async () => (await records(request, "ot_entries")).filter((e: any) => e.date === iso(0)).length).toBe(2);
   const copied = (await records(request, "ot_entries")).filter((e: any) => e.date === iso(0));
   expect(copied.every((e: any) => e.hours === 0 && e.otArea && e.status === "Planned")).toBeTruthy();
-  await expect(page.getByTestId("ots-from")).toHaveValue(iso(0));
 
-  await page.getByTestId("tab-OT Entries").click();
-  await page.getByTestId("ot-clear").click();
-  await page.getByTestId("ot-clear-confirm").click();
-  await expect.poll(async () => (await records(request, "ot_entries")).filter((e: any) => e.date === iso(0)).length).toBe(0);
 });
 
 test("print & export: grouped field picker, layouts, CSV and Excel", async ({ page }) => {

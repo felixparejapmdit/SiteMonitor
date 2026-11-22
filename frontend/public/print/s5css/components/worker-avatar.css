@@ -1,0 +1,161 @@
+/* ==========================================================================
+   WORKER AVATAR SYSTEM - 5-TIER RECOGNITION ENHANCEMENT
+   Preserves information density in tables while maximizing facial recognition
+   fidelity across desktop tables, mobile jobsite cards, and photo popovers.
+   ========================================================================== */
+
+:root {
+  --avatar-table-size: 36px;
+  --avatar-table-radius: 6px;
+  --avatar-mobile-size: 64px;
+  --avatar-mobile-radius: 10px;
+  --avatar-popover-size: 96px;
+  --avatar-popover-radius: 12px;
+  --avatar-focal-pos: center 20%;
+}
+
+/* --------------------------------------------------------------------------
+   TIER 1 & 2: TABLE AVATAR SQUIRCLE (ASSIGNMENTS & PERSONNEL TABLES)
+   Size: 36px x 36px (fits existing 44px-48px row height with zero row expansion)
+   Area gain: +144% vs former 26px circle (+21.5% from squircle corner recovery)
+   -------------------------------------------------------------------------- */
+.table-worker-avatar-wrap {
+  position: relative;
+  width: var(--avatar-table-size);
+  height: var(--avatar-table-size);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--avatar-table-radius);
+  cursor: pointer;
+}
+
+/* Tier 4: Top-weighted eye-level facial framing (center 20%) */
+.table-worker-avatar {
+  width: var(--avatar-table-size);
+  height: var(--avatar-table-size);
+  border-radius: var(--avatar-table-radius);
+  object-fit: cover;
+  object-position: var(--avatar-focal-pos);
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+  transform-origin: left center;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+              box-shadow 0.2s ease,
+              border-color 0.2s ease;
+}
+
+/* Fallback Initials Box in Tables */
+.table-worker-avatar-fb {
+  width: var(--avatar-table-size);
+  height: var(--avatar-table-size);
+  border-radius: var(--avatar-table-radius);
+  background: var(--color-surface, #f6f5f4);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+[data-theme="dark"] .table-worker-avatar-fb {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   TIER 3: HARDWARE-ACCELERATED FLOATING MAGNIFIER LENS
+   Transforms on compositor thread outside DOM box-model.
+   Expands to ~83px on hover/focus with ZERO table cell reflow or row shift.
+   -------------------------------------------------------------------------- */
+@media (hover: hover) and (pointer: fine) {
+  .table-worker-avatar-wrap:hover .table-worker-avatar,
+  .table-worker-avatar:focus-visible {
+    transform: scale(2.3);
+    z-index: var(--z-popover, 150);
+    box-shadow: 0 12px 28px -4px rgba(0, 0, 0, 0.35), 0 6px 12px -2px rgba(0, 0, 0, 0.2);
+    border-color: var(--primary-color);
+    border-radius: 8px;
+  }
+
+  .table-worker-avatar-wrap:hover .table-worker-avatar-fb {
+    transform: scale(1.15);
+    z-index: var(--z-popover, 150);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-color: var(--primary-color);
+  }
+}
+
+/* Touch targets: meet accessibility guidelines on touch devices */
+@media (hover: none) {
+  .table-worker-avatar-wrap {
+    min-width: 36px;
+    min-height: 36px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   TIER 5: MOBILE JOBSITE WORKER QUICK-LOOKUP CARD (64px x 64px)
+   -------------------------------------------------------------------------- */
+.wql-card-avatar {
+  width: var(--avatar-mobile-size) !important;
+  height: var(--avatar-mobile-size) !important;
+  border-radius: var(--avatar-mobile-radius) !important;
+  object-fit: cover !important;
+  object-position: var(--avatar-focal-pos) !important;
+  flex-shrink: 0 !important;
+  border: 2px solid var(--border-color) !important;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12) !important;
+}
+
+.wql-card-avatar-placeholder {
+  width: var(--avatar-mobile-size) !important;
+  height: var(--avatar-mobile-size) !important;
+  border-radius: var(--avatar-mobile-radius) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 1.6rem !important;
+  font-weight: 800 !important;
+  flex-shrink: 0 !important;
+  border: 2px solid var(--border-color) !important;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* --------------------------------------------------------------------------
+   TIER 5: PHOTO POPOVER MODAL (96px x 96px)
+   -------------------------------------------------------------------------- */
+.photo-popover-avatar {
+  width: var(--avatar-popover-size) !important;
+  height: var(--avatar-popover-size) !important;
+  border-radius: var(--avatar-popover-radius) !important;
+  object-fit: cover !important;
+  object-position: var(--avatar-focal-pos) !important;
+  border: 2px solid var(--border-color) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16) !important;
+  flex-shrink: 0 !important;
+}
+
+.photo-popover-avatar-fb {
+  width: var(--avatar-popover-size) !important;
+  height: var(--avatar-popover-size) !important;
+  border-radius: var(--avatar-popover-radius) !important;
+  background: var(--color-primary) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 2.2rem !important;
+  font-weight: 800 !important;
+  color: white !important;
+  border: 2px solid var(--border-color) !important;
+  flex-shrink: 0 !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12) !important;
+}

@@ -468,6 +468,8 @@ pub fn worker_of(x: &Person) -> shared::Worker {
         housing: s("visitationHousing"),
         visit_group: s("visitationGroup"),
         visit_role: s("visitationRole"),
+        trade_group: s("tradeGroup"),
+        trade_role: s("tradeRole"),
         archive_category: s("archiveCategory"),
         medical: s("medical"),
         birthday: s("birthday"),

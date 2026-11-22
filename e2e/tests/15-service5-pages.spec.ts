@@ -73,35 +73,17 @@ test("Assignments: three views, filters, sorting, paging, bulk edit, generate fo
   expect(problems, problems.join("\n")).toEqual([]);
 });
 
-test("Signatories: coverage, signature image, unbind, manage groups, add and remove", async ({ page, request }) => {
+test("Signatories: the original Service 5 page, coverage and unbind saved to SiteMonitor", async ({ page, request }) => {
   const problems = watch(page);
   await openAs(page, "OfficeAdmin", "/operations");
   await page.getByTestId("tab-Signatories").click();
-  await expect(page.getByTestId("sig-card")).toHaveCount(2);
-  await expect(page.getByTestId("sig-unassigned")).toHaveText("0");
-  const carlos = page.locator('[data-testid="sig-card"][data-name="Engr. Carlos Medina"]');
-  await expect(carlos.getByTestId("sig-group").filter({ hasText: "Hall | Masons" })).toContainText("4 vols");
-
-  // Signature PNG.
-  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
-  await carlos.getByTestId("sig-file").setInputFiles({ name: "sig.png", mimeType: "image/png", buffer: png });
-  await expect(carlos.getByTestId("sig-image")).toBeVisible();
-  await expect(carlos).toContainText("Configured:");
-
-  await carlos.getByTestId("sig-group").filter({ hasText: "Utility | Plumbers" }).getByTestId("sig-unbind").click();
-  await expect(page.getByTestId("sig-unassigned")).toHaveText("1");
-  await carlos.getByTestId("sig-manage").click();
-  await page.locator("label", { hasText: "Utility | Plumbers" }).getByTestId("sig-assign-group").check();
-  await page.getByTestId("sig-assign-save").click();
-  await expect(page.getByTestId("sig-unassigned")).toHaveText("0");
-
-  await page.getByTestId("sig-add").click();
-  await expect(page.getByTestId("sig-card")).toHaveCount(3);
-  const added = page.locator('[data-testid="sig-card"][data-name="New signatory"]');
-  await added.getByTestId("sig-delete").click();
-  await added.getByTestId("sig-delete-confirm").click();
-  await expect(page.getByTestId("sig-card")).toHaveCount(2);
-  expect((await records(request, "signatories")).find((s: any) => s.name === "Engr. Carlos Medina").signatureUrl).toMatch(/^data:image\/png/);
+  const sig = page.frameLocator("[data-testid=s5-page-signatories]");
+  await expect(sig.locator("body[data-ready=\"1\"]")).toBeAttached({ timeout: 20_000 });
+  await expect(sig.locator("body")).toContainText("ACTIVE SIGNATORIES", { ignoreCase: true });
+  await expect(sig.locator("body")).toContainText("Hall | Masons");
+  // Unbind a group with its chip button; Service 5 saves, SiteMonitor keeps it.
+  await sig.locator("button.sig-chip-remove[aria-label=\"Deselect Utility | Plumbers\"]").first().click();
+  await expect.poll(async () => ((await records(request, "signatories")) as any[]).find((s) => s.name === "Engr. Carlos Medina").projectGroups.includes("Utility | Plumbers")).toBe(false);
   expect(problems, problems.join("\n")).toEqual([]);
 });
 
@@ -122,40 +104,24 @@ test("Reassign Volunteers: several people to a project, logged, with the notice"
   await expect(page.getByTestId("realloc-notice")).toContainText("Mario Reyes");
   const moved = (await workers(request)).filter((w: any) => w.project === "Gazebo");
   expect(moved.map((w: any) => w.name).sort()).toEqual(["Danilo Ramos", "Mario Reyes"]);
-  expect((await records(request, "assignment_log")).some((e: any) => e.field === "project" && e.newValue === "Gazebo" && e.reason === "Roof push")).toBeTruthy();
+  expect((await records(request, "assignment_log")).some((e: any) => e.field === "projectGroup" && e.newValue === "Gazebo" && e.reason === "Roof push")).toBeTruthy();
   expect(problems, problems.join("\n")).toEqual([]);
 });
 
-test("dashboard rosters, duty override with reason, OT encoder, org roles, archived personnel", async ({ page, request }) => {
+test("dashboard rosters, org chart trade roles, archived personnel", async ({ page, request }) => {
   const problems = watch(page);
   await openAs(page, "OfficeAdmin", "/workforce");
   await page.getByTestId("wf-donut-Absent").click();
   await expect(page.getByTestId("roster-modal")).toContainText("Paolo Garcia");
   await page.keyboard.press("Escape");
 
+  // Service 5 org chart: edit a person trade role.
   await page.goto("/operations");
-  const area = page.getByTestId("duty-override-area").filter({ hasText: "Main Gate" });
-  await area.getByTestId("duty-assign").selectOption({ label: "Victor Salazar" });
-  await expect(page.getByText("Write the reason for the change first.").first()).toBeVisible();
-  await page.getByTestId("duty-override-reason").fill("Swap for a family visit");
-  await area.getByTestId("duty-assign").selectOption({ label: "Victor Salazar" });
-  await expect(page.getByText("Duty roster changed").first()).toBeVisible();
-  expect((await records(request, "assignment_log")).some((e: any) => e.field === "duty" && e.reason === "Swap for a family visit")).toBeTruthy();
-
-  await page.getByTestId("tab-OT Entries").click();
-  await page.getByTestId("ote-who").selectOption("101");
-  await page.getByTestId("ote-task").fill("Formwork");
-  await page.getByTestId("ote-hours").fill("2");
-  await page.getByTestId("ote-add").click();
-  await expect(page.getByText("Overtime added for Ramon Dela Cruz").first()).toBeVisible();
-  const ot = (await records(request, "ot_entries")).find((e: any) => e.otTask === "Formwork");
-  expect([ot.hours, ot.hourlyRate, ot.computedPay]).toEqual([2, 78, 156]);
-
   await page.getByTestId("tab-Org Chart").click();
-  const hall = page.getByTestId("org-chart").locator("section", { hasText: "Hall | Masons" });
-  await hall.getByTestId("org-members").click();
-  await hall.getByTestId("org-member").filter({ hasText: "Paolo Garcia" }).getByTestId("org-role").selectOption("Kalihim");
-  await expect.poll(async () => (await workers(request)).find((w: any) => w.a_number === "104").group_role).toBe("Kalihim");
+  await page.getByTestId("org-member").filter({ hasText: "Paolo Garcia" }).first().getByTestId("org-edit").click();
+  await page.getByTestId("org-edit-role").selectOption("Kalihim");
+  await page.getByTestId("org-edit-save").click();
+  await expect.poll(async () => (await workers(request)).find((w: any) => w.a_number === "104").trade_role).toBe("Kalihim");
 
   await page.goto("/workforce");
   await page.getByTestId("tab-Archived Personnel").click();

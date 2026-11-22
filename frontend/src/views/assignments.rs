@@ -16,7 +16,7 @@ use crate::components::ui::{EmptyState, Icon, Spinner, PAGE_TABS};
 use crate::state::use_app;
 use crate::util;
 use crate::views::personnel::{extra_value, Bulk, BulkModal, FilterSelect, StartDayModal, WorkerModal, ARCHIVE_CATEGORIES, REFRESH};
-use crate::views::workforce_ops::{s, today, ReassignModal, StatusButtons};
+use crate::views::workforce_ops::{s, today, ReassignModal, StatusButtons, WorkerPhoto};
 use crate::views::workforce_ops::s5print;
 use crate::views::workforce_print::PRINT_REQUEST;
 use crate::Route;
@@ -317,6 +317,7 @@ pub fn AssignmentsView(#[props(default = "active")] initial_status: &'static str
                                     input { r#type: "checkbox", class: "w-4 h-4 mt-1 accent-[#064e3b]", "aria-label": "Select {w.name}", checked: picked().contains(&w.id),
                                         onchange: { let id = w.id; move |e: FormEvent| { if e.checked() { picked.write().insert(id); } else { picked.write().remove(&id); } } } }
                                 }
+                                WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo, size: 36 }
                                 div { class: "flex-1 min-w-0",
                                     p { class: "font-medium truncate", "{w.name}" span { class: "text-muted font-normal text-sm ml-2 tabular", "A# {w.a_number}" } }
                                     p { class: "text-sm text-muted truncate", {[w.trade.as_str(), w.project_group.as_str()].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" · ")} }
@@ -369,7 +370,10 @@ pub fn AssignmentsView(#[props(default = "active")] initial_status: &'static str
                                             } else if k == "status" && w.archived {
                                                 span { class: "pill bg-tag-gray-bg text-tag-gray-text", {if w.archive_category.is_empty() { "Archived".to_string() } else { w.archive_category.clone() }} }
                                             } else if k == "name" {
-                                                span { class: "font-medium", "{w.name}" }
+                                                span { class: "inline-flex items-center gap-2",
+                                                    WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo }
+                                                    span { class: "font-medium", "{w.name}" }
+                                                }
                                                 if !w.job_order { span { class: "ml-2 pill bg-tag-gray-bg text-tag-gray-text text-[11px]", "No JO" } }
                                             } else {
                                                 {cell(&w, k)}

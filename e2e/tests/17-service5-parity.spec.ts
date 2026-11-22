@@ -180,12 +180,15 @@ test("archive from the directory asks for Service 5's category and effective dat
   expect((await request.post(`/api/workers/${w.id}/reemploy`, { data: { status: "Present" } })).ok()).toBeTruthy();
 });
 
-test("duty: Clear Day empties the night's roster", async ({ page, request }) => {
+test("duty: Clear Day empties the night roster (the original Service 5 screen)", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/operations");
   await page.getByTestId("tab-Overnight Duty").click();
-  await page.getByTestId("duty-clear-day").click();
-  await page.getByTestId("duty-clear-confirm").click();
-  await expect.poll(async () => (await records(request, "duty_schedules")).find((d: any) => d.dateStr === today()).assignments.length).toBe(0);
+  const duty = page.frameLocator("[data-testid=s5-page-duty]");
+  await expect(duty.locator("body[data-ready=\"1\"]")).toBeAttached({ timeout: 20_000 });
+  await duty.getByRole("button", { name: "Clear Day", exact: true }).click();
+  await duty.locator("#confirm-modal.active").waitFor();
+  await duty.locator("#confirm-modal-ok").click();
+  await expect.poll(async () => ((await records(request, "duty_schedules")) as any[]).find((d) => d.dateStr === today())?.assignments?.length ?? 0).toBe(0);
 });
 
 test("attendance sheet generator: formats, grouping, filters and selection", async ({ page }) => {
@@ -214,18 +217,18 @@ test("records update forms: blank copies, single volunteer, cycle banner", async
   const last = () => page.evaluate(() => { const a = (window as any).__s5; return a[a.length - 1] || ""; });
   const sheets = async () => ((await last()).match(/class="vru-sheet"/g) || []).length;
   await page.getByTestId("tab-Update Forms").click();
-  await expect(page.getByTestId("vru-print")).toContainText("(3)");
+  await expect(page.getByTestId("vru-print")).toContainText("Print 3 Update Forms");
   await page.getByTestId("vru-cycle").fill("Semi-Annual Update 2026 (2nd Half)");
   await page.getByTestId("vru-scope").selectOption("single");
   await page.getByTestId("vru-single").selectOption({ label: "Ramos, Elena" });
-  await expect(page.getByTestId("vru-print")).toContainText("(1)");
+  await expect(page.getByTestId("vru-print")).toContainText("Print 1 Update Form");
   await page.getByTestId("vru-print").click();
   await expect.poll(sheets).toBe(1);
   expect(await last()).toContain("Semi-Annual Update 2026 (2nd Half)");
   expect(await last()).toContain("Project Leader");
   await page.getByTestId("vru-mode").selectOption("blank");
   await page.getByTestId("vru-copies").fill("4");
-  await expect(page.getByTestId("vru-print")).toContainText("(4)");
+  await expect(page.getByTestId("vru-print")).toContainText("Print 4 Blank Forms");
   await page.getByTestId("vru-print").click();
   await expect.poll(sheets).toBe(4);
   expect(await last()).not.toContain("Ramos");

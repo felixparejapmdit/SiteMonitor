@@ -147,30 +147,20 @@ test("pick lists, visitation groups and ministers, duty swaps", async ({ page, r
   expect((await request.put(`/api/workers/${two.id}/status`, { data: { status: "Present", reason: "" } })).ok()).toBeTruthy();
   await page.goto("/operations");
   await page.getByTestId("tab-Overnight Duty").click();
-  await page.getByTestId("duty-generate").click();
-  await expect(page.getByText("Duty roster made").first()).toBeVisible();
+  // The original Service 5 duty screen: Gen Week, then confirm.
+  const duty = page.frameLocator("[data-testid=s5-page-duty]");
+  await expect(duty.locator("body[data-ready=\"1\"]")).toBeAttached({ timeout: 20_000 });
+  await duty.getByRole("button", { name: "Gen Week", exact: true }).click();
+  await duty.locator("#confirm-modal.active").waitFor();
+  await duty.locator("#confirm-modal-ok").click();
+  const day0 = await page.evaluate(() => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10); });
+  await expect.poll(async () => ((await records(request, "duty_schedules")) as any[]).some((d) => d.dateStr === day0 && d.assignments.length > 0), { timeout: 20_000 }).toBe(true);
   await page.getByTestId("tab-Duty History").click();
   await page.getByTestId("duty-swap").first().selectOption("202");
   await expect(page.getByText("Swapped").first()).toBeVisible();
   const day = await page.evaluate(() => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10); });
   const today = (await records(request, "duty_schedules")).find((d: any) => d.dateStr === day);
   expect(today.assignments[0].aNumber).toBe("202");
-});
-
-test("overtime from a pasted list of names", async ({ page, request }) => {
-  await openAs(page, "OfficeAdmin", "/operations");
-  await page.getByTestId("tab-OT Entries").click();
-  await page.getByTestId("ot-paste-open").click();
-  await page.getByTestId("otp-title").fill("Night pour");
-  await page.getByTestId("otp-names").fill("hall worker one\nWorker Two Hall\nStranger");
-  await page.getByTestId("otp-hours").fill("3");
-  await page.getByTestId("otp-rate").fill("50");
-  await expect(page.getByTestId("otp-matches")).toContainText("Stranger → not found");
-  await expect(page.getByTestId("otp-pay")).toContainText("2 people · ₱300.00");
-  await page.getByTestId("otp-save").click();
-  await expect.poll(async () => (await records(request, "ot_entries")).find((e: any) => e.title === "Night pour")?.computedPay).toBe(300);
-  const entry = (await records(request, "ot_entries")).find((e: any) => e.title === "Night pour");
-  expect(entry.totalCount).toBe(2);
 });
 
 test("clinic: booster reminders, medications, contact becomes an episode", async ({ page, request }) => {

@@ -33,7 +33,7 @@ use crate::state::AppState;
 /// sub-items list the same tabs and share the open one (`ui::PAGE_TABS`).
 /// Named after the Service 5 pages they replace.
 pub const WORKFORCE_TABS: &[&str] =
-    &["Dashboard", "Departments", "ID Cards", "Project Groups", "Visitations", "Reassign Volunteers", "Attendance Gen", "Update Forms", "Archived Personnel", "Areas & zones"];
+    &["Dashboard", "Assignments", "Departments", "ID Cards", "Project Groups", "Visitations", "Reassign Volunteers", "Attendance Gen", "Update Forms", "Archived Personnel", "Areas & zones"];
 pub const OPERATIONS_TABS: &[&str] = &[
     "Overnight Duty", "Duty History", "Encoder", "Monthly Attendance", "OT Calculator", "OT Entries", "Org Chart", "History Log", "Dependability", "Signatories",
     "Bulk Update", "Pick Lists", "Print",

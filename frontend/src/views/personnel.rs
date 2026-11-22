@@ -447,21 +447,6 @@ pub fn BulkBar(count: usize, archived_view: bool, on_pick: EventHandler<Bulk>, o
     }
 }
 
-pub fn save_request(w: &Worker, archived: bool) -> SaveWorkerRequest {
-    SaveWorkerRequest {
-        a_number: w.a_number.clone(),
-        name: w.name.clone(),
-        phone: w.phone.clone(),
-        trade: w.trade.clone(),
-        department: w.department.clone(),
-        area: w.area.clone(),
-        project_group: w.project_group.clone(),
-        group_role: w.group_role.clone(),
-        status: w.status,
-        archived,
-    }
-}
-
 #[component]
 pub fn BulkModal(kind: Bulk, workers: Vec<Worker>, on_close: EventHandler<bool>) -> Element {
     let app = use_app();

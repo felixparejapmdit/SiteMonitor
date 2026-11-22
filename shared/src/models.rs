@@ -706,6 +706,11 @@ pub struct Worker {
     pub visit_group: String,
     #[serde(default)]
     pub visit_role: String,
+    /// Service 5's trade group and role in it (Katiwala, II Katiwala, Kalihim, Member): the org chart.
+    #[serde(default)]
+    pub trade_group: String,
+    #[serde(default)]
+    pub trade_role: String,
     /// Retired, Dismissed or Deceased when archived.
     #[serde(default)]
     pub archive_category: String,

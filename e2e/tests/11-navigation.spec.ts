@@ -20,7 +20,7 @@ test("a tabbed page's tabs are sidebar sub-items, and the two stay in step", asy
   // Sidebar → page.
   await sidebar.getByTestId("nav-tab-OT Entries").click();
   await expect(page.getByTestId("tab-OT Entries")).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByTestId("ot-total")).toBeVisible();
+  await expect(page.getByTestId("s5-page-ot-entries")).toBeVisible();
 
   // Page → sidebar.
   await page.getByTestId("tab-Signatories").click();

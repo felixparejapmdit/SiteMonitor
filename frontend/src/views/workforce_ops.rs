@@ -329,6 +329,25 @@ pub fn print_with(page_css: &str) {
     ));
 }
 
+/// A person's photo beside their name (Service 5 shows one in every list), or their initials.
+#[component]
+pub fn WorkerPhoto(id: uuid::Uuid, name: String, has_photo: bool, #[props(default = 28)] size: u32) -> Element {
+    if has_photo {
+        rsx! { img { src: "/api/workers/{id}/photo", alt: "", loading: "lazy", class: "rounded-full object-cover shrink-0", style: "width: {size}px; height: {size}px;", "data-testid": "worker-photo" } }
+    } else {
+        rsx! { crate::components::ui::Avatar { name, size } }
+    }
+}
+
+/// A Service 5 page shown as Service 5 draws it (frontend/public/print/s5view-*.html):
+/// its own markup, styles and code over SiteMonitor's records. Read-only.
+#[component]
+pub fn S5Page(page: &'static str) -> Element {
+    rsx! {
+        iframe { src: "/print/s5view-{page}.html", title: "{page}", "data-testid": "s5-page-{page}", class: "w-full rounded-md border border-line bg-white", style: "height: calc(100vh - 210px); min-height: 520px;" }
+    }
+}
+
 /// Runs one of Service 5's own print templates (frontend/public/print/s5print.js),
 /// e.g. `s5print("personnelReport", json!(["trade"]))`; the args are the call's arguments.
 pub fn s5print(report: &str, args: Value) {
@@ -390,7 +409,8 @@ pub fn WorkforceView() -> Element {
             PageTabs { page: "workforce", tabs: tabs.clone() }
             match tab {
                 "Dashboard" => rsx! { crate::views::workforce_more::DashboardTab {} crate::views::workforce_pages::DashboardCharts {} crate::views::workforce_extra::DashboardMore {} },
-                "Departments" => rsx! { DepartmentsTab {} crate::views::workforce_extra::HousingTables {} },
+                "Assignments" => rsx! { crate::views::assignments::AssignmentsView {} },
+                "Departments" => rsx! { S5Page { page: "departments" } },
                 "ID Cards" => rsx! { crate::views::workforce_print::PrintTab { initial: "id" } },
                 "Project Groups" => rsx! { GroupsTab {} },
                 "Visitations" => rsx! { crate::views::workforce_extra::VisitationsHub {} },
@@ -411,57 +431,120 @@ fn GroupsTab() -> Element {
         let _ = WORKERS_CHANGED();
         api::get::<Vec<WorkGroup>>("/workforce/groups").await.unwrap_or_default()
     });
+    let workers = use_workers();
+    let sigs = use_records("signatories");
     let jobs: Vec<WorkItem> = app.work_items.read().clone().unwrap_or_default().into_iter().filter(|w| w.status.is_active()).collect();
     let can_link = app.can(Permission::ManageWorkforce);
     let meta = use_records("project_groups_meta");
     let meta_map: Value = meta.read().clone().unwrap_or_default().into_iter().next().unwrap_or(json!({}));
     let mut editing = use_signal(|| None::<Option<String>>);
     let mut log = use_signal(|| false);
-    let mut by_area = use_signal(|| false);
-    let mut list = groups.read().clone().unwrap_or_default();
-    if by_area() {
-        list.sort_by_key(|g| (s(&meta_map, &g.name).to_lowercase(), g.name.to_lowercase()));
-    }
-    let tools = rsx! {
-        div { class: "flex flex-wrap items-center gap-2 no-print",
-            p { class: "text-sm text-muted flex-1 min-w-[16rem]", "Link each group to the job it works on: the Crew page then shows how many of its people are present today." }
-            label { class: "flex items-center gap-2 text-sm",
-                input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "groups-by-area", checked: by_area(), onchange: move |e| by_area.set(e.checked()) }
-                "Grouped by area"
-            }
-            button { class: "btn-secondary", "data-testid": "groups-log", onclick: move |_| log.set(true), "Change log" }
-            button { class: "btn-secondary", "data-testid": "groups-print", onclick: move |_| s5print("projectGroups", json!([{ "kind": "all" }])), Icon { name: "archive" } "Print All" }
-            if can_link {
-                button { class: "btn-primary", "data-testid": "group-create", onclick: move |_| editing.set(Some(None)), Icon { name: "plus" } "Create group" }
-            }
-        }
-        crate::views::workforce_extra::GroupRosters { by_area: by_area() }
-        if let Some(name) = editing() {
-            crate::views::workforce_extra::GroupModal { name, on_close: move |_| { editing.set(None); groups.restart(); } }
-        }
-        if log() {
-            crate::views::workforce_extra::GroupChangeLog { on_close: move |_| log.set(false) }
-        }
+    let mut grouped = use_signal(|| true);
+    let mut area_filter = use_signal(String::new);
+    let mut q = use_signal(String::new);
+    let people: Vec<Worker> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).collect();
+    let signatories = sigs.read().clone().unwrap_or_default();
+    let links = groups.read().clone().unwrap_or_default();
+    // Service 5's project group cards: area, members (overseer, leader, assistant first), signatory.
+    let rank = |r: &str| match r {
+        "Project Overseer" => 0,
+        "Project Leader" => 1,
+        "Asst. Project Leader" => 2,
+        _ => 9,
     };
-    if list.is_empty() {
-        return rsx! { {tools} div { class: "card", EmptyState { icon: "users", title: "No project groups yet", body: "Create one, or set the project group of each person in Personnel." } } };
+    let mut names: Vec<String> = links.iter().map(|g| g.name.clone()).collect();
+    for w in &people {
+        if !w.project_group.is_empty() && !names.contains(&w.project_group) {
+            names.push(w.project_group.clone());
+        }
     }
-    rsx! {
-        {tools}
-        ul { class: "card divide-y divide-line no-print", "data-testid": "group-list",
-            for g in list {
-                li { key: "{g.name}", class: "flex flex-wrap items-center gap-3 px-4 py-3", "data-testid": "group-row",
-                    div { class: "flex-1 min-w-[12rem]",
-                        p { class: "font-medium", "{g.name}" if !s(&meta_map, &g.name).is_empty() { span { class: "text-muted font-normal text-sm ml-2", {s(&meta_map, &g.name)} } } }
-                        p { class: "text-sm text-muted tabular", "{g.present} present · {g.absent} absent · {g.on_pass} on pass · {g.total} in all" }
+    names.sort();
+    let cards: Vec<(String, String, Vec<Worker>, Option<uuid::Uuid>)> = names
+        .into_iter()
+        .map(|name| {
+            let mut members: Vec<Worker> = people.iter().filter(|w| w.project_group == name).cloned().collect();
+            members.sort_by_key(|w| (rank(&w.group_role), w.name.to_lowercase()));
+            let job = links.iter().find(|g| g.name == name).and_then(|g| g.work_item_id);
+            (name.clone(), group_area(&name, &members, &meta_map), members, job)
+        })
+        .collect();
+    let mut areas: Vec<String> = cards.iter().map(|c| c.1.clone()).collect();
+    areas.sort();
+    areas.dedup();
+    let total_people: usize = cards.iter().map(|c| c.2.len()).sum();
+    let ql = q().to_lowercase();
+    let shown: Vec<_> = cards
+        .iter()
+        .filter(|c| {
+            (area_filter().is_empty() || c.1 == area_filter())
+                && (ql.is_empty() || c.0.to_lowercase().contains(&ql) || c.1.to_lowercase().contains(&ql) || c.2.iter().any(|w| w.name.to_lowercase().contains(&ql) || w.a_number.contains(&ql)))
+        })
+        .cloned()
+        .collect();
+    let mut sections: Vec<(String, Vec<(String, String, Vec<Worker>, Option<uuid::Uuid>)>)> = vec![];
+    for c in shown.iter().cloned() {
+        let key = if grouped() { c.1.clone() } else { String::new() };
+        match sections.iter_mut().find(|x| x.0 == key) {
+            Some(x) => x.1.push(c),
+            None => sections.push((key, vec![c])),
+        }
+    }
+    sections.sort_by(|a, b| a.0.cmp(&b.0));
+    let pill_count = |a: &str| cards.iter().filter(|c| c.1 == a).count();
+    let card = move |(name, area, members, job): (String, String, Vec<Worker>, Option<uuid::Uuid>)| -> Element {
+        let sig = signatories
+            .iter()
+            .find(|v| v["projectGroups"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(name.as_str()))))
+            .map(|v| s(v, "name"))
+            .unwrap_or_default();
+        let n = members.len();
+        let jobs = jobs.clone();
+        rsx! {
+            div { key: "{name}", class: "card overflow-hidden", "data-testid": "group-row",
+                div { class: "p-4 border-b border-line flex justify-between gap-2",
+                    div { class: "min-w-0",
+                        button { class: "pill bg-tag-blue-bg text-tag-blue-text text-[11px]", title: "Click to filter by {area}", onclick: { let a = area.clone(); move |_| area_filter.set(a.clone()) }, "📍 Area: {area}" }
+                        p { class: "font-bold mt-1", "{name}" }
+                        p { class: "text-xs text-muted flex gap-2 items-center",
+                            {util::plural(n, "member")}
+                            span { class: if sig.is_empty() { "pill bg-hover text-[11px]" } else { "pill bg-tag-blue-bg text-tag-blue-text text-[11px]" },
+                                "Signatory: " {if sig.is_empty() { "Default".to_string() } else { sig.clone() }}
+                            }
+                        }
                     }
-                    select {
-                        class: "field w-auto min-w-[14rem]",
-                        "aria-label": "Job for {g.name}",
-                        "data-testid": "group-job",
-                        disabled: !can_link,
+                    if can_link {
+                        div { class: "flex gap-1 shrink-0",
+                            button { class: "btn-icon btn-ghost", title: "Reassign Members from this Group", "aria-label": "Reassign members of {name}", "data-testid": "group-reassign",
+                                onclick: move |_| { crate::components::ui::PAGE_TABS.write().insert("workforce", "Reassign Volunteers"); }, Icon { name: "move" } }
+                            button { class: "btn-icon btn-ghost", title: "Print Group", "aria-label": "Print {name}", "data-testid": "group-print", onclick: { let n = name.clone(); move |_| s5print("projectGroups", json!([{ "group": n }])) }, Icon { name: "archive" } }
+                            button { class: "btn-icon btn-ghost", title: "Edit Group", "aria-label": "Edit {name}", "data-testid": "group-edit", onclick: { let n = name.clone(); move |_| editing.set(Some(Some(n.clone()))) }, Icon { name: "edit" } }
+                            button { class: "btn-icon btn-ghost text-tag-red-text", title: "Delete Group", "aria-label": "Delete {name}", "data-testid": "group-delete", onclick: { let n = name.clone(); move |_| editing.set(Some(Some(n.clone()))) }, Icon { name: "trash" } }
+                        }
+                    }
+                }
+                div { class: "px-4 py-3 space-y-1",
+                    if members.is_empty() { p { class: "text-xs text-muted italic text-center py-2", "No members assigned yet" } }
+                    for w in members.iter() {
+                        div { key: "{w.id}", class: "flex items-center gap-2 py-1", "data-testid": "group-member",
+                            WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo }
+                            div { class: "flex-1 min-w-0 text-sm",
+                                span { class: "font-semibold", "{w.name}" }
+                                span { class: "text-xs text-muted ml-1", "#{w.a_number}" }
+                                if rank(&w.group_role) < 9 {
+                                    span { class: "pill bg-tag-blue-bg text-tag-blue-text text-[10px] ml-1.5",
+                                        {match rank(&w.group_role) { 0 => "Overseer", 1 => "Leader", _ => "Asst. Lead" }}
+                                    }
+                                }
+                            }
+                            span { class: "text-xs text-muted whitespace-nowrap", "{w.trade}" }
+                        }
+                    }
+                }
+                // SiteMonitor: the job this group works on (the Crew page counts who is present).
+                div { class: "px-4 pb-3",
+                    select { class: "field h-8 text-sm", "aria-label": "Job for {name}", "data-testid": "group-job", disabled: !can_link,
                         onchange: {
-                            let name = g.name.clone();
+                            let name = name.clone();
                             move |e: FormEvent| {
                                 let req = GroupLinkRequest { group: name.clone(), work_item_id: uuid::Uuid::parse_str(&e.value()).ok() };
                                 async move {
@@ -475,14 +558,215 @@ fn GroupsTab() -> Element {
                                 }
                             }
                         },
-                        option { value: "", selected: g.work_item_id.is_none(), "Not linked to a job" }
-                        for j in jobs.iter() {
-                            option { key: "{j.id}", value: "{j.id}", selected: g.work_item_id == Some(j.id), "{j.title}" }
+                        option { value: "", selected: job.is_none(), "Not linked to a job" }
+                        for j in jobs.iter() { option { key: "{j.id}", value: "{j.id}", selected: job == Some(j.id), "{j.title}" } }
+                    }
+                }
+            }
+        }
+    };
+    rsx! {
+        div { class: "card p-4 flex flex-wrap gap-8 no-print", "data-testid": "pg-stats",
+            div { p { class: "text-xs text-muted uppercase", "Total Groups" } p { class: "text-2xl font-semibold tabular", "{cards.len()}" } }
+            div { p { class: "text-xs text-muted uppercase", "Active Project Areas" } p { class: "text-2xl font-semibold tabular", "{areas.len()}" } }
+            div { p { class: "text-xs text-muted uppercase", "Total Assigned Workforce" } p { class: "text-2xl font-semibold tabular", "{total_people} " span { class: "text-sm text-muted font-normal", "volunteers" } } }
+        }
+        div { class: "flex flex-wrap items-center gap-2 no-print",
+            input { class: "field w-auto min-w-[16rem]", r#type: "search", placeholder: "Search groups, leaders, members...", "aria-label": "Search project groups", "data-testid": "pg-search", value: "{q}", oninput: move |e| q.set(e.value()) }
+            button { class: if grouped() { "btn-primary h-8" } else { "btn-secondary h-8" }, "data-testid": "groups-by-area", onclick: move |_| grouped.set(true), "By Area" }
+            button { class: if grouped() { "btn-secondary h-8" } else { "btn-primary h-8" }, "data-testid": "groups-grid", onclick: move |_| grouped.set(false), "Grid" }
+            span { class: "flex-1" }
+            button { class: "btn-secondary", "data-testid": "groups-log", onclick: move |_| log.set(true), "Change log" }
+            button { class: "btn-secondary", "data-testid": "groups-print", onclick: move |_| s5print("projectGroups", json!([{ "kind": "all" }])), Icon { name: "archive" } "Print All" }
+            if can_link {
+                button { class: "btn-primary", "data-testid": "group-create", onclick: move |_| editing.set(Some(None)), Icon { name: "plus" } "Create Group" }
+            }
+        }
+        div { class: "flex flex-wrap gap-1.5 no-print", "data-testid": "pg-area-pills",
+            button { class: if area_filter().is_empty() { "btn-primary h-7 text-xs" } else { "btn-secondary h-7 text-xs" }, onclick: move |_| area_filter.set(String::new()), "All Areas ({cards.len()})" }
+            for a in areas.iter().cloned() {
+                button { key: "{a}", class: if area_filter() == a { "btn-primary h-7 text-xs" } else { "btn-secondary h-7 text-xs" },
+                    onclick: { let a2 = a.clone(); move |_| area_filter.set(a2.clone()) },
+                    "{a} ({pill_count(&a)})"
+                }
+            }
+        }
+        if cards.is_empty() {
+            div { class: "card", EmptyState { icon: "users", title: "No Project Groups Yet", body: "Create a group to organize volunteers by project." } }
+        } else if shown.is_empty() {
+            div { class: "card p-6 text-center space-y-2",
+                p { class: "text-sm text-muted", "No project groups match the selected filter" }
+                button { class: "btn-secondary h-8", onclick: move |_| { area_filter.set(String::new()); q.set(String::new()); }, "Clear Filters" }
+            }
+        }
+        for (area, list) in sections {
+            section { key: "{area}", class: "space-y-2",
+                if !area.is_empty() {
+                    p { class: "font-bold",
+                        "📍 {area} "
+                        span { class: "text-xs text-muted font-normal", {format!("{} • {} Volunteers", util::plural(list.len(), "Group"), list.iter().map(|c| c.2.len()).sum::<usize>())} }
+                    }
+                }
+                div { class: "grid sm:grid-cols-2 xl:grid-cols-3 gap-3",
+                    for c in list { {card(c)} }
+                }
+            }
+        }
+        if let Some(name) = editing() {
+            crate::views::workforce_extra::GroupModal { name, on_close: move |_| { editing.set(None); groups.restart(); } }
+        }
+        if log() {
+            crate::views::workforce_extra::GroupChangeLog { on_close: move |_| log.set(false) }
+        }
+    }
+}
+
+/// Service 5's area of a project group: the set override, then the part before
+/// "|", "-", "/", ":", then the area most of its people work in, else "General".
+fn group_area(name: &str, members: &[Worker], meta: &Value) -> String {
+    let custom = s(meta, name);
+    if !custom.is_empty() {
+        return custom;
+    }
+    if let Some(i) = name.find(['|', '-', '/', ':', '—']) {
+        let head = name[..i].trim();
+        let rest = &name[i + name[i..].chars().next().map_or(1, char::len_utf8)..];
+        if !head.is_empty() && !rest.trim().is_empty() {
+            return head.to_string();
+        }
+    }
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for w in members.iter().filter(|w| !w.area.trim().is_empty()) {
+        *counts.entry(w.area.trim()).or_default() += 1;
+    }
+    counts.into_iter().max_by_key(|(_, n)| *n).map(|(a, _)| a.to_string()).unwrap_or_else(|| "General".into())
+}
+
+#[component]
+/// Service 5's "Trade Org Charts": one tree per trade group — Katiwala on top,
+/// II Katiwala and Kalihim below, then the members; each card can be edited
+/// (trade group, trade role) or removed from the group.
+fn OrgChartTab() -> Element {
+    let app = use_app();
+    let workers = use_workers();
+    let mut q = use_signal(String::new);
+    let mut editing = use_signal(|| None::<Worker>);
+    let mut removing = use_signal(|| None::<Worker>);
+    let can_edit = app.can(Permission::ManageWorkforce);
+    // Service 5 leaves out the placeholder people a backup restore can create ("Volunteer 123" with no details).
+    let ghost = |w: &Worker| {
+        let n = w.name.trim();
+        n.to_lowercase().starts_with("volunteer ") && !n[10..].contains(' ') && w.trade.is_empty() && w.area.is_empty() && w.project_group.is_empty() && w.trade_group.is_empty() && w.birthday.is_empty() && !w.has_photo
+    };
+    let everyone: Vec<Worker> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !ghost(w)).collect();
+    let mut groups: BTreeMap<String, Vec<Worker>> = BTreeMap::new();
+    for w in everyone.iter().cloned() {
+        groups.entry(if w.trade_group.is_empty() { "General".into() } else { w.trade_group.clone() }).or_default().push(w);
+    }
+    let ql = q().to_lowercase();
+    groups.retain(|g, m| ql.is_empty() || g.to_lowercase().contains(&ql) || m.iter().any(|w| w.name.to_lowercase().contains(&ql)));
+    let shown_ids: Vec<uuid::Uuid> = groups.values().flatten().filter(|w| !w.archived).map(|w| w.id).collect();
+    let known: Vec<String> = {
+        let mut k: Vec<String> = everyone.iter().map(|w| w.trade_group.clone()).filter(|g| !g.is_empty()).collect();
+        k.sort();
+        k.dedup();
+        k
+    };
+    let role = |w: &Worker| w.trade_role.trim().to_lowercase();
+    let card = move |w: Worker, kind: &'static str| -> Element {
+        let ring = match kind { "leader" => "border-2 border-accent", "officer" => "border border-accent/40", _ => "border border-line" };
+        rsx! {
+            div { key: "{w.id}", class: "card {ring} flex items-center gap-2 p-2 min-w-0", "data-testid": "org-member",
+                WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo, size: 36 }
+                div { class: "flex-1 min-w-0",
+                    p { class: "text-sm font-semibold truncate", title: "{w.name}", "{w.name}" }
+                    p { class: "text-xs text-muted truncate", {if w.trade.is_empty() { "Volunteer".to_string() } else { w.trade.clone() }} }
+                }
+                if can_edit {
+                    button { class: "btn-icon btn-ghost h-7 w-7", title: "Edit trade group / role", "aria-label": "Edit {w.name}", "data-testid": "org-edit", onclick: { let w = w.clone(); move |_| editing.set(Some(w.clone())) }, "✏️" }
+                    button { class: "btn-icon btn-ghost h-7 w-7", title: "Remove from trade group", "aria-label": "Remove {w.name} from group", "data-testid": "org-remove", onclick: { let w = w.clone(); move |_| removing.set(Some(w.clone())) }, "🗑️" }
+                }
+            }
+        }
+    };
+    let save = move |w: Worker, group: String, role: String| async move {
+        match api::put::<_, Worker>(&format!("/workers/{}/profile", w.id), &json!({ "tradeGroup": group, "tradeRole": role })).await {
+            Ok(_) => {
+                *WORKERS_CHANGED.write() += 1;
+                app.success("Saved");
+            }
+            Err(e) => app.error(e.message()),
+        }
+    };
+    rsx! {
+        div { class: "flex flex-wrap items-center gap-2 no-print",
+            p { class: "font-semibold text-lg flex-1", "Trade Org Charts" }
+            button { class: "btn-secondary", "data-testid": "org-print-jo", title: "Print Job Order slips for the volunteers shown below",
+                onclick: move |_| {
+                    *crate::views::workforce_print::PRINT_REQUEST.write() = Some(("jo", shown_ids.clone()));
+                    crate::components::ui::PAGE_TABS.write().insert("operations", "Print");
+                },
+                Icon { name: "archive" } "Print Job Orders"
+            }
+            button { class: "btn-secondary", "data-testid": "print-tab", onclick: move |_| print_with("size: auto; margin: 8mm 10mm"), Icon { name: "archive" } "Print Charts" }
+            input { class: "field w-auto min-w-[14rem]", r#type: "search", placeholder: "Search group or leader...", "aria-label": "Search group or leader", "data-testid": "org-search", value: "{q}", oninput: move |e| q.set(e.value()) }
+        }
+        if groups.is_empty() {
+            div { class: "card p-6 text-center text-sm text-muted", "No trade groups found matching your search." }
+        }
+        div { class: "grid xl:grid-cols-2 gap-4", "data-testid": "org-chart",
+            for (name, members) in groups {
+                {
+                    let katiwala = members.iter().find(|w| role(w) == "katiwala").cloned();
+                    let ii = members.iter().find(|w| role(w).contains("ii katiwala")).cloned();
+                    let kalihim = members.iter().find(|w| role(w).contains("kalihim")).cloned();
+                    let mut rest: Vec<Worker> = members.iter().filter(|w| !role(w).contains("katiwala") && !role(w).contains("kalihim")).cloned().collect();
+                    rest.sort_by(|a, b| a.name.cmp(&b.name));
+                    let total = members.len();
+                    rsx! {
+                        section { key: "{name}", class: "card p-4 space-y-3 break-inside-avoid", "data-testid": "org-group",
+                            div { class: "flex items-center justify-between gap-2 border-b border-line pb-2",
+                                p { class: "font-bold tracking-wide", "📁 {name.to_uppercase()}" }
+                                span { class: "pill bg-hover text-xs", "{total} Volunteers" }
+                            }
+                            div { class: "flex flex-col items-center gap-1",
+                                p { class: "text-[11px] uppercase tracking-wide text-muted", "Katiwala" }
+                                div { class: "w-full max-w-xs",
+                                    match katiwala { Some(w) => card(w, "leader"), None => rsx! { p { class: "text-xs text-muted italic text-center border border-dashed border-line rounded p-2", "No Katiwala Assigned" } } }
+                                }
+                            }
+                            div { class: "grid grid-cols-2 gap-3",
+                                for (label, who) in [("II Katiwala", ii), ("Kalihim", kalihim)] {
+                                    div { key: "{label}", class: "flex flex-col items-center gap-1",
+                                        p { class: "text-[11px] uppercase tracking-wide text-muted", "{label}" }
+                                        div { class: "w-full",
+                                            match who { Some(w) => card(w, "officer"), None => rsx! { p { class: "text-xs text-muted italic text-center border border-dashed border-line rounded p-2", "Unassigned" } } }
+                                        }
+                                    }
+                                }
+                            }
+                            div { class: "space-y-1",
+                                p { class: "text-[11px] uppercase tracking-wide text-muted", "Members ({rest.len()})" }
+                                div { class: "grid sm:grid-cols-2 gap-2",
+                                    if rest.is_empty() { p { class: "text-xs text-muted italic", "No additional members" } }
+                                    for w in rest { {card(w, "member")} }
+                                }
+                            }
                         }
                     }
-                    if can_link {
-                        button { class: "btn-icon btn-ghost", "aria-label": "Print {g.name}", title: "Print", "data-testid": "group-print", onclick: { let n = g.name.clone(); move |_| s5print("projectGroups", json!([{ "group": n }])) }, Icon { name: "archive" } }
-                        button { class: "btn-icon btn-ghost", "aria-label": "Edit {g.name}", "data-testid": "group-edit", onclick: { let n = g.name.clone(); move |_| editing.set(Some(Some(n.clone()))) }, Icon { name: "edit" } }
+                }
+            }
+        }
+        if let Some(w) = editing() {
+            OrgEdit { worker: w, known: known.clone(), on_close: move |_| editing.set(None), on_save: move |(w, g, r): (Worker, String, String)| { editing.set(None); spawn(save(w, g, r)); } }
+        }
+        if let Some(w) = removing() {
+            Modal { title: "Remove from trade group".to_string(), on_close: move |_| removing.set(None),
+                div { class: "space-y-3",
+                    p { class: "text-sm", {format!("Remove {} from \"{}\"? Their Trade Group will be cleared and Trade Role reset to Member.", w.name, if w.trade_group.is_empty() { "this group" } else { w.trade_group.as_str() })} }
+                    div { class: "modal-actions",
+                        button { class: "btn-ghost", onclick: move |_| removing.set(None), "Cancel" }
+                        button { class: "btn-danger", "data-testid": "org-remove-confirm", onclick: { let w = w.clone(); move |_| { removing.set(None); spawn(save(w.clone(), String::new(), "Member".into())); } }, "Remove" }
                     }
                 }
             }
@@ -490,57 +774,28 @@ fn GroupsTab() -> Element {
     }
 }
 
+/// Service 5's org chart edit popover: trade group (with the known ones) and trade role.
 #[component]
-fn DepartmentsTab() -> Element {
-    let workers = use_workers();
-    let mut by: BTreeMap<String, [usize; 4]> = BTreeMap::new();
-    for w in workers.read().clone().unwrap_or_default().iter().filter(|w| !w.archived) {
-        let d = if w.department.is_empty() { "No department".to_string() } else { w.department.clone() };
-        let e = by.entry(d).or_default();
-        e[0] += 1;
-        e[match w.status {
-            WorkerStatus::Present => 1,
-            WorkerStatus::Absent => 2,
-            WorkerStatus::OnPass => 3,
-        }] += 1;
-    }
-    let rows: Vec<(String, Vec<String>)> = by.into_iter().map(|(d, n)| (d.clone(), vec![d, n[0].to_string(), n[1].to_string(), n[2].to_string(), n[3].to_string()])).collect();
-    rsx! { Table { head: vec!["Department", "People", "Present", "Absent", "On pass"], rows } }
-}
-
-#[component]
-fn OrgChartTab() -> Element {
-    let workers = use_workers();
-    let mut groups: BTreeMap<String, Vec<Worker>> = BTreeMap::new();
-    for w in workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived) {
-        groups.entry(if w.project_group.is_empty() { "No group".into() } else { w.project_group.clone() }).or_default().push(w);
-    }
-    // Service 5's ranks: Katiwala leads, II Katiwala assists, Kalihim keeps records.
-    let rank = |r: &str| match r.trim().to_lowercase().as_str() {
-        "katiwala" => 0,
-        "ii katiwala" => 1,
-        "kalihim" => 2,
-        "" | "member" => 9,
-        _ => 5,
-    };
+fn OrgEdit(worker: Worker, known: Vec<String>, on_close: EventHandler<()>, on_save: EventHandler<(Worker, String, String)>) -> Element {
+    let mut group = use_signal(|| worker.trade_group.clone());
+    let mut role = use_signal(|| if worker.trade_role.is_empty() { "Member".to_string() } else { worker.trade_role.clone() });
     rsx! {
-        div { class: "grid sm:grid-cols-2 xl:grid-cols-3 gap-4", "data-testid": "org-chart",
-            for (name, mut people) in groups {
-                {
-                    people.sort_by_key(|w| (rank(&w.group_role), w.name.to_lowercase()));
-                    let leaders: Vec<Worker> = people.iter().filter(|w| rank(&w.group_role) < 9).cloned().collect();
-                    let everyone = people.clone();
-                    let members = people.len() - leaders.len();
-                    rsx! {
-                        section { key: "{name}", class: "card p-4 space-y-2",
-                            p { class: "font-semibold", "{name}" }
-                            for l in leaders {
-                                p { key: "{l.id}", class: "text-sm", span { class: "pill bg-accent-soft text-accent-ink mr-2", "{l.group_role}" } "{l.name}" }
-                            }
-                            p { class: "text-sm text-muted", "{util::plural(members, \"member\")}" }
-                            crate::views::workforce_pages::OrgMembers { people: everyone }
-                        }
+        Modal { title: format!("Edit {}", worker.name), on_close: move |_| on_close.call(()),
+            div { class: "space-y-3", "data-testid": "org-edit-popover",
+                div {
+                    label { class: "label", r#for: "org-edit-tg-input", "Trade Group" }
+                    input { id: "org-edit-tg-input", class: "field", list: "org-known-groups", placeholder: "e.g. Electrical Group", autocomplete: "off", "data-testid": "org-edit-group", value: "{group}", oninput: move |e| group.set(e.value()) }
+                    datalist { id: "org-known-groups", for g in known { option { key: "{g}", value: "{g}" } } }
+                }
+                div {
+                    label { class: "label", r#for: "org-edit-role", "Trade Role" }
+                    select { id: "org-edit-role", class: "field", "data-testid": "org-edit-role", onchange: move |e| role.set(e.value()),
+                        for r in ["Member", "Kalihim", "II Katiwala", "Katiwala"] { option { key: "{r}", value: "{r}", selected: role() == r, "{r}" } }
                     }
+                }
+                div { class: "modal-actions",
+                    button { class: "btn-ghost", onclick: move |_| on_close.call(()), "Cancel" }
+                    button { class: "btn-primary", "data-testid": "org-edit-save", onclick: { let w = worker.clone(); move |_| on_save.call((w.clone(), group().trim().to_string(), role())) }, "Save" }
                 }
             }
         }
@@ -549,101 +804,437 @@ fn OrgChartTab() -> Element {
 
 #[component]
 fn DependabilityTab() -> Element {
-    let workers = use_workers();
-    let log = use_records("attendance_log");
-    let since = (Local::now().date_naive() - chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
-    // Days in the last 30 on which someone was marked absent or on pass.
-    let mut missed: HashMap<String, (std::collections::BTreeSet<String>, std::collections::BTreeSet<String>)> = HashMap::new();
-    for e in log.read().clone().unwrap_or_default() {
-        let date = s(&e, "date");
-        if date < since {
-            continue;
+    let mut tab = use_signal(|| *ANALYTICS_TAB.peek());
+    use_hook(|| *ANALYTICS_TAB.write() = "dependability");
+    let worker = use_signal(String::new);
+    let days = use_signal(|| 90u32);
+    let data = use_resource(|| async { api::get::<Vec<Value>>("/workforce/dependability").await.unwrap_or_default() });
+    rsx! {
+        div { class: "flex flex-wrap items-center gap-2 no-print",
+            p { class: "font-semibold text-lg mr-2", "Analytics & History" }
+            button { class: if tab() == "dependability" { "btn-primary h-8" } else { "btn-ghost h-8" }, "data-testid": "analytics-tab-dependability", onclick: move |_| tab.set("dependability"), "👤 Worker Dependability" }
+            button { class: if tab() == "project_history" { "btn-primary h-8" } else { "btn-ghost h-8" }, "data-testid": "analytics-tab-project", onclick: move |_| tab.set("project_history"), "🏗️ Project Roster History" }
+            span { class: "flex-1" }
+            button { class: "btn-secondary h-8", "data-testid": "print-tab", onclick: move |_| s5print("analytics", json!([{ "kind": "roster", "days": days() }])), "Print Dependability Roster" }
         }
-        let slot = missed.entry(s(&e, "aNumber")).or_default();
-        match s(&e, "newStatus").as_str() {
-            "Absent" => {
-                slot.0.insert(date);
+        if tab() == "project_history" {
+            crate::views::workforce_extra::ProjectHistory {}
+        } else {
+            match &*data.read() {
+                None => rsx! { Spinner {} },
+                Some(list) => rsx! { WorkerDependability { list: list.clone(), worker, days } },
             }
-            "Passes" | "On Pass" => {
-                slot.1.insert(date);
-            }
-            _ => {}
         }
     }
-    let mut rows: Vec<(i64, String, Vec<String>)> = workers
-        .read()
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|w| !w.archived)
-        .map(|w| {
-            let (a, p) = missed.get(&w.a_number).map(|(a, p)| (a.len(), p.len())).unwrap_or((0, 0));
-            let score = (100 - (a as i64 * 100 / 30)).clamp(0, 100);
-            (score, w.id.to_string(), vec![w.name, w.a_number, a.to_string(), p.to_string(), format!("{score}%")])
-        })
+}
+
+/// One attendance record, as Service 5's analytics reads it.
+#[derive(Clone, PartialEq)]
+struct DepRec {
+    date: String,
+    ts: i64,
+    status: String,
+    area: String,
+    project: String,
+    task: String,
+}
+
+/// Service 5's `computeStats`: reliability, versatility and what someone works on most.
+#[derive(Clone, PartialEq, Default)]
+struct DepStats {
+    total: usize,
+    present: usize,
+    absent: usize,
+    passes: usize,
+    reliability: Option<u32>,
+    versatility: u32,
+    areas: Vec<(String, usize, u32)>,
+    tasks: Vec<(String, usize, u32)>,
+    recs: Vec<DepRec>,
+}
+
+/// Service 5's `_rankFreq`: values by how often they appear, with their share.
+fn rank_freq(values: impl Iterator<Item = String>) -> Vec<(String, usize, u32)> {
+    let vals: Vec<String> = values.filter(|v| !v.is_empty()).collect();
+    let total = vals.len().max(1);
+    let mut freq: Vec<(String, usize)> = vec![];
+    for v in vals {
+        match freq.iter_mut().find(|f| f.0 == v) {
+            Some(f) => f.1 += 1,
+            None => freq.push((v, 1)),
+        }
+    }
+    freq.sort_by(|a, b| b.1.cmp(&a.1));
+    freq.into_iter().map(|(v, n)| (v, n, ((n as f64 / total as f64) * 100.0).round() as u32)).collect()
+}
+
+fn dep_stats(records: &[Value], days: u32) -> DepStats {
+    let cutoff = if days == 0 { i64::MIN } else { js_sys::Date::now() as i64 - days as i64 * 86_400_000 };
+    let recs: Vec<DepRec> = records
+        .iter()
+        .map(|r| DepRec { date: s(r, "date"), ts: r["timestamp"].as_i64().unwrap_or(0), status: s(r, "dailyStatus"), area: s(r, "area"), project: s(r, "project"), task: s(r, "specificTask") })
+        .filter(|r| r.ts >= cutoff)
         .collect();
-    rows.sort_by_key(|r| (r.0, r.2[0].clone()));
-    rsx! {
-        p { class: "text-sm text-muted", "Last 30 days: days marked absent or on pass. Lowest dependability first." }
-        Table { head: vec!["Name", "A#", "Absent days", "Pass days", "Dependability"], rows: rows.into_iter().map(|(_, id, c)| (id, c)).collect() }
+    stats_of(recs)
+}
+
+fn stats_of(recs: Vec<DepRec>) -> DepStats {
+    let st = |r: &DepRec| r.status.trim().to_lowercase();
+    let is_present = |r: &DepRec| matches!(st(r).as_str(), "present" | "p");
+    let present = recs.iter().filter(|r| is_present(r)).count();
+    let absent = recs.iter().filter(|r| matches!(st(r).as_str(), "absent" | "a")).count();
+    let passes = recs.iter().filter(|r| ["pass", "excused", "clinic", "quarantine"].iter().any(|k| st(r).contains(k))).count();
+    let total = recs.len();
+    let areas = rank_freq(recs.iter().filter(|r| is_present(r)).map(|r| r.area.clone()));
+    let tasks = rank_freq(recs.iter().filter(|r| is_present(r)).map(|r| r.task.clone()));
+    let versatility = ((areas.len() as f64 / 4.0).min(1.0) * 40.0 + (tasks.len() as f64 / 5.0).min(1.0) * 60.0).round() as u32;
+    DepStats {
+        total,
+        present,
+        absent,
+        passes,
+        reliability: (total > 0).then(|| ((present as f64 / total as f64) * 100.0).round() as u32),
+        versatility,
+        areas,
+        tasks,
+        recs,
     }
 }
 
-/// Service 5's org chart buttons: print the charts, or job orders for everyone shown.
+fn reliability_badge(pct: Option<u32>) -> Element {
+    match pct {
+        None => rsx! { span { class: "text-xs text-muted", "No data" } },
+        Some(p) => {
+            let (c, l) = if p >= 90 { ("bg-tag-green-bg text-tag-green-text", "Excellent") } else if p >= 70 { ("bg-tag-amber-bg text-tag-amber-text", "Good") } else { ("bg-tag-red-bg text-tag-red-text", "Low") };
+            rsx! { span { class: "pill {c} text-[11px]", "{p}% {l}" } }
+        }
+    }
+}
+
+/// Service 5's "Worker Dependability" tab.
 #[component]
-fn OrgChartPrints() -> Element {
-    let workers = use_workers();
+fn WorkerDependability(list: Vec<Value>, worker: Signal<String>, days: Signal<u32>) -> Element {
+    let mut worker = worker;
+    let mut days = days;
+    let mut search = use_signal(String::new);
+    let mut sort = use_signal(|| ("date", true));
+    let ql = search().to_lowercase();
+    let mut all: Vec<(Value, DepStats)> = list.iter().map(|v| (v.clone(), dep_stats(v["records"].as_array().map(Vec::as_slice).unwrap_or(&[]), days()))).filter(|(_, st)| st.total > 0).collect();
+    all.sort_by(|a, b| b.1.reliability.cmp(&a.1.reliability).then(b.1.versatility.cmp(&a.1.versatility)));
+    let matches = |v: &Value| ql.is_empty() || [s(v, "name"), s(v, "trade"), s(v, "aNumber")].iter().any(|x| x.to_lowercase().contains(&ql));
+    let filtered: Vec<(Value, DepStats)> = all.iter().filter(|(v, _)| matches(v)).cloned().collect();
+    let mut names: Vec<String> = list.iter().filter(|v| v["archived"] != json!(true) && matches(v)).map(|v| s(v, "name")).filter(|n| !n.is_empty()).collect();
+    names.sort();
+    names.dedup();
+    let cur = if names.contains(&worker()) { worker() } else { names.first().cloned().unwrap_or_default() };
+    let idx = names.iter().position(|n| *n == cur).unwrap_or(0);
+    let me = list.iter().find(|v| s(v, "name") == cur).cloned().unwrap_or(json!({}));
+    let st = dep_stats(me["records"].as_array().map(Vec::as_slice).unwrap_or(&[]), days());
+    let mut recs = st.recs.clone();
+    let (col, desc) = sort();
+    recs.sort_by(|a, b| {
+        let o = match col {
+            "status" => a.status.cmp(&b.status),
+            "area" => a.area.cmp(&b.area),
+            "project" => a.project.cmp(&b.project),
+            "task" => a.task.cmp(&b.task),
+            _ => a.ts.cmp(&b.ts),
+        };
+        if desc { o.reverse() } else { o }
+    });
+    let n = names.len();
+    let (prev, next) = (names.get(idx.saturating_sub(1)).cloned(), names.get((idx + 1).min(n.saturating_sub(1))).cloned());
+    let rel_color = match st.reliability { Some(p) if p >= 90 => "text-tag-green-text", Some(p) if p >= 70 => "text-tag-amber-text", Some(_) => "text-tag-red-text", None => "text-muted" };
+    let id = uuid::Uuid::parse_str(&s(&me, "id")).unwrap_or_default();
+    let has_photo = me["hasPhoto"] == json!(true);
     rsx! {
-        div { class: "flex justify-end gap-2 no-print",
-            button { class: "btn-secondary", "data-testid": "print-tab", onclick: move |_| print_with("size: auto; margin: 8mm 10mm"), Icon { name: "archive" } "Print Charts" }
-            button { class: "btn-secondary", "data-testid": "org-print-jo", title: "Print Job Order slips for the volunteers shown below",
-                onclick: move |_| {
-                    let ids: Vec<uuid::Uuid> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).map(|w| w.id).collect();
-                    *crate::views::workforce_print::PRINT_REQUEST.write() = Some(("jo", ids));
-                    crate::components::ui::PAGE_TABS.write().insert("operations", "Print");
-                },
-                Icon { name: "archive" } "Print Job Orders"
+        div { class: "card p-3 flex flex-wrap items-center gap-3 no-print", "data-testid": "dep-filter",
+            div { class: "flex items-center gap-1",
+                button { class: "btn-secondary h-8 px-2", title: "Previous Worker", "data-testid": "dep-prev", disabled: idx == 0, onclick: move |_| if let Some(p) = prev.clone() { worker.set(p) }, "◀" }
+                select { class: "field h-8 w-auto min-w-[11rem] font-semibold", "aria-label": "Worker", "data-testid": "dep-worker", onchange: move |e| worker.set(e.value()),
+                    for nm in names.iter() { option { key: "{nm}", value: "{nm}", selected: *nm == cur, "{nm}" } }
+                }
+                button { class: "btn-secondary h-8 px-2", title: "Next Worker", "data-testid": "dep-next", disabled: idx + 1 >= n, onclick: move |_| if let Some(p) = next.clone() { worker.set(p) }, "▶" }
+                span { class: "text-xs text-muted min-w-[3rem] text-center", {if n > 0 { format!("{} of {}", idx + 1, n) } else { "0".into() }} }
+            }
+            input { class: "field h-8 w-auto min-w-[13rem]", r#type: "search", placeholder: "Search worker, trade, ID...", "aria-label": "Search worker", "data-testid": "dep-search", value: "{search}", oninput: move |e| search.set(e.value()) }
+            label { class: "text-sm font-semibold text-muted", r#for: "dep-period", "Period:" }
+            select { id: "dep-period", class: "field h-8 w-auto", "data-testid": "dep-period", onchange: move |e| days.set(e.value().parse().unwrap_or(90)),
+                for (l, d) in [("Last 30 Days", 30u32), ("Last 90 Days", 90), ("Last 6 Months", 180), ("Last 1 Year", 365), ("All Time", 0)] {
+                    option { key: "{d}", value: "{d}", selected: days() == d, "{l}" }
+                }
+            }
+            button { class: "btn-secondary h-8 ml-auto", "data-testid": "dossier-print", onclick: { let c = cur.clone(); move |_| s5print("analytics", json!([{ "worker": c, "days": days() }])) }, Icon { name: "archive" } "Print Dossier" }
+        }
+        if !cur.is_empty() {
+            div { class: "card p-4 flex flex-wrap items-center gap-3", "data-testid": "dep-banner",
+                WorkerPhoto { id, name: cur.clone(), has_photo, size: 48 }
+                div {
+                    p { class: "font-bold text-lg", "{cur}" }
+                    p { class: "text-sm text-muted", {if s(&me, "trade").is_empty() { "No trade on file".to_string() } else { s(&me, "trade") }} }
+                }
+                div { class: "ml-auto flex gap-2",
+                    if let Some(a) = st.areas.first() { span { class: "pill bg-tag-blue-bg text-tag-blue-text", "Primary: {a.0}" } }
+                    if let Some(t) = st.tasks.first() { span { class: "pill bg-tag-green-bg text-tag-green-text", "Task: {t.0}" } }
+                }
+            }
+            div { class: "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3", "data-testid": "dep-kpis",
+                for (l, v, sub, c) in [
+                    ("Snapshot Days", st.total.to_string(), "recorded appearances".to_string(), ""),
+                    ("Present", st.present.to_string(), "days on duty".into(), "text-tag-green-text"),
+                    ("Absent", st.absent.to_string(), "days absent".into(), "text-tag-red-text"),
+                    ("Passes", st.passes.to_string(), "official passes".into(), "text-tag-amber-text"),
+                    ("Reliability Index", st.reliability.map(|p| format!("{p}%")).unwrap_or_else(|| "-".into()), if st.total > 0 { format!("{}/{} present", st.present, st.total) } else { "no data".into() }, rel_color),
+                    ("Versatility Score", format!("{}/100", st.versatility), format!("{} areas, {} tasks", st.areas.len(), st.tasks.len()), "text-tag-blue-text"),
+                ] {
+                    div { key: "{l}", class: "card p-4",
+                        p { class: "text-[11px] uppercase tracking-wide font-bold text-muted", "{l}" }
+                        p { class: "text-2xl font-extrabold {c}", "{v}" }
+                        p { class: "text-xs text-muted", "{sub}" }
+                    }
+                }
+            }
+            div { class: "grid md:grid-cols-2 gap-4",
+                for (title, items, bar) in [("Top Assigned Areas", st.areas.clone(), "bg-tag-blue-text"), ("Top Specific Tasks", st.tasks.clone(), "bg-tag-green-text")] {
+                    div { key: "{title}", class: "card p-4 space-y-2",
+                        p { class: "text-xs font-extrabold uppercase tracking-wide text-muted", "{title}" }
+                        if items.is_empty() { p { class: "text-sm text-muted italic", {if title.contains("Area") { "No area data" } else { "No task data" }} } }
+                        for (v, c, p) in items.into_iter().take(5) {
+                            div { key: "{v}", class: "flex items-center gap-3 text-sm",
+                                span { class: "w-40 truncate font-semibold", title: "{v}", "{v}" }
+                                div { class: "flex-1 h-2.5 rounded-full bg-line overflow-hidden", div { class: "h-full rounded-full {bar}", style: "width: {p}%" } }
+                                span { class: "w-20 text-right text-xs text-muted", "{c}x ({p}%)" }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "card overflow-hidden", "data-testid": "dep-timeline",
+                div { class: "px-4 py-3 border-b border-line flex flex-wrap justify-between gap-2",
+                    div {
+                        p { class: "font-extrabold text-sm", "📅 Attendance Timeline" }
+                        p { class: "text-xs text-muted", "Audit trail of all recorded appearances in selected period • Click headers to sort" }
+                    }
+                    span { class: "text-xs text-muted", "{st.recs.len()} snapshot record(s)" }
+                }
+                div { class: "overflow-x-auto",
+                    table { class: "w-full text-sm min-w-[680px]",
+                        thead { tr { class: "text-left text-muted border-b border-line",
+                            for (k, l) in [("date", "Date"), ("status", "Status"), ("area", "Area"), ("project", "Project"), ("task", "Specific Task")] {
+                                th { key: "{k}", class: "px-3 py-2 font-medium cursor-pointer select-none", onclick: move |_| { let (c, d) = sort(); sort.set((k, if c == k { !d } else { true })); },
+                                    "{l}" if col == k { {if desc { " ▼" } else { " ▲" }} }
+                                }
+                            }
+                        } }
+                        tbody { class: "divide-y divide-line",
+                            if recs.is_empty() { tr { td { colspan: "5", class: "px-3 py-6 text-center text-muted italic", "No snapshot data in this period." } } }
+                            for (i, r) in recs.iter().enumerate() {
+                                tr { key: "{i}",
+                                    td { class: "px-3 py-2 font-semibold whitespace-nowrap", "{r.date}" }
+                                    td { class: "px-3 py-2", span { class: match r.status.as_str() { "Present" => "pill bg-tag-green-bg text-tag-green-text", "Absent" => "pill bg-tag-red-bg text-tag-red-text", "Passes" => "pill bg-tag-amber-bg text-tag-amber-text", _ => "pill bg-hover" }, "{r.status}" } }
+                                    td { class: "px-3 py-2", {if r.area.is_empty() { "-".to_string() } else { r.area.clone() }} }
+                                    td { class: "px-3 py-2", {if r.project.is_empty() { "-".to_string() } else { r.project.clone() }} }
+                                    td { class: "px-3 py-2", {if r.task.is_empty() { "-".to_string() } else { r.task.clone() }} }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        div { class: "card overflow-hidden", "data-testid": "dep-roster",
+            div { class: "px-4 py-3 border-b border-line flex justify-between gap-2",
+                p { class: "font-extrabold text-sm", "🎖️ All-Workers Dependability Roster " span { class: "font-normal text-muted", "(click a row to inspect)" } }
+                span { class: "text-xs text-muted", {format!("{} worker(s){}", filtered.len(), if ql.is_empty() { " with history" } else { " matching filter" })} }
+            }
+            div { class: "overflow-x-auto",
+                table { class: "w-full text-sm min-w-[900px]",
+                    thead { tr { class: "text-left text-muted border-b border-line",
+                        for h in ["#", "Name", "Trade", "Reliability", "Versatility", "Primary Area", "Primary Task", "Days"] { th { key: "{h}", class: "px-3 py-2 font-medium", "{h}" } }
+                    } }
+                    tbody { class: "divide-y divide-line",
+                        if filtered.is_empty() { tr { td { colspan: "8", class: "px-3 py-8 text-center text-muted italic", "No personnel found matching the query." } } }
+                        for (i, (v, st)) in filtered.into_iter().enumerate() {
+                            tr { key: "{s(&v, \"id\")}", class: if s(&v, "name") == cur { "cursor-pointer bg-accent-soft" } else { "cursor-pointer hover:bg-hover" }, "data-testid": "dep-row",
+                                onclick: { let nm = s(&v, "name"); move |_| worker.set(nm.clone()) },
+                                td { class: "px-3 py-2 text-xs", {format!("#{}", i + 1)} }
+                                td { class: "px-3 py-2 font-bold",
+                                    span { class: "inline-flex items-center gap-2",
+                                        WorkerPhoto { id: uuid::Uuid::parse_str(&s(&v, "id")).unwrap_or_default(), name: s(&v, "name"), has_photo: v["hasPhoto"] == json!(true) }
+                                        {s(&v, "name")}
+                                    }
+                                }
+                                td { class: "px-3 py-2 text-muted", {s(&v, "trade")} }
+                                td { class: "px-3 py-2", {reliability_badge(st.reliability)} }
+                                td { class: "px-3 py-2 font-semibold text-accent-ink", {format!("{}/100", st.versatility)} }
+                                td { class: "px-3 py-2", {st.areas.first().map(|a| a.0.clone()).unwrap_or_else(|| "-".into())} }
+                                td { class: "px-3 py-2", {st.tasks.first().map(|a| a.0.clone()).unwrap_or_else(|| "-".into())} }
+                                td { class: "px-3 py-2 text-muted", "{st.total}" }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-/// Service 5's "Analytics & History": the change log, project roster history, and person dossiers.
+#[cfg(test)]
+mod dependability_tests {
+    use super::*;
+
+    fn rec(status: &str, area: &str, task: &str) -> DepRec {
+        DepRec { date: String::new(), ts: 0, status: status.into(), area: area.into(), project: String::new(), task: task.into() }
+    }
+
+    #[test]
+    fn service5_reliability_and_versatility() {
+        let st = stats_of(vec![rec("Present", "Hall", "Pour"), rec("Present", "Gate", "Paint"), rec("Absent", "", ""), rec("Passes", "", "")]);
+        assert_eq!((st.total, st.present, st.absent, st.passes), (4, 2, 1, 1));
+        assert_eq!(st.reliability, Some(50));
+        // 2 of 4 areas → 20, 2 of 5 tasks → 24.
+        assert_eq!(st.versatility, 44);
+        assert_eq!(st.areas[0].2, 50);
+        assert_eq!(stats_of(vec![]).reliability, None);
+    }
+}
+
+/// Which Dependability sub-tab opens next ("Project Roster History" lands on its own tab).
+pub static ANALYTICS_TAB: GlobalSignal<&'static str> = Signal::global(|| "dependability");
+
+fn snap_time(v: &Value) -> String {
+    match &v["timestamp"] {
+        Value::Number(n) => n.as_i64().and_then(chrono::DateTime::from_timestamp_millis).map(|d| d.with_timezone(&Local).format("%-I:%M:%S %p").to_string()).unwrap_or_default(),
+        Value::String(x) => chrono::DateTime::parse_from_rfc3339(x).map(|d| d.with_timezone(&Local).format("%-I:%M:%S %p").to_string()).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn snap_count(v: &Value, key: &str, present_only: bool) -> usize {
+    v[key].as_u64().map(|n| n as usize).unwrap_or_else(|| v["data"].as_array().map(|d| d.iter().filter(|w| !present_only || s(w, "dailyStatus") == "Present").count()).unwrap_or(0))
+}
+
+/// Service 5's History page: archived daily snapshots on the left; the chosen
+/// one's assignments by area (and who was absent or on pass) on the right.
 #[component]
 fn HistoryHub() -> Element {
-    let view = use_signal(|| "Change log");
+    let snaps = use_records("history");
+    let workers = use_workers();
+    let mut pick = use_signal(|| None::<usize>);
+    let mut list = snaps.read().clone().unwrap_or_default();
+    list.sort_by(|a, b| s(b, "dateStr").cmp(&s(a, "dateStr")).then(b["timestamp"].to_string().cmp(&a["timestamp"].to_string())));
+    let people = workers.read().clone().unwrap_or_default();
+    let chosen = pick().and_then(|i| list.get(i).cloned());
     rsx! {
-        crate::views::workforce_extra::Segmented { options: vec!["Change log", "Project roster history", "Person dossier"], current: view, testid: "history-view" }
-        match view() {
-            "Project roster history" => rsx! { crate::views::workforce_extra::ProjectHistory {} },
-            "Person dossier" => rsx! { crate::views::workforce_extra::Dossier {} },
-            _ => rsx! { HistoryTab {} },
+        div { class: "flex flex-wrap items-center gap-2 no-print",
+            p { class: "font-semibold text-lg flex-1", "History" }
+            button { class: "btn-secondary h-9", "data-testid": "history-project-roster",
+                onclick: move |_| {
+                    *ANALYTICS_TAB.write() = "project_history";
+                    crate::components::ui::PAGE_TABS.write().insert("operations", "Dependability");
+                },
+                "🏗️ Project Roster History"
+            }
+        }
+        div { class: "grid md:grid-cols-[18rem_1fr] gap-4", "data-testid": "history-split",
+            div { class: "card overflow-hidden",
+                p { class: "px-4 py-3 font-semibold border-b border-line", "Archived Snapshots" }
+                div { class: "max-h-[70vh] overflow-y-auto", "data-testid": "history-list",
+                    if list.is_empty() { p { class: "p-6 text-center text-sm text-muted italic", "No snapshots recorded." } }
+                    for (i, v) in list.iter().enumerate() {
+                        button { key: "{i}", "data-testid": "history-item",
+                            class: if pick() == Some(i) { "w-full text-left px-4 py-3 border-b border-line bg-accent-soft border-l-4 border-l-accent" } else { "w-full text-left px-4 py-3 border-b border-line hover:bg-hover" },
+                            onclick: move |_| pick.set(Some(i)),
+                            p { class: "font-semibold", {s(v, "dateStr")} }
+                            p { class: "text-xs text-muted",
+                                span { class: "text-tag-green-text font-medium", {format!("{} Present", snap_count(v, "activeCount", true))} }
+                                {format!(" • {} Total", snap_count(v, "totalCount", false))}
+                            }
+                            p { class: "text-xs text-muted", {snap_time(v)} }
+                        }
+                    }
+                }
+            }
+            div { class: "card p-4 space-y-4 min-h-[20rem]", "data-testid": "history-viewer",
+                if let Some(snap) = chosen {
+                    SnapshotView { snap, people }
+                } else {
+                    p { class: "text-sm text-muted text-center py-16", "Select a snapshot from the left to view assignments." }
+                }
+            }
         }
     }
 }
 
 #[component]
-fn HistoryTab() -> Element {
-    let att = use_records("attendance_log");
-    let asg = use_records("assignment_log");
-    let mut query = use_signal(String::new);
-    let q = query().to_lowercase();
-    let mut all: Vec<(i64, String, Vec<String>)> = vec![];
-    for e in att.read().clone().unwrap_or_default() {
-        let detail = format!("{} → {}{}", s(&e, "oldStatus"), s(&e, "newStatus"), if s(&e, "reason").is_empty() { String::new() } else { format!(" ({})", s(&e, "reason")) });
-        all.push((e["timestamp"].as_i64().unwrap_or(0), s(&e, "id"), vec![s(&e, "date"), s(&e, "workerName"), "Attendance".into(), detail]));
+fn SnapshotView(snap: Value, people: Vec<Worker>) -> Element {
+    let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut away: Vec<Value> = vec![];
+    for w in snap["data"].as_array().cloned().unwrap_or_default() {
+        let live = people.iter().find(|p| p.a_number == s(&w, "aNumber"));
+        let mut h = w.clone();
+        if s(&h, "name").is_empty() {
+            h["name"] = json!(live.map(|p| p.name.clone()).unwrap_or_else(|| "Unknown Worker".into()));
+        }
+        if s(&h, "trade").is_empty() {
+            h["trade"] = json!(live.map(|p| p.trade.clone()).unwrap_or_else(|| "Unknown Trade".into()));
+        }
+        if s(&h, "phone").is_empty() {
+            h["phone"] = json!(live.map(|p| p.phone.clone()).unwrap_or_default());
+        }
+        if matches!(s(&h, "dailyStatus").as_str(), "Absent" | "Passes") {
+            away.push(h);
+        } else {
+            groups.entry(s(&h, "area")).or_default().push(h);
+        }
     }
-    for e in asg.read().clone().unwrap_or_default() {
-        let detail = format!("{}: {} → {}", s(&e, "field"), s(&e, "oldValue"), s(&e, "newValue"));
-        all.push((e["timestamp"].as_i64().unwrap_or(0), s(&e, "id"), vec![s(&e, "date"), s(&e, "workerName"), "Assignment".into(), detail]));
-    }
-    all.retain(|r| q.is_empty() || r.2.iter().any(|c| c.to_lowercase().contains(&q)));
-    all.sort_by(|a, b| b.2[0].cmp(&a.2[0]).then(b.0.cmp(&a.0)));
-    let total = all.len();
+    let most = groups.values().map(Vec::len).max().unwrap_or(1).max(1);
     rsx! {
-        input { class: "field", "data-testid": "history-search", placeholder: "Search by name, date or change", value: "{query}", oninput: move |e| query.set(e.value()) }
-        p { class: "text-sm text-muted", "Showing the newest {total.min(300)} of {total} changes." }
-        Table { head: vec!["Date", "Person", "Kind", "Change"], rows: all.into_iter().take(300).map(|(_, id, c)| (id, c)).collect() }
+        div { class: "border-b border-line pb-2",
+            p { class: "text-xl font-bold", {format!("Snapshot: {}", s(&snap, "dateStr"))} }
+            p { class: "text-sm text-muted", {format!("Recorded at {}", snap_time(&snap))} }
+        }
+        if groups.is_empty() && away.is_empty() { p { class: "text-sm text-muted italic", "Empty snapshot." } }
+        for (area, ws) in groups {
+            section { key: "{area}", class: "space-y-2", "data-testid": "history-area",
+                div { class: "flex items-center gap-3",
+                    p { class: "font-bold", {if area.is_empty() { "Unassigned Area".to_string() } else { area.clone() }} }
+                    span { class: "pill bg-hover tabular", "{ws.len()}" }
+                    div { class: "flex-1 h-1.5 rounded bg-hover", div { class: "h-1.5 rounded bg-accent", style: "width: {ws.len() * 100 / most}%" } }
+                }
+                div { class: "grid sm:grid-cols-2 gap-2",
+                    for w in ws.iter().cloned() {
+                        div { key: "{s(&w, \"aNumber\")}", class: "card p-2 flex justify-between gap-2 text-sm",
+                            div {
+                                p { class: "font-semibold", {s(&w, "name")} span { class: "text-xs text-muted ml-1", {format!("(#{})", s(&w, "aNumber"))} } }
+                                p { class: "text-xs text-muted", if s(&w, "specificTask").is_empty() { i { "General Tasking" } } else { {s(&w, "specificTask")} } }
+                            }
+                            p { class: "text-xs text-muted whitespace-nowrap", {s(&w, "trade")} }
+                        }
+                    }
+                }
+            }
+        }
+        if !away.is_empty() {
+            section { class: "space-y-2", "data-testid": "history-away",
+                div { class: "flex items-center gap-3",
+                    p { class: "font-bold text-tag-red-text", "Absent and On Passes" }
+                    span { class: "pill bg-tag-red-bg text-tag-red-text tabular", "{away.len()}" }
+                }
+                div { class: "grid sm:grid-cols-2 gap-2",
+                    for w in away.iter().cloned() {
+                        div { key: "{s(&w, \"aNumber\")}", class: "card p-2 flex justify-between gap-2 text-sm",
+                            div {
+                                p { class: "font-semibold", {s(&w, "name")} span { class: "text-xs text-muted ml-1", {format!("(#{})", s(&w, "aNumber"))} } }
+                                p { class: "text-xs text-muted", {format!("{}{}", s(&w, "dailyStatus"), if s(&w, "absentReason").is_empty() { String::new() } else { format!(" - {}", s(&w, "absentReason")) })} }
+                                p { class: "text-xs text-muted", {format!("📞 {}", if s(&w, "phone").is_empty() { "N/A".to_string() } else { s(&w, "phone") })} }
+                            }
+                            p { class: "text-xs text-muted whitespace-nowrap", {s(&w, "trade")} }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -661,214 +1252,20 @@ pub fn OperationsView() -> Element {
             }
             PageTabs { page: "operations", tabs: tabs.clone() }
             match tab {
-                "Overnight Duty" => rsx! { DutyTab {} crate::views::workforce_pages::DutyOverrides {} },
+                "Overnight Duty" => rsx! { S5Page { page: "duty" } },
                 "Duty History" => rsx! { crate::views::workforce_extra::DutyMonth {} crate::views::workforce_more::DutyHistoryTab {} },
                 "Encoder" => rsx! { crate::views::encoder::Encoder {} },
                 "Monthly Attendance" => rsx! { AttendanceTab {} },
-                "OT Calculator" => rsx! { crate::views::workforce_extra::OtSummary {} },
-                "OT Entries" => rsx! { OvertimeTab {} },
-                "Org Chart" => rsx! { OrgChartPrints {} OrgChartTab {} },
+                "OT Calculator" => rsx! { S5Page { page: "ot-calc" } },
+                "OT Entries" => rsx! { S5Page { page: "ot-entries" } },
+                "Org Chart" => rsx! { OrgChartTab {} },
                 "History Log" => rsx! { HistoryHub {} },
-                "Dependability" => rsx! {
-                    div { class: "flex justify-end no-print",
-                        button { class: "btn-secondary", "data-testid": "print-tab", onclick: move |_| s5print("analytics", json!([{ "kind": "roster", "days": 90 }])), Icon { name: "archive" } "Print Dependability Roster" }
-                    }
-                    DependabilityTab {}
-                },
-                "Signatories" => rsx! { crate::views::workforce_pages::SignatoriesBoard {} },
+                "Dependability" => rsx! { DependabilityTab {} },
+                "Signatories" => rsx! { S5Page { page: "signatories" } },
                 "Bulk Update" => rsx! { crate::views::workforce_more::BulkTab {} },
                 "Pick Lists" => rsx! { crate::views::workforce_more::PickListsTab {} },
                 _ => rsx! { crate::views::workforce_print::PrintTab { initial: "jo" } },
             }
-        }
-    }
-}
-
-/// Fills each duty area for a date by rotating through its roster, skipping
-/// anyone not present today (Service 5's `lastRotationIndex` round-robin).
-pub fn rotate(area: &Value, present: &dyn Fn(&str) -> bool) -> (Vec<String>, i64) {
-    let roster: Vec<String> = area["roster"].as_array().map(|r| r.iter().map(|x| s(&json!({ "v": x }), "v")).collect()).unwrap_or_default();
-    let need = area["workersNeeded"].as_i64().unwrap_or(1).max(0) as usize;
-    let mut idx = area["lastRotationIndex"].as_i64().unwrap_or(-1);
-    let mut picked = vec![];
-    for _ in 0..roster.len() {
-        if picked.len() >= need {
-            break;
-        }
-        idx = (idx + 1).rem_euclid(roster.len() as i64);
-        let a = &roster[idx as usize];
-        if present(a) && !picked.contains(a) {
-            picked.push(a.clone());
-        }
-    }
-    (picked, idx)
-}
-
-#[component]
-fn DutyTab() -> Element {
-    let app = use_app();
-    let areas = use_records("duty_areas");
-    let schedules = use_records("duty_schedules");
-    let workers = use_workers();
-    let mut date = use_signal(today);
-    let mut editing = use_signal(|| None::<(String, Value)>);
-    let mut clearing = use_signal(|| "");
-    let can_edit = app.can(Permission::ManageDuty);
-    let people = workers.read().clone().unwrap_or_default();
-    let map = by_a_number(&people);
-    let area_list = areas.read().clone().unwrap_or_default();
-    // Service 5's Clear Day / Clear Week: empty the chosen night, or Monday to Sunday of its week.
-    let clear = move |span: &'static str| async move {
-        let Ok(d) = chrono::NaiveDate::parse_from_str(&date(), "%Y-%m-%d") else { return };
-        use chrono::Datelike;
-        let dates: Vec<String> = if span == "day" {
-            vec![date()]
-        } else {
-            let monday = d - chrono::Duration::days(d.weekday().num_days_from_monday() as i64);
-            (0..7).map(|i| (monday + chrono::Duration::days(i)).format("%Y-%m-%d").to_string()).collect()
-        };
-        let days: Vec<Value> = schedules.read().clone().unwrap_or_default().into_iter().filter(|x| dates.contains(&s(x, "dateStr"))).collect();
-        let mut cleared = 0;
-        for x in days {
-            cleared += x["assignments"].as_array().map(Vec::len).unwrap_or(0);
-            if let Err(e) = save_record(app, "duty_schedules", &s(&x, "dateStr"), &json!({ "dateStr": s(&x, "dateStr"), "assignments": [] })).await {
-                return app.error(e);
-            }
-        }
-        clearing.set("");
-        if cleared == 0 { app.success("No assignments found to clear.") } else { app.success(format!("Cleared {cleared} duty assignments")) }
-    };
-    let day = schedules.read().clone().unwrap_or_default().into_iter().find(|d| s(d, "dateStr") == date());
-    let assigned = |area_id: &str| -> Vec<String> {
-        day.as_ref()
-            .and_then(|d| d["assignments"].as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter(|a| s(a, "areaId") == area_id)
-            .map(|a| name_of(&map, &s(a, "aNumber")))
-            .collect()
-    };
-    let generate = {
-        let area_list = area_list.clone();
-        let present: HashMap<String, bool> = people.iter().map(|w| (w.a_number.clone(), !w.archived && w.status == WorkerStatus::Present)).collect();
-        move |_| {
-            let area_list = area_list.clone();
-            let present = present.clone();
-            async move {
-                let mut assignments = vec![];
-                for a in &area_list {
-                    let (picked, idx) = rotate(a, &|x| present.get(x).copied().unwrap_or(false));
-                    for p in picked {
-                        assignments.push(json!({ "aNumber": p, "areaId": s(a, "id") }));
-                    }
-                    let mut next = a.clone();
-                    next["lastRotationIndex"] = json!(idx);
-                    if let Err(e) = save_record(app, "duty_areas", &s(a, "id"), &next).await {
-                        return app.error(e);
-                    }
-                }
-                let d = date();
-                match save_record(app, "duty_schedules", &d, &json!({ "dateStr": d, "assignments": assignments })).await {
-                    Ok(_) => app.success("Duty roster made"),
-                    Err(e) => app.error(e),
-                }
-            }
-        }
-    };
-    // Service 5 "Generate week": seven nights from the chosen date, the rotation carrying on.
-    let week = {
-        let area_list = area_list.clone();
-        let present: HashMap<String, bool> = people.iter().map(|w| (w.a_number.clone(), !w.archived && w.status == WorkerStatus::Present)).collect();
-        move |_| {
-            let mut areas = area_list.clone();
-            let present = present.clone();
-            async move {
-                let Ok(start) = NaiveDate::parse_from_str(&date(), "%Y-%m-%d") else { return };
-                for n in 0..7 {
-                    let d = (start + chrono::Duration::days(n)).format("%Y-%m-%d").to_string();
-                    let mut assignments = vec![];
-                    for a in areas.iter_mut() {
-                        let (picked, idx) = rotate(a, &|x| present.get(x).copied().unwrap_or(false));
-                        for p in picked {
-                            assignments.push(json!({ "aNumber": p, "areaId": s(a, "id") }));
-                        }
-                        a["lastRotationIndex"] = json!(idx);
-                    }
-                    if let Err(e) = save_record(app, "duty_schedules", &d, &json!({ "dateStr": d, "assignments": assignments })).await {
-                        return app.error(e);
-                    }
-                }
-                for a in &areas {
-                    if let Err(e) = save_record(app, "duty_areas", &s(a, "id"), a).await {
-                        return app.error(e);
-                    }
-                }
-                app.success("A week of duty made");
-            }
-        }
-    };
-    let fields = vec![
-        f("name", "Duty area", Kind::Text),
-        f("shiftTime", "Shift time", Kind::Text),
-        f("workersNeeded", "People needed", Kind::Number),
-        f("color", "Colour", Kind::Text),
-    ];
-    rsx! {
-        div { class: "flex flex-wrap items-end gap-3",
-            div {
-                label { class: "label", r#for: "duty-date", "Date" }
-                input { id: "duty-date", r#type: "date", class: "field", "data-testid": "duty-date", value: "{date}", oninput: move |e| date.set(e.value()) }
-            }
-            if can_edit {
-                button { class: "btn-primary", "data-testid": "duty-generate", onclick: generate, Icon { name: "refresh" } "Make the roster for this date" }
-                button { class: "btn-secondary", "data-testid": "duty-week", onclick: week, "Make the week" }
-                if clearing().is_empty() {
-                    button { class: "btn-ghost text-tag-red-text", "data-testid": "duty-clear-day", onclick: move |_| clearing.set("day"), "Clear day" }
-                    button { class: "btn-ghost text-tag-red-text", "data-testid": "duty-clear-week", onclick: move |_| clearing.set("week"), "Clear week" }
-                    button { class: "btn-secondary", "data-testid": "duty-print", title: "Print schedule", onclick: move |_| s5print("duty", json!([{ "date": date() }])), Icon { name: "archive" } "Print" }
-                } else {
-                    span { class: "text-sm", if clearing() == "day" { "Clear every area on {date()}?" } else { "Clear every area for that whole week?" } }
-                    button { class: "btn-danger", "data-testid": "duty-clear-confirm", onclick: move |_| clear(clearing()), "Clear" }
-                    button { class: "btn-ghost", onclick: move |_| clearing.set(""), "Keep" }
-                }
-                button { class: "btn-secondary", "data-testid": "duty-add-area",
-                    onclick: move |_| editing.set(Some((new_id("duty"), json!({ "roster": [], "workersNeeded": 1, "lastRotationIndex": -1, "shiftTime": "20:00" })))),
-                    Icon { name: "plus" } "Add duty area"
-                }
-            }
-        }
-        if area_list.is_empty() {
-            div { class: "card", EmptyState { icon: "calendar", title: "No duty areas yet", body: "Add the places that need someone overnight." } }
-        }
-        div { class: "grid sm:grid-cols-2 xl:grid-cols-3 gap-4", "data-testid": "duty-areas",
-            for a in area_list.iter().cloned() {
-                {
-                    let names = assigned(&s(&a, "id"));
-                    let roster = a["roster"].as_array().map(Vec::len).unwrap_or(0);
-                    let a2 = a.clone();
-                    rsx! {
-                        section { key: "{s(&a, \"id\")}", class: "card p-4 space-y-2", "data-testid": "duty-area",
-                            div { class: "flex items-start gap-2",
-                                span { class: "w-3 h-3 rounded-full mt-1.5 shrink-0", style: "background: {s(&a, \"color\")}" }
-                                div { class: "flex-1",
-                                    p { class: "font-semibold", "{s(&a, \"name\")}" }
-                                    p { class: "text-xs text-muted", "{s(&a, \"shiftTime\")} · needs {s(&a, \"workersNeeded\")} · {roster} on the roster" }
-                                }
-                                if can_edit {
-                                    button { class: "btn-icon btn-ghost", "aria-label": "Edit duty area", onclick: move |_| editing.set(Some((s(&a2, "id"), a2.clone()))), Icon { name: "edit" } }
-                                }
-                            }
-                            if names.is_empty() {
-                                p { class: "text-sm text-muted", "Nobody on duty this date." }
-                            }
-                            for n in names { p { key: "{n}", class: "text-sm", "{n}" } }
-                        }
-                    }
-                }
-            }
-        }
-        if let Some((id, v)) = editing() {
-            DutyAreaModal { id, initial: v, fields, on_close: move |_| editing.set(None) }
         }
     }
 }
@@ -992,192 +1389,6 @@ fn AttendanceTab() -> Element {
     }
 }
 
-#[component]
-fn OvertimeTab() -> Element {
-    let app = use_app();
-    let ot = use_records("ot_entries");
-    let workers = use_workers();
-    let mut editing = use_signal(|| None::<(String, Value)>);
-    let mut pasting = use_signal(|| false);
-    let mut day = use_signal(today);
-    let mut every_day = use_signal(|| false);
-    let mut trade = use_signal(String::new);
-    let mut who_q = use_signal(String::new);
-    let mut show_rate = use_signal(|| true);
-    let mut clearing = use_signal(|| false);
-    let people = workers.read().clone().unwrap_or_default();
-    let map = by_a_number(&people);
-    let all = ot.read().clone().unwrap_or_default();
-    // Service 5's OT Entries filters: trade and a volunteer name / A# search.
-    let person_of = |e: &Value| map.get(&s(e, "volunteerId")).cloned();
-    let trade_of = |e: &Value| if s(e, "trade").is_empty() { person_of(e).map(|w| w.trade).unwrap_or_default() } else { s(e, "trade") };
-    let mut trades: Vec<String> = all.iter().map(trade_of).filter(|t| !t.is_empty()).collect();
-    trades.sort();
-    trades.dedup();
-    let ql = who_q().to_lowercase();
-    let list: Vec<Value> = all
-        .iter()
-        .filter(|e| every_day() || s(e, "date") == day())
-        .filter(|e| trade().is_empty() || trade_of(e) == trade())
-        .filter(|e| ql.is_empty() || name_of(&map, &s(e, "volunteerId")).to_lowercase().contains(&ql) || s(e, "volunteerId").contains(&ql))
-        .cloned()
-        .collect();
-    let total: f64 = list.iter().filter_map(|e| e["computedPay"].as_f64()).sum();
-    let mut sorted = list.clone();
-    sorted.sort_by(|a, b| s(b, "date").cmp(&s(a, "date")));
-    let mut step = move |n: i64| {
-        if let Ok(d) = NaiveDate::parse_from_str(&day(), "%Y-%m-%d") {
-            day.set((d + chrono::Duration::days(n)).format("%Y-%m-%d").to_string());
-        }
-    };
-    // Service 5 "Load yesterday": copy the entries of the day before to this day, hours reset to 0.
-    let copy_yesterday = {
-        let all = all.clone();
-        move |_| {
-            let all = all.clone();
-            async move {
-                let Ok(d) = NaiveDate::parse_from_str(&day(), "%Y-%m-%d") else { return };
-                let prev = (d - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
-                let from: Vec<Value> = all.iter().filter(|e| s(e, "date") == prev).cloned().collect();
-                if from.is_empty() {
-                    return app.error(format!("No overtime on {prev} to copy."));
-                }
-                for e in &from {
-                    let mut next = e.clone();
-                    next["id"] = json!(new_id("ot"));
-                    next["date"] = json!(day());
-                    next["hours"] = json!(0);
-                    next["computedPay"] = json!(0);
-                    if let Err(err) = save_record(app, "ot_entries", &s(&next, "id"), &next).await {
-                        return app.error(err);
-                    }
-                }
-                app.success(format!("{} copied from {prev}", util::plural(from.len(), "entry")));
-            }
-        }
-    };
-    let rows: Vec<(String, Vec<String>)> = sorted
-        .iter()
-        .map(|e| {
-            let who = if !s(e, "volunteerId").is_empty() { name_of(&map, &s(e, "volunteerId")) } else { format!("{} people", s(e, "totalCount")) };
-            let pay = e["computedPay"].as_f64().map(|p| format!("₱{p:.2}")).unwrap_or_default();
-            let level = if s(e, "skillLevel").is_empty() { person_of(e).map(|w| w.skill_level).unwrap_or_default() } else { s(e, "skillLevel") };
-            let area = if s(e, "otArea").is_empty() { s(e, "title") } else { s(e, "otArea") };
-            let task = if s(e, "otTask").is_empty() { s(e, "description") } else { s(e, "otTask") };
-            let mut cells = vec![s(e, "date"), who, trade_of(e), level, s(e, "hours"), area, task];
-            if show_rate() {
-                cells.push(s(e, "hourlyRate"));
-            }
-            cells.push(pay);
-            (s(e, "id"), cells)
-        })
-        .collect();
-    let head: Vec<&'static str> = if show_rate() {
-        vec!["Date", "Name", "Trade", "Level", "Hours", "Area", "Task", "Rate", "Pay"]
-    } else {
-        vec!["Date", "Name", "Trade", "Level", "Hours", "Area", "Task", "Pay"]
-    };
-    // Service 5 "Clear": remove the entries shown (this day, or every day).
-    let clear_ids: Vec<String> = list.iter().map(|e| s(e, "id")).collect();
-    let clear = move |_| {
-        let ids = clear_ids.clone();
-        async move {
-            for id in &ids {
-                if let Err(e) = delete_record("ot_entries", id).await {
-                    return app.error(e.message());
-                }
-            }
-            clearing.set(false);
-            app.success(format!("{} cleared", util::plural(ids.len(), "entry")));
-        }
-    };
-    let fields = vec![
-        f("date", "Date", Kind::Date),
-        f("volunteerId", "Person", Kind::Worker),
-        f("otArea", "Area (where)", Kind::Text),
-        f("otTask", "Task / work done", Kind::Text),
-        f("title", "Title", Kind::Text),
-        f("otType", "Kind", choice(&["regular", "rest day", "holiday"])),
-        f("hours", "Hours", Kind::Number),
-        f("hourlyRate", "Rate per hour", Kind::Number),
-        f("description", "Notes", Kind::Long),
-    ];
-    rsx! {
-        div { class: "flex flex-wrap items-center gap-2 no-print",
-            button { class: "btn-icon btn-ghost", "aria-label": "Previous day", "data-testid": "ot-prev", onclick: move |_| step(-1), Icon { name: "chevron-left" } }
-            input { r#type: "date", class: "field w-auto", "aria-label": "Day", "data-testid": "ot-day", value: "{day}", oninput: move |e| day.set(e.value()) }
-            button { class: "btn-icon btn-ghost", "aria-label": "Next day", "data-testid": "ot-next", onclick: move |_| step(1), Icon { name: "chevron-right" } }
-            button { class: "btn-ghost", "data-testid": "ot-today", onclick: move |_| day.set(today()), "Today" }
-            label { class: "flex items-center gap-2 text-sm",
-                input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "ot-all-days", checked: every_day(), onchange: move |e| every_day.set(e.checked()) }
-                "All days"
-            }
-            // Service 5's OT Entries prints: the schedule by area and the timesheet matrix.
-            button { class: "btn-primary", "data-testid": "ot-schedule-print", title: "Print Overtime Schedule (By Area)",
-                onclick: move |_| { let r = if every_day() { String::new() } else { day() }; s5print("overtime", json!([{ "kind": "schedule", "start": r, "end": r }])) }, Icon { name: "archive" } "OT Schedule" }
-            button { class: "btn-secondary", "data-testid": "ot-matrix-print", title: "Timesheet Matrix (per volunteer)",
-                onclick: move |_| { let r = if every_day() { String::new() } else { day() }; s5print("overtime", json!([{ "kind": "matrix", "start": r, "end": r }])) }, "Matrix" }
-            if app.can(Permission::ManageOvertime) {
-                button { class: "btn-secondary", "data-testid": "ot-copy-yesterday", onclick: copy_yesterday, "Load from yesterday" }
-            }
-        }
-        div { class: "flex flex-wrap items-end gap-2 no-print",
-            div {
-                label { class: "label", r#for: "ot-trade", "Trade" }
-                select { id: "ot-trade", class: "field w-auto", "data-testid": "ot-trade", onchange: move |e| trade.set(e.value()),
-                    option { value: "", "All trades" }
-                    for t in trades.iter() { option { key: "{t}", value: "{t}", selected: trade() == *t, "{t}" } }
-                }
-            }
-            div {
-                label { class: "label", r#for: "ot-who", "Volunteer" }
-                input { id: "ot-who", r#type: "search", class: "field w-auto", placeholder: "Name or A#", "data-testid": "ot-who", value: "{who_q}", oninput: move |e| who_q.set(e.value()) }
-            }
-            label { class: "flex items-center gap-2 text-sm pb-2",
-                input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "ot-show-rate", checked: show_rate(), onchange: move |e| show_rate.set(e.checked()) }
-                "Rate"
-            }
-            if app.can(Permission::ManageOvertime) && !list.is_empty() {
-                if clearing() {
-                    span { class: "text-sm pb-2", "Remove the {list.len()} entries shown?" }
-                    button { class: "btn-danger", "data-testid": "ot-clear-confirm", onclick: clear, "Clear" }
-                    button { class: "btn-ghost", onclick: move |_| clearing.set(false), "Keep" }
-                } else {
-                    button { class: "btn-ghost text-tag-red-text", "data-testid": "ot-clear", onclick: move |_| clearing.set(true), "Clear" }
-                }
-            }
-        }
-        div { class: "flex flex-wrap items-center justify-between gap-3 no-print",
-            p { class: "text-sm text-muted tabular", "data-testid": "ot-total", "{list.len()} entries · grand total ₱{total:.2}" }
-            if app.can(Permission::ManageOvertime) {
-                button { class: "btn-secondary", "data-testid": "ot-paste-open", onclick: move |_| pasting.set(true), Icon { name: "edit" } "From a list of names" }
-                button { class: "btn-primary", "data-testid": "ot-add", onclick: move |_| editing.set(Some((new_id("ot"), json!({ "date": day(), "otType": "regular", "status": "approved" })))), Icon { name: "plus" } "Add overtime" }
-            }
-        }
-        if pasting() { crate::views::workforce_more::OtPaste { on_close: move |_| pasting.set(false) } }
-        if app.can(Permission::ManageOvertime) && !every_day() { crate::views::workforce_pages::OtEncoder { day: day() } }
-        p { class: "font-semibold print-only", "Overtime schedule {day}" }
-        Table { head, rows, on_edit: move |id: String| {
-            if let Some(v) = sorted.iter().find(|e| s(e, "id") == id) { editing.set(Some((id, v.clone()))) }
-        } }
-        if let Some((id, v)) = editing() {
-            RecordModal { title: "Overtime".to_string(), list: "ot_entries", id, fields, initial: v, on_close: move |_| editing.set(None),
-                on_saved: move |saved: Value| {
-                    // Pay = hours × rate, the Service 5 OT calculator rule.
-                    // The rate defaults to the hourly rate on the person record.
-                    let rate = saved["hourlyRate"].as_f64().or_else(|| map.get(&s(&saved, "volunteerId")).and_then(|w| w.hourly_rate)).unwrap_or(0.0);
-                    let pay = ((saved["hours"].as_f64().unwrap_or(0.0) * rate) * 100.0).round() / 100.0;
-                    let mut next = saved.clone();
-                    next["hourlyRate"] = json!(rate);
-                    next["computedPay"] = json!(pay);
-                    let id = s(&saved, "id");
-                    spawn(async move { let _ = save_record(app, "ot_entries", &id, &next).await; });
-                }
-            }
-        }
-    }
-}
-
 /// Today's attendance buttons used on the Personnel list.
 #[component]
 pub fn StatusButtons(worker: Worker) -> Element {
@@ -1248,14 +1459,6 @@ pub fn ReassignModal(worker: Worker, on_close: EventHandler<()>) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rotation_skips_absent_people_and_wraps() {
-        let area = json!({ "roster": [1, 2, 3], "workersNeeded": 2, "lastRotationIndex": 1 });
-        let (picked, idx) = rotate(&area, &|a| a != "1");
-        assert_eq!(picked, vec!["3", "2"]);
-        assert_eq!(idx, 1);
-    }
 
     #[test]
     fn month_grid_carries_status_forward() {

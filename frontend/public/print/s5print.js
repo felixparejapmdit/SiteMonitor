@@ -10,6 +10,13 @@
 (function () {
 if (window.S5Print) return;
 
+// Inside SiteMonitor's page frames, Ctrl+K opens SiteMonitor's quick search.
+if (window.parent !== window) {
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); window.parent.postMessage('s5-quick-search', location.origin); }
+  });
+}
+
 // Service 5's global data arrays, filled by the bridge before each print.
 var workersData = [];
 var signatoriesData = [];
@@ -655,6 +662,626 @@ window.areaPriorityComparator = function(nameA, nameB) {
   var rankB = b.indexOf('CC') !== -1 ? 0 : b.indexOf('STATION 1') !== -1 ? 1 : b.indexOf('MALL') !== -1 ? 2 : 3;
   return rankA - rankB || a.localeCompare(b);
 }
+
+const DEPARTMENT_META = {
+  'Job-site Construction': {
+    icon: '🏗️',
+    color: '#d97706',
+    bg: '#fef3c7',
+    isDeployable: true,
+    label: 'Job-site Construction',
+    badge: 'Deployable',
+    description: 'Primary active field workforce deployable across ongoing civil, structural, architectural, and MEP construction sites.'
+  },
+  'Woodland Shops': {
+    icon: '🏭',
+    color: '#4f46e5',
+    bg: '#e0e7ff',
+    isDeployable: false,
+    label: 'Woodland Shops',
+    badge: 'Shops & Fab',
+    description: 'Pre-fabrication and craft finishing shops producing modular components, joinery, and fixtures off-site rather than on active field builds.'
+  },
+  'Garden': {
+    icon: '🌿',
+    color: '#16a34a',
+    bg: '#dcfce7',
+    isDeployable: false,
+    label: 'Garden',
+    badge: 'Facility',
+    description: 'Dedicated campus groundskeeping, landscaping, and agriculture volunteers sustaining facility grounds rather than field construction.'
+  },
+  'Residential Only': {
+    icon: '🏠',
+    color: '#9333ea',
+    bg: '#f3e8ff',
+    isDeployable: false,
+    label: 'Residential Only',
+    badge: 'Residential',
+    description: 'Living quarters accommodations, domestic upkeep, and care personnel stationed at residential facilities; exempt from job-site works.'
+  },
+  'Electrical Rm': {
+    icon: '💡',
+    color: '#ca8a04',
+    bg: '#fef9c3',
+    isDeployable: false,
+    label: 'Electrical Rm',
+    badge: 'Plant / Utility',
+    description: 'Specialized substation, high-voltage switchgear, and plant electrical operators ensuring campus-wide grid stability.'
+  },
+  'Water System': {
+    icon: '💧',
+    color: '#0284c7',
+    bg: '#e0f2fe',
+    isDeployable: false,
+    label: 'Water System',
+    badge: 'Plant / Utility',
+    description: 'Water treatment, pumping station, tank storage, and piping technicians maintaining campus water infrastructure.'
+  },
+  'Woodland Office': {
+    icon: '💼',
+    color: '#475569',
+    bg: '#f1f5f9',
+    isDeployable: false,
+    label: 'Woodland Office',
+    badge: 'Administration',
+    description: 'Administrative coordination, materials planning, logistical support, and data encoding team directing project operations.'
+  }
+};
+
+function getWorkerDeployability(worker) {
+  if (!worker || worker.isArchived) {
+    return {
+      isDeployable: false,
+      tier: 'NON_DEPLOYABLE',
+      label: 'Archived / Inactive',
+      badgeClass: 'badge-inactive',
+      color: '#94a3b8'
+    };
+  }
+
+  const dept = worker.department || inferWorkerDepartment(worker);
+  const subDept = worker.subDepartment || '';
+  const isPresent = (worker.dailyStatus === 'Present' || (worker.dailyStatus && worker.dailyStatus.toLowerCase() === 'present'));
+
+  if (!isPresent) {
+    return {
+      isDeployable: false,
+      tier: 'ABSENT_OR_PASS',
+      label: worker.dailyStatus || 'Off-Site',
+      badgeClass: 'badge-offsite',
+      color: '#ef4444'
+    };
+  }
+
+  if (dept === 'Residential Only') {
+    return {
+      isDeployable: false,
+      tier: 'RESIDENTIAL_ONLY',
+      label: 'Residential Only (Residential JO Eligible)',
+      badgeClass: 'badge-residential',
+      color: '#9333ea'
+    };
+  }
+
+  if (dept === 'Job-site Construction') {
+    return {
+      isDeployable: true,
+      tier: 'JOB_SITE',
+      label: 'Job-Site Deployable',
+      badgeClass: 'badge-deployable',
+      color: '#16a34a'
+    };
+  }
+
+  // Also handle legacy workers stored with dept='Carpenter shop'
+  if (dept === 'Woodland Shops' || dept === 'Carpenter shop') {
+    const shopLabel = subDept || (dept === 'Carpenter shop' ? 'Carpenter Shop' : 'Woodland Shops');
+    return {
+      isDeployable: false,
+      tier: 'SHOPS',
+      label: `Shop: ${shopLabel}`,
+      badgeClass: 'badge-shop',
+      color: '#4f46e5'
+    };
+  }
+
+  if (dept === 'Electrical Rm' || dept === 'Water System' || dept === 'Garden') {
+    return {
+      isDeployable: false,
+      tier: 'UTILITIES',
+      label: `Utility: ${dept}`,
+      badgeClass: 'badge-utility',
+      color: '#0284c7'
+    };
+  }
+
+  if (dept === 'Woodland Office') {
+    return {
+      isDeployable: false,
+      tier: 'OFFICE',
+      label: 'Office & Admin',
+      badgeClass: 'badge-office',
+      color: '#64748b'
+    };
+  }
+
+  return {
+    isDeployable: true,
+    tier: 'JOB_SITE',
+    label: 'Job-Site Deployable',
+    badgeClass: 'badge-deployable',
+    color: '#16a34a'
+  };
+}
+
+const areaThemeColors = {
+  'station 1': { bg: '#edf3ec', text: '#2d6b49', primary: '#2d6b49' },
+  'cc': { bg: '#ebf3f5', text: '#1c5f82', primary: '#1c5f82' },
+  'pavilion': { bg: '#f4f0f7', text: '#6e4a8a', primary: '#6e4a8a' },
+  'woodland': { bg: '#faebd7', text: '#d9730d', primary: '#d9730d' },
+  'mall': { bg: '#f7eaf1', text: '#a03876', primary: '#a03876' },
+  'greenville': { bg: '#edf3ec', text: '#2d6b49', primary: '#2d6b49' },
+  'perimeter': { bg: '#fdf5e2', text: '#9a6800', primary: '#9a6800' },
+  'powder': { bg: '#f4f0f7', text: '#6e4a8a', primary: '#6e4a8a' },
+  'default': { bg: '#f1f1ef', text: '#59574f', primary: '#59574f' }
+};
+
+function getAreaStyle(area) {
+  if (!area) return areaThemeColors.default;
+  const a = area.toLowerCase().trim();
+  for (const key in areaThemeColors) {
+    if (a.includes(key)) return areaThemeColors[key];
+  }
+  return areaThemeColors.default;
+}
+
+function getResidenceStyle(name) {
+  if (!name) return { primary: '#64748b', bg: '#f1f5f9', text: '#334155', border: '#cbd5e1' };
+  const n = String(name).trim();
+  const palette = [
+    { primary: '#0284c7', bg: '#e0f2fe', text: '#0369a1', border: '#bae6fd' }, // sky
+    { primary: '#7c3aed', bg: '#ede9fe', text: '#6d28d9', border: '#ddd6fe' }, // purple
+    { primary: '#059669', bg: '#d1fae5', text: '#047857', border: '#a7f3d0' }, // emerald
+    { primary: '#d97706', bg: '#fef3c7', text: '#b45309', border: '#fde68a' }, // amber
+    { primary: '#e11d48', bg: '#ffe4e6', text: '#be123c', border: '#fecdd3' }, // rose
+    { primary: '#4f46e5', bg: '#e0e7ff', text: '#4338ca', border: '#c7d2fe' }, // indigo
+    { primary: '#0d9488', bg: '#ccfbf1', text: '#0f766e', border: '#99f6e4' }, // teal
+    { primary: '#ea580c', bg: '#ffedd5', text: '#c2410c', border: '#fed7aa' }, // orange
+    { primary: '#6366f1', bg: '#e0e7ff', text: '#4338ca', border: '#c7d2fe' }, // violet
+    { primary: '#475569', bg: '#f1f5f9', text: '#334155', border: '#cbd5e1' }  // slate
+  ];
+  let hash = 0;
+  for (let i = 0; i < n.length; i++) {
+    hash = (hash * 31 + n.charCodeAt(i)) >>> 0;
+  }
+  return palette[hash % palette.length];
+}
+
+const STORAGE_KEY = 'wc_workers_data';
+
+function debounce(fn, delay = 250) {
+  let timer;
+  return function(...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
+}
+
+function showConfirm(message, options) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('confirm-modal');
+    const msgEl = document.getElementById('confirm-modal-message');
+    const titleEl = document.getElementById('confirm-modal-title');
+    const iconEl = document.getElementById('confirm-modal-icon');
+    const okBtn = document.getElementById('confirm-modal-ok');
+    const cancelBtn = document.getElementById('confirm-modal-cancel');
+    if (!modal || !msgEl) { resolve(window.confirm(message)); return; }
+    if (options && options.danger) {
+      if (titleEl) titleEl.textContent = options.title || 'Confirm Delete';
+      if (iconEl) iconEl.innerHTML = '&#10060;';
+      if (iconEl) iconEl.style.color = '#dc2626';
+      if (okBtn) { okBtn.className = 'btn btn-danger'; okBtn.textContent = options.confirmText || 'Delete'; }
+      if (cancelBtn) cancelBtn.textContent = 'Cancel';
+    } else {
+      if (titleEl) titleEl.textContent = options && options.title ? options.title : 'Confirm';
+      if (iconEl) iconEl.innerHTML = '&#9888;&#65039;';
+      if (iconEl) iconEl.style.color = '#f59e0b';
+      if (okBtn) { okBtn.className = 'btn btn-primary'; okBtn.textContent = (options && options.confirmText) || 'OK'; }
+      if (cancelBtn) cancelBtn.textContent = 'Cancel';
+    }
+    msgEl.textContent = message;
+    modal.classList.add('active');
+    modal.setAttribute('data-close-method', '');
+    if (typeof window.trapFocus === 'function') {
+        setTimeout(function () { window.trapFocus(modal); }, 10);
+    }
+    _confirmResolve = resolve;
+  });
+}
+
+window.dbStores = {
+  workers: {
+    iterate: async (cb) => {
+      const data = await window._storage.get(STORAGE_KEY) || [];
+      data.forEach(cb);
+    }
+  },
+  duty_areas: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_duty_areas') || [];
+      return data.find(item => item.id === id);
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_duty_areas') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_duty_areas', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_duty_areas') || [];
+      data.forEach(cb);
+    }
+  },
+  duty_rosters: {
+    getAll: async () => {
+      return await window._storage.get('wc_duty_rosters') || [];
+    },
+    setAll: async (rosters) => {
+      await window._storage.set('wc_duty_rosters', rosters);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_duty_rosters') || [];
+      data.forEach(cb);
+    }
+  },
+  duty_schedules: {
+    getAll: async () => {
+      return await window._storage.get('wc_duty_schedules') || [];
+    },
+    setAll: async (schedules) => {
+      await window._storage.set('wc_duty_schedules', schedules);
+    },
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_duty_schedules') || [];
+      return data.find(item => item.dateStr === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_duty_schedules') || [];
+      const idx = data.findIndex(item => item.dateStr === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_duty_schedules', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_duty_schedules') || [];
+      data.forEach(cb);
+    }
+  },
+  health_events: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_health_events') || [];
+      return data.find(item => item.id === id);
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_health_events') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_health_events', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_health_events') || [];
+      data.forEach(cb);
+    }
+  },
+  covid_tests: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_covid_tests') || [];
+      return data.find(item => item.id === id);
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_covid_tests') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_covid_tests', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_covid_tests') || [];
+      data.forEach(cb);
+    }
+  },
+  covid_overrides: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_covid_overrides') || [];
+      return data.find(item => item.id === id);
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_covid_overrides') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_covid_overrides', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_covid_overrides') || [];
+      data.forEach(cb);
+    }
+  },
+  contact_traces: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_contact_traces') || [];
+      return data.find(item => item.id === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_contact_traces') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_contact_traces', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_contact_traces') || [];
+      data.forEach(cb);
+    }
+  },
+  vaccines: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_vaccines') || [];
+      return data.find(item => item.id === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_vaccines') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_vaccines', data);
+    },
+    removeItem: async (id) => {
+      let data = await window._storage.get('wc_vaccines') || [];
+      data = data.filter(item => item.id !== id);
+      await window._storage.set('wc_vaccines', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_vaccines') || [];
+      data.forEach(cb);
+    },
+    getByWorker: async (workerId) => {
+      const data = await window._storage.get('wc_vaccines') || [];
+      return data.filter(item => String(item.workerId) === String(workerId));
+    }
+  },
+  volunteer_vaccines: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_volunteer_vaccines') || [];
+      return data.find(item => item.id === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_volunteer_vaccines') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_volunteer_vaccines', data);
+    },
+    removeItem: async (id) => {
+      let data = await window._storage.get('wc_volunteer_vaccines') || [];
+      data = data.filter(item => item.id !== id);
+      await window._storage.set('wc_volunteer_vaccines', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_volunteer_vaccines') || [];
+      data.forEach(cb);
+    },
+    getByVolunteer: async (volunteerId) => {
+      const data = await window._storage.get('wc_volunteer_vaccines') || [];
+      return data.filter(item => String(item.volunteerId) === String(volunteerId));
+    }
+  },
+  volunteer_medications: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_volunteer_medications') || [];
+      return data.find(item => item.id === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_volunteer_medications') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_volunteer_medications', data);
+    },
+    removeItem: async (id) => {
+      let data = await window._storage.get('wc_volunteer_medications') || [];
+      data = data.filter(item => item.id !== id);
+      await window._storage.set('wc_volunteer_medications', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_volunteer_medications') || [];
+      data.forEach(cb);
+    },
+    getByVolunteer: async (volunteerId) => {
+      const data = await window._storage.get('wc_volunteer_medications') || [];
+      return data.filter(item => String(item.volunteerId) === String(volunteerId));
+    }
+  },
+  volunteer_health_logs: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_volunteer_health_logs') || [];
+      return data.find(item => item.logId === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_volunteer_health_logs') || [];
+      const idx = data.findIndex(item => item.logId === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_volunteer_health_logs', data);
+    },
+    removeItem: async (id) => {
+      let data = await window._storage.get('wc_volunteer_health_logs') || [];
+      data = data.filter(item => item.logId !== id);
+      await window._storage.set('wc_volunteer_health_logs', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_volunteer_health_logs') || [];
+      data.forEach(cb);
+    },
+    getByVolunteer: async (volunteerId) => {
+      const data = await window._storage.get('wc_volunteer_health_logs') || [];
+      return data.filter(item => String(item.volunteerId) === String(volunteerId));
+    }
+  },
+  volunteer_isolation_records: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_volunteer_isolation_records') || [];
+      return data.find(item => item.isolationId === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_volunteer_isolation_records') || [];
+      const idx = data.findIndex(item => item.isolationId === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_volunteer_isolation_records', data);
+    },
+    removeItem: async (id) => {
+      let data = await window._storage.get('wc_volunteer_isolation_records') || [];
+      data = data.filter(item => item.isolationId !== id);
+      await window._storage.set('wc_volunteer_isolation_records', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_volunteer_isolation_records') || [];
+      data.forEach(cb);
+    },
+    getByVolunteer: async (volunteerId) => {
+      const data = await window._storage.get('wc_volunteer_isolation_records') || [];
+      return data.filter(item => String(item.volunteerId) === String(volunteerId));
+    }
+  },
+  medical_audit_logs: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_medical_audit_logs') || [];
+      return data.find(item => item.id === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_medical_audit_logs') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_medical_audit_logs', data);
+    },
+    removeItem: async (id) => {
+      let data = await window._storage.get('wc_medical_audit_logs') || [];
+      data = data.filter(item => item.id !== id);
+      await window._storage.set('wc_medical_audit_logs', data);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_medical_audit_logs') || [];
+      data.forEach(cb);
+    }
+  },
+  ot_entries: {
+    getItem: async (id) => {
+      const data = await window._storage.get('wc_ot_entries') || [];
+      return data.find(item => item.id === id) || null;
+    },
+    setItem: async (id, obj) => {
+      let data = await window._storage.get('wc_ot_entries') || [];
+      const idx = data.findIndex(item => item.id === id);
+      if (idx > -1) data[idx] = obj;
+      else data.push(obj);
+      await window._storage.set('wc_ot_entries', data);
+    },
+    removeItem: async (id) => {
+      let data = await window._storage.get('wc_ot_entries') || [];
+      data = data.filter(item => item.id !== id);
+      await window._storage.set('wc_ot_entries', data);
+    },
+    getAll: async () => {
+      return await window._storage.get('wc_ot_entries') || [];
+    },
+    setAll: async (items) => {
+      await window._storage.set('wc_ot_entries', items);
+    },
+    iterate: async (cb) => {
+      const data = await window._storage.get('wc_ot_entries') || [];
+      data.forEach(cb);
+    }
+  },
+};
+
+var ctxEditSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+
+var ctxGroupSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>';
+
+var ctxArchiveSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
+
+function toDateStr(date) {
+  const d = parseDateSafe(date);
+  if (!d) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+window.guardClick = function guardClick(btn, fnAsync) {
+  if (btn.dataset._guardBusy) return () => {};
+  return async (...args) => {
+    btn.dataset._guardBusy = '1';
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+    try { await fnAsync(...args); } catch (e) { console.error(e); }
+    finally { delete btn.dataset._guardBusy; btn.disabled = false; btn.style.opacity = ''; }
+  };
+}
+
+window.showUndoToast = function (message, onUndo, duration) {
+  var container = document.getElementById('toast-container');
+  if (!container) return;
+  var toast = document.createElement('div');
+  toast.className = 'toast toast-undo';
+  var btnId = 'undo-btn-' + Date.now();
+  toast.innerHTML = '<span>' + esc(message) + '</span><button id="' + btnId + '" style="margin-left:12px;font-weight:700;color:#60a5fa;background:none;border:none;cursor:pointer;font-family:inherit;white-space:nowrap;">Undo</button>';
+  container.appendChild(toast);
+  var timer = setTimeout(function () {
+    toast.classList.add('hide');
+    setTimeout(function () { toast.remove(); }, 300);
+  }, (typeof duration === 'number' && duration > 0) ? duration : 8000);
+  document.getElementById(btnId).addEventListener('click', function () {
+    if (onUndo()) {
+      clearTimeout(timer);
+      toast.classList.add('hide');
+      setTimeout(function () { toast.remove(); }, 300);
+    }
+  });
+}
+
+const SIG_STORAGE_KEY = 'wc_signatories_data';
+
+let defaultSignatories = []; // Service 5's defaults are real people; left out
+
+// verbatim: core.js
+// ---- Confirm modal (replaces blocking confirm()) ----
+
+let _confirmResolve = null;
+
+document.addEventListener('click', (e) => {
+  const modal = document.getElementById('confirm-modal');
+  if (!modal || !modal.classList.contains('active')) return;
+  if (e.target === document.getElementById('confirm-modal-ok')) {
+    modal.classList.remove('active');
+    if (window.releaseFocusTrap) window.releaseFocusTrap();
+    if (_confirmResolve) { const r = _confirmResolve; _confirmResolve = null; r(true); }
+    return;
+  }
+  if (e.target === document.getElementById('confirm-modal-cancel') || e.target === modal) {
+    modal.classList.remove('active');
+    if (window.releaseFocusTrap) window.releaseFocusTrap();
+    if (_confirmResolve) { const r = _confirmResolve; _confirmResolve = null; r(false); }
+  }
+});
+
+
 function safePrint(html, options) { return window.safePrint(html, options); }
 var waitForImagesThenCall = window.waitForImagesThenCall, getCombinedMedicalCondition = window.getCombinedMedicalCondition;
 
@@ -8947,8 +9574,209 @@ var OtCalcModule = {
     safePrint(printHtml);
   }
 };
+
+// verbatim: ot_calculator.js from // ---- EVENT WIRING ----
+function wireOtEvents() {
+// ---- EVENT WIRING ----
+
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'ot-trade-filter' || e.target.id === 'ote-trade-filter') {
+    if (window.OtCalcModule) {
+      if (e.target.id === 'ote-trade-filter') {
+        const otFilter = document.getElementById('ot-trade-filter');
+        if (otFilter) otFilter.value = e.target.value;
+      }
+      const input = document.getElementById('ot-volunteer-search');
+      if (input && input.value.trim()) {
+        const evt = new Event('input', { bubbles: true });
+        input.dispatchEvent(evt);
+      }
+      if (e.target.id === 'ote-trade-filter') window.OtCalcModule._renderPageTable();
+    }
+  }
+  if (e.target.id === 'ot-range-start' || e.target.id === 'ot-range-end') {
+    if (window.OtCalcModule) { window.OtCalcModule._selected.clear(); window.OtCalcModule._render(); }
+  }
+  if (e.target.id === 'ote-jump-date') {
+    if (window.OtCalcModule) {
+      const val = e.target.value;
+      const start = document.getElementById('ote-range-start'); if (start) start.value = val;
+      const end = document.getElementById('ote-range-end'); if (end) end.value = val;
+      window.OtCalcModule._renderPageTable();
+    }
+  }
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.classList.contains('ot-edit-date') ||
+      e.target.classList.contains('ot-edit-hours') ||
+      e.target.classList.contains('ot-edit-rate') ||
+      e.target.classList.contains('ot-edit-area') ||
+      e.target.classList.contains('ot-edit-task') ||
+      e.target.classList.contains('ote-edit-hours') ||
+      e.target.classList.contains('ote-edit-area') ||
+      e.target.classList.contains('ote-edit-task')) {
+    if (window.OtCalcModule) window.OtCalcModule._handleEdit(e);
+  }
+  // OT Encoder volunteer search
+  if (e.target.id === 'ote-enc-volunteer-search' && window.OtCalcModule) {
+    const q = e.target.value.trim();
+    const results = document.getElementById('ote-enc-search-results');
+    if (!results) return;
+    if (q.length < 1) { results.style.display = 'none'; return; }
+    const ql = q.toLowerCase();
+    const ranked = (window.workersData || []).reduce((acc, w) => {
+      const name = String(w.name || '').toLowerCase();
+      if (name.startsWith(ql)) { acc.prefix.push(w); }
+      else if (name.includes(ql)) { acc.substr.push(w); }
+      return acc;
+    }, { prefix: [], substr: [] });
+    const matches = [...ranked.prefix, ...ranked.substr].slice(0, 10);
+    if (matches.length === 0) {
+      results.innerHTML = '<div style="padding:10px;color:var(--text-muted);font-size:0.78rem;text-align:center;">No matches</div>';
+    } else {
+      results.innerHTML = matches.map(w =>
+        '<button type="button" class="ote-enc-search-result" data-worker-id="' + esc(w.aNumber) + '" style="display:flex;width:100%;padding:8px 10px;background:none;border:none;text-align:left;cursor:pointer;border-radius:4px;gap:8px;align-items:center;">' +
+        '<span style="font-weight:600;font-size:0.82rem;">' + esc(w.name) + '</span>' +
+        '<span style="font-size:0.7rem;color:var(--text-muted);">#' + esc(w.aNumber) + ' · ' + esc(w.trade || '-') + '</span>' +
+        '</button>'
+      ).join('');
+    }
+    results.style.display = '';
+  }
+  // OT Encoder pending inline edits
+  if (e.target.classList.contains('ote-enc-pending-date') || e.target.classList.contains('ote-enc-pending-area') || e.target.classList.contains('ote-enc-pending-task')) {
+    if (window.OtCalcModule) {
+      const idx = parseInt(e.target.dataset.pendingIdx);
+      if (!isNaN(idx) && window.OtCalcModule._encoderPending[idx]) {
+        const entry = window.OtCalcModule._encoderPending[idx];
+        if (e.target.classList.contains('ote-enc-pending-date')) entry.date = e.target.value;
+        else if (e.target.classList.contains('ote-enc-pending-area')) entry.area = e.target.value;
+        else if (e.target.classList.contains('ote-enc-pending-task')) entry.task = e.target.value;
+      }
+    }
+  }
+});
+
+document.addEventListener('click', async (e) => {
+  const tabBtn = e.target.closest('.ot-tab-btn');
+  if (tabBtn) {
+    const targetId = tabBtn.dataset.tab;
+    document.querySelectorAll('.ot-tab-btn').forEach(b => b.classList.toggle('active', b === tabBtn));
+    document.querySelectorAll('.ot-tab-content').forEach(c => c.classList.toggle('active', c.id === targetId));
+    if (window.OtCalcModule) window.OtCalcModule._render();
+    return;
+  }
+  const btn = e.target.closest('#btn-ot-add');
+  if (btn && window.OtCalcModule) { window.guardClick(btn, () => window.OtCalcModule._addEntry())(); return; }
+  const copyNextBtn = e.target.closest('#btn-ot-copy-next-day');
+  if (copyNextBtn && window.OtCalcModule) { window.OtCalcModule._duplicateNextDay(); return; }
+  const saveBtn = e.target.closest('#btn-ot-save');
+  if (saveBtn && window.OtCalcModule) { window.guardClick(saveBtn, async () => { await window.OtCalcModule.save(); showToast('OT entries saved.'); })(); return; }
+  const clearBtn = e.target.closest('#btn-ot-clear');
+  if (clearBtn && window.OtCalcModule) { window.OtCalcModule._clearAll(); return; }
+  const schedBtn = e.target.closest('#btn-ot-print-schedule') || e.target.closest('#btn-ot-print-schedule-area');
+  if (schedBtn && window.OtCalcModule) { window.OtCalcModule._printOvertimeSchedule(); return; }
+  const matrixBtn = e.target.closest('#btn-ot-print-matrix');
+  if (matrixBtn && window.OtCalcModule) { window.OtCalcModule._printSummary(); return; }
+  const dailyBtn = e.target.closest('#btn-ot-print-daily');
+  if (dailyBtn && window.OtCalcModule) { window.OtCalcModule._printDailyBreakdown(); return; }
+
+  if (e.target.closest('#btn-ot-load-yesterday') && window.OtCalcModule) { window.guardClick(e.target.closest('#btn-ot-load-yesterday'), () => window.OtCalcModule._loadYesterday())(); return; }
+
+  // ---- OT Entries Page (ote-*) handlers ----
+  if (e.target.closest('#ote-btn-add') && window.OtCalcModule) { window.guardClick(e.target.closest('#ote-btn-add'), () => window.OtCalcModule._addPageEntry())(); return; }
+  if (e.target.closest('#ote-btn-save') && window.OtCalcModule) { window.guardClick(e.target.closest('#ote-btn-save'), async () => { await window.OtCalcModule.save(); showToast('OT entries saved.'); })(); return; }
+  if (e.target.closest('#ote-btn-clear') && window.OtCalcModule) {
+    if (window.OtCalcModule._selected.size > 0) window.OtCalcModule._selected.clear();
+    else window.OtCalcModule._entries = [];
+    window.OtCalcModule._renderPageTable();
+    return;
+  }
+  if (e.target.closest('#ote-btn-open-encoder') && window.OtCalcModule) { window.OtCalcModule._openOtEncoder(); return; }
+  if (e.target.closest('#ote-btn-print-schedule') && window.OtCalcModule) { window.OtCalcModule._printOvertimeSchedule(); return; }
+  if (e.target.closest('#ote-btn-print-matrix') && window.OtCalcModule) { window.OtCalcModule._printSummary(); return; }
+
+  // ---- OT Encoder modal close ----
+  if (e.target.closest('#btn-close-ot-encoder')) {
+    const modal = document.getElementById('ot-encoder-modal');
+    if (modal) modal.classList.remove('active');
+    return;
+  }
+
+  // ---- OT Encoder search result + pending management ----
+  const encResult = e.target.closest('.ote-enc-search-result');
+  if (encResult && window.OtCalcModule) {
+    const wid = encResult.dataset.workerId;
+    const w = (window.workersData || []).find(x => String(x.aNumber) === String(wid));
+    if (!w) return;
+    if (window.OtCalcModule._encoderPending.some(p => p.workerId === String(wid))) {
+      showToast(esc(w.name) + ' is already in the list.');
+      return;
+    }
+    const range = window.OtCalcModule._getOteEntryDateRange();
+    const date = range.start || (typeof todayStr === 'function' ? todayStr() : new Date().toISOString().slice(0, 10));
+    window.OtCalcModule._encoderPending.push({
+      workerId: String(wid),
+      name: w.name,
+      trade: w.trade || '',
+      date,
+      area: w.area || '',
+      task: w.specificTask || ''
+    });
+    document.getElementById('ote-enc-volunteer-search').value = '';
+    document.getElementById('ote-enc-search-results').style.display = 'none';
+    window.OtCalcModule._renderEncoderPending();
+    return;
+  }
+
+  const encSaveBtn = e.target.closest('#btn-ote-enc-save-all');
+  if (encSaveBtn && window.OtCalcModule) {
+    window.guardClick(encSaveBtn, async () => {
+      const pending = window.OtCalcModule._encoderPending;
+      if (pending.length === 0) return;
+      let count = 0;
+      for (const p of pending) {
+        const trade = p.trade || '';
+        const skillLevel = (window.workersData || []).find(w => String(w.aNumber) === p.workerId)?.skillLevel || '';
+        const hourlyRate = parseFloat((window.workersData || []).find(w => String(w.aNumber) === p.workerId)?.hourlyRate) || 0;
+        window.OtCalcModule._entries.push({
+          id: 'ot_' + Date.now() + Math.random().toString(36).slice(2, 6) + count,
+          volunteerId: p.workerId, trade, skillLevel,
+          date: p.date, hours: 2, otArea: p.area, otTask: p.task,
+          hourlyRate, computedPay: Math.round(2 * hourlyRate * 100) / 100,
+          status: 'Planned', createdAt: new Date().toISOString()
+        });
+        count++;
+      }
+      await window.OtCalcModule.save();
+      window.OtCalcModule._renderPageTable();
+      showToast('Added ' + count + ' OT entr' + (count === 1 ? 'y' : 'ies') + '.');
+      window.OtCalcModule._encoderPending = [];
+      window.OtCalcModule._renderEncoderPending();
+      document.getElementById('ote-enc-volunteer-search').focus();
+    })();
+    return;
+  }
+
+  if (e.target.closest('.ote-enc-pending-remove') && window.OtCalcModule) {
+    const idx = parseInt(e.target.dataset.pendingIdx);
+    if (!isNaN(idx) && idx >= 0 && idx < window.OtCalcModule._encoderPending.length) {
+      window.OtCalcModule._encoderPending.splice(idx, 1);
+      window.OtCalcModule._renderEncoderPending();
+    }
+    return;
+  }
+
+  // Date nav
+  if (e.target.closest('#ote-prev-day') && window.OtCalcModule) { window.OtCalcModule._stepDatePage(-1); return; }
+  if (e.target.closest('#ote-today') && window.OtCalcModule) { window.OtCalcModule._goToTodayPage(); return; }
+  if (e.target.closest('#ote-next-day') && window.OtCalcModule) { window.OtCalcModule._stepDatePage(1); return; }
+});
+}
 return {
-    OtCalcModule: OtCalcModule
+    OtCalcModule: OtCalcModule,
+    wireOtEvents: wireOtEvents
 };
 })();
 
@@ -10996,6 +11824,3508 @@ return {
 };
 })();
 
+// ===== dashboard.js (departments & shops) - verbatim from 01_Rust_WC_DB/js/dashboard.js =====
+var S5_dashboard = (function () {
+
+function renderDeployabilityBanner(activeWorkers) {
+    const banner = document.getElementById('dist-deployability-banner') || document.getElementById('dash-deployability-banner');
+    if (!banner) return;
+
+    let jobSite = 0, shops = 0, utilities = 0, office = 0, residential = 0, absentOrHold = 0;
+    const total = activeWorkers.length;
+
+    for (const w of activeWorkers) {
+        const dep = typeof getWorkerDeployability === 'function' ? getWorkerDeployability(w) : null;
+        if (!dep) continue;
+        if (dep.tier === 'JOB_SITE') jobSite++;
+        else if (dep.tier === 'SHOPS') shops++;
+        else if (dep.tier === 'UTILITIES') utilities++;
+        else if (dep.tier === 'OFFICE') office++;
+        else if (dep.tier === 'RESIDENTIAL_ONLY') residential++;
+        else absentOrHold++;
+    }
+
+    const pct = total > 0 ? Math.round((jobSite / total) * 100) : 0;
+    const pJobSite = total > 0 ? ((jobSite / total) * 100).toFixed(1) : 0;
+    const pShops = total > 0 ? ((shops / total) * 100).toFixed(1) : 0;
+    const pUtils = total > 0 ? ((utilities / total) * 100).toFixed(1) : 0;
+    const pOffice = total > 0 ? ((office / total) * 100).toFixed(1) : 0;
+    const pRes = total > 0 ? ((residential / total) * 100).toFixed(1) : 0;
+    const pNon = total > 0 ? ((absentOrHold / total) * 100).toFixed(1) : 0;
+
+    banner.innerHTML = `
+        <div class="table-card" style="padding: 16px 18px; border-left: 4px solid #10b981; background: var(--card-bg); box-shadow: var(--shadow-sm);">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:1.15rem;">🎯</span>
+                    <div>
+                        <h3 style="margin:0; font-size:0.92rem; font-weight:700; color:var(--text-main);">Job-Site Deployability &amp; Capacity</h3>
+                        <p style="margin:2px 0 0; font-size:0.72rem; color:var(--text-muted);">Real-time deployable capacity vs shop-bound, utility, and restricted workforce</p>
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span class="badge" style="background:#dcfce7; color:#15803d; font-weight:700; font-size:0.75rem; padding:4px 10px; border-radius:9999px; border:1px solid #bbf7d0;">
+                        ${jobSite} of ${total} (${pct}%) Field Deployable
+                    </span>
+                </div>
+            </div>
+
+            <!-- Segmented Capacity Bar -->
+            <div style="width:100%; height:14px; background:#e2e8f0; border-radius:9999px; overflow:hidden; display:flex; margin-bottom:12px; box-shadow:inset 0 1px 2px rgba(0,0,0,0.08);">
+                ${jobSite > 0 ? `<div title="Job-Site Deployable: ${jobSite} (${pJobSite}%)" style="width:${pJobSite}%; background:#10b981; transition:width 0.3s;"></div>` : ''}
+                ${shops > 0 ? `<div title="Shops & Fabrication: ${shops} (${pShops}%)" style="width:${pShops}%; background:#06b6d4; transition:width 0.3s;"></div>` : ''}
+                ${utilities > 0 ? `<div title="Facilities & Utilities: ${utilities} (${pUtils}%)" style="width:${pUtils}%; background:#6366f1; transition:width 0.3s;"></div>` : ''}
+                ${office > 0 ? `<div title="Office & Admin: ${office} (${pOffice}%)" style="width:${pOffice}%; background:#3b82f6; transition:width 0.3s;"></div>` : ''}
+                ${residential > 0 ? `<div title="Residential Only: ${residential} (${pRes}%)" style="width:${pRes}%; background:#f97316; transition:width 0.3s;"></div>` : ''}
+                ${absentOrHold > 0 ? `<div title="Absent & Medical Hold: ${absentOrHold} (${pNon}%)" style="width:${pNon}%; background:#94a3b8; transition:width 0.3s;"></div>` : ''}
+            </div>
+
+            <!-- Metric Breakdown Chips -->
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(135px, 1fr)); gap:8px;">
+                <div style="background:var(--bg-color); border:1px solid var(--border-color); border-radius:6px; padding:8px 10px; cursor:pointer;" onclick="openDepartmentRosterModal('Job-site Construction')">
+                    <div style="display:flex; align-items:center; gap:5px; font-size:0.7rem; font-weight:700; color:#10b981;">
+                        <span style="width:7px; height:7px; border-radius:50%; background:#10b981;"></span> Field Deployable
+                    </div>
+                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main); margin-top:2px;">${jobSite} <span style="font-size:0.7rem; font-weight:500; color:var(--text-muted);">(${pJobSite}%)</span></div>
+                </div>
+
+                <div style="background:var(--bg-color); border:1px solid var(--border-color); border-radius:6px; padding:8px 10px; cursor:pointer;" onclick="openDepartmentRosterModal('Woodland Shops')">
+                    <div style="display:flex; align-items:center; gap:5px; font-size:0.7rem; font-weight:700; color:#06b6d4;">
+                        <span style="width:7px; height:7px; border-radius:50%; background:#06b6d4;"></span> Shops &amp; Fab
+                    </div>
+                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main); margin-top:2px;">${shops} <span style="font-size:0.7rem; font-weight:500; color:var(--text-muted);">(${pShops}%)</span></div>
+                </div>
+
+                <div style="background:var(--bg-color); border:1px solid var(--border-color); border-radius:6px; padding:8px 10px; cursor:pointer;" onclick="openDepartmentRosterModal('Electrical Rm')">
+                    <div style="display:flex; align-items:center; gap:5px; font-size:0.7rem; font-weight:700; color:#6366f1;">
+                        <span style="width:7px; height:7px; border-radius:50%; background:#6366f1;"></span> Utilities &amp; Plant
+                    </div>
+                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main); margin-top:2px;">${utilities} <span style="font-size:0.7rem; font-weight:500; color:var(--text-muted);">(${pUtils}%)</span></div>
+                </div>
+
+                <div style="background:var(--bg-color); border:1px solid var(--border-color); border-radius:6px; padding:8px 10px; cursor:pointer;" onclick="openDepartmentRosterModal('Woodland Office')">
+                    <div style="display:flex; align-items:center; gap:5px; font-size:0.7rem; font-weight:700; color:#3b82f6;">
+                        <span style="width:7px; height:7px; border-radius:50%; background:#3b82f6;"></span> Woodland Office
+                    </div>
+                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main); margin-top:2px;">${office} <span style="font-size:0.7rem; font-weight:500; color:var(--text-muted);">(${pOffice}%)</span></div>
+                </div>
+
+                <div style="background:var(--bg-color); border:1px solid var(--border-color); border-radius:6px; padding:8px 10px; cursor:pointer;" onclick="openDepartmentRosterModal('Residential Only')">
+                    <div style="display:flex; align-items:center; gap:5px; font-size:0.7rem; font-weight:700; color:#f97316;">
+                        <span style="width:7px; height:7px; border-radius:50%; background:#f97316;"></span> Residential Only
+                    </div>
+                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main); margin-top:2px;">${residential} <span style="font-size:0.7rem; font-weight:500; color:var(--text-muted);">(${pRes}%)</span></div>
+                </div>
+
+                <div style="background:var(--bg-color); border:1px solid var(--border-color); border-radius:6px; padding:8px 10px; cursor:pointer;" onclick="openAreaRosterModal('Absent and On Passes')">
+                    <div style="display:flex; align-items:center; gap:5px; font-size:0.7rem; font-weight:700; color:#94a3b8;">
+                        <span style="width:7px; height:7px; border-radius:50%; background:#94a3b8;"></span> Absent / Hold
+                    </div>
+                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main); margin-top:2px;">${absentOrHold} <span style="font-size:0.7rem; font-weight:500; color:var(--text-muted);">(${pNon}%)</span></div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderDepartmentMatrix(activeWorkers) {
+    // Render into every registered container (distribution view slot, or dashboard widget if present)
+    const panels = [
+        document.getElementById('dist-dept-panel'),
+        document.getElementById('dash-department-panel')
+    ].filter(Boolean);
+    if (panels.length === 0) return;
+
+    const depts = (typeof WORKER_DEPARTMENTS !== 'undefined') ? WORKER_DEPARTMENTS : [
+        'Garden', 'Job-site Construction', 'Woodland Shops',
+        'Residential Only', 'Electrical Rm', 'Water System', 'Woodland Office'
+    ];
+
+    const stats = {};
+    depts.forEach(d => {
+        stats[d] = { total: 0, present: 0, absent: 0, passes: 0, subShops: {} };
+    });
+
+    if (stats['Woodland Shops']) {
+        const subShops = (typeof WOODLAND_SUB_SHOPS !== 'undefined') ? WOODLAND_SUB_SHOPS : [
+            'Carpenter Shop', 'Painter Shop', 'Tinsmith Shop', 'Steelman/Welder Shop', 'Powder Coating Shop'
+        ];
+        subShops.forEach(s => { stats['Woodland Shops'].subShops[s] = { total: 0, present: 0 }; });
+    }
+
+    activeWorkers.forEach(w => {
+        const d = w.department || (typeof inferWorkerDepartment === 'function' ? inferWorkerDepartment(w) : 'Job-site Construction');
+        if (!stats[d]) stats[d] = { total: 0, present: 0, absent: 0, passes: 0, subShops: {} };
+        const st = (w.dailyStatus || 'Present').toLowerCase().trim();
+        if (st === 'present') stats[d].present++;
+        else if (st === 'absent') stats[d].absent++;
+        else if (st.startsWith('pass')) stats[d].passes++;
+
+        if (d === 'Woodland Shops' && w.subDepartment) {
+            if (!stats[d].subShops[w.subDepartment]) stats[d].subShops[w.subDepartment] = { total: 0, present: 0 };
+            stats[d].subShops[w.subDepartment].total++;
+            if (w.dailyStatus === 'Present') stats[d].subShops[w.subDepartment].present++;
+        }
+    });
+
+    const meta = (typeof DEPARTMENT_META !== 'undefined') ? DEPARTMENT_META : {};
+
+    let cardsHtml = depts.map(dept => {
+        const m = meta[dept] || { icon: '📁', color: '#64748b', bg: '#f1f5f9', badge: 'DEPT' };
+        const s = stats[dept] || { total: 0, present: 0, absent: 0, passes: 0, subShops: {} };
+        const isWoodlandShops = dept === 'Woodland Shops';
+
+        let subShopsHtml = '';
+        if (isWoodlandShops && Object.keys(s.subShops).length > 0) {
+            subShopsHtml = `
+                <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--border-color); display:flex; flex-wrap:wrap; gap:4px;">
+                    ${Object.entries(s.subShops).map(([shopName, shopStat]) => {
+                        const shopDesc = (typeof getWoodlandSubShopDescription === 'function') ? getWoodlandSubShopDescription(shopName) : '';
+                        const tooltip = shopDesc ? `${shopName}: ${shopStat.present}/${shopStat.total} present : ${shopDesc}` : `${shopName}: ${shopStat.present}/${shopStat.total} present`;
+                        return `<span class="notion-tag" onclick="event.stopPropagation(); openDepartmentRosterModal('Woodland Shops', '${esc(shopName)}');" title="${esc(tooltip)}" style="font-size:0.67rem; padding:2px 6px; border-radius:4px; background:#ecfeff; color:#0e7490; border:1px solid #cffafe; cursor:pointer;">
+                            ${esc(shopName)}: <strong>${shopStat.present}</strong>/${shopStat.total}
+                        </span>`;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        const deptDescHtml = m.description
+            ? `<div class="dept-card-desc" style="margin-top:8px; font-size:0.71rem; line-height:1.35; color:var(--text-muted);">${esc(m.description)}</div>`
+            : '';
+
+        return `
+            <div class="hover-card dept-overview-card" onclick="openDepartmentRosterModal('${esc(dept)}')" style="background:var(--card-bg); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; cursor:pointer; display:flex; flex-direction:column; justify-content:space-between; transition:transform 0.15s, box-shadow 0.15s; position:relative; overflow:hidden;">
+                <div style="position:absolute; top:0; left:0; width:4px; height:100%; background:${m.color};"></div>
+                <div>
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; gap:8px;">
+                        <div style="display:flex; align-items:center; gap:6px; min-width:0;">
+                            <span style="font-size:1.15rem; flex-shrink:0;">${m.icon}</span>
+                            <span style="font-weight:700; font-size:0.85rem; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(dept)}</span>
+                        </div>
+                        <span class="badge" style="background:${m.bg}; color:${m.color}; font-weight:700; font-size:0.65rem; padding:2px 7px; border-radius:9999px; flex-shrink:0;">
+                            ${m.badge || (m.isDeployable ? 'Deployable' : 'Facility')}
+                        </span>
+                    </div>
+
+                    <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:4px;">
+                        <div>
+                            <span style="font-size:1.35rem; font-weight:800; color:var(--text-main);">${s.present}</span>
+                            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:500;"> / ${s.total} present</span>
+                        </div>
+                        ${s.absent + s.passes > 0 ? `<span style="font-size:0.7rem; color:#ef4444; font-weight:600;">${s.absent + s.passes} off-site</span>` : ''}
+                    </div>
+                    ${deptDescHtml}
+                </div>
+                ${subShopsHtml}
+            </div>
+        `;
+    }).join('');
+
+    const innerHtml = `
+        <div style="margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
+            <div style="display:flex; align-items:center; gap:6px;">
+                <span style="font-size:1rem;">🏢</span>
+                <h3 style="font-size:0.88rem; font-weight:700; color:var(--text-main); margin:0;">Departments &amp; Shops Overview</h3>
+            </div>
+            <span style="font-size:0.72rem; color:var(--text-muted);">Click any card to inspect deployable roster</span>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px;">
+            ${cardsHtml}
+        </div>
+    `;
+    panels.forEach(p => { p.innerHTML = innerHtml; });
+}
+
+function buildDonutChart(counts, total, styleGetter, size = 150, tipId = 'donut-tip', maxSlices = 8) {
+    if (total === 0) return `<div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:0.75rem;">No data</div>`;
+
+    let sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    if (sorted.length > maxSlices) {
+        const top = sorted.slice(0, maxSlices - 1);
+        const rest = sorted.slice(maxSlices - 1);
+        const othersSum = rest.reduce((s, [, v]) => s + v, 0);
+        sorted = [...top, [`Others (${rest.length})`, othersSum]];
+    }
+
+    const cx = size / 2, cy = size / 2;
+    const R  = size * 0.37;   // outer radius
+    const r  = size * 0.22;   // inner radius (hole)
+    const gap = 0.018;        // gap in radians between segments
+
+    let paths = '';
+    let cumulAngle = -Math.PI / 2; // start at top
+
+    sorted.forEach(([label, count]) => {
+        const frac = count / total;
+        if (frac <= 0) return;
+        const angle = frac * 2 * Math.PI - gap;
+        const startA = cumulAngle + gap / 2;
+        const endA   = startA + angle;
+        cumulAngle  += frac * 2 * Math.PI;
+
+        const cos0 = Math.cos(startA), sin0 = Math.sin(startA);
+        const cos1 = Math.cos(endA),   sin1 = Math.sin(endA);
+        const large = angle > Math.PI ? 1 : 0;
+
+        const isOther = label.startsWith('Others');
+        const style   = isOther ? { primary: '#94a3b8' } : styleGetter(label);
+        const color   = style.primary || style.text || '#94a3b8';
+
+        const pct = (frac * 100).toFixed(1);
+        const d = [
+            `M ${cx + R * cos0} ${cy + R * sin0}`,
+            `A ${R} ${R} 0 ${large} 1 ${cx + R * cos1} ${cy + R * sin1}`,
+            `L ${cx + r * cos1} ${cy + r * sin1}`,
+            `A ${r} ${r} 0 ${large} 0 ${cx + r * cos0} ${cy + r * sin0}`,
+            'Z'
+        ].join(' ');
+
+        paths += `<path d="${d}" fill="${color}" opacity="0.88"
+            data-label="${esc(label)}" data-count="${count}" data-pct="${pct}"
+            style="cursor:pointer;transition:opacity 0.15s;"
+            onmouseenter="this.style.opacity='1';var t=document.getElementById('${tipId}');if(t)t.textContent='${esc(label)}: ${count} (${pct}%)';"
+            onmouseleave="this.style.opacity='0.88';var t=document.getElementById('${tipId}');if(t)t.textContent='';" />`;
+    });
+
+    const center_label = total.toLocaleString();
+    return `
+        <div style="position:relative;width:${size}px;height:${size}px;flex-shrink:0;">
+            <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+                <circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--border-color)" stroke-width="${(R-r)}" opacity="0.15"/>
+                ${paths}
+                <text x="${cx}" y="${cy - 5}" text-anchor="middle" font-size="${size*0.13}" font-weight="800" fill="var(--text-main)">${center_label}</text>
+                <text x="${cx}" y="${cy + size*0.1}" text-anchor="middle" font-size="${size*0.07}" font-weight="600" fill="var(--text-muted)">present</text>
+            </svg>
+            <div id="${tipId}" style="position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);font-size:0.65rem;font-weight:600;color:var(--text-muted);white-space:nowrap;pointer-events:none;min-height:14px;"></div>
+        </div>`;
+}
+
+function buildDonutLegend(counts, total, styleGetter, maxSlices = 8) {
+    let sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    if (sorted.length > maxSlices) {
+        const top = sorted.slice(0, maxSlices - 1);
+        const rest = sorted.slice(maxSlices - 1);
+        sorted = [...top, [`Others (${rest.length})`, rest.reduce((s,[,v])=>s+v,0)]];
+    }
+    return sorted.map(([label, count]) => {
+        const isOther = label.startsWith('Others');
+        const style   = isOther ? { primary: '#94a3b8' } : styleGetter(label);
+        const color   = style.primary || style.text || '#94a3b8';
+        const pct     = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+        return `
+            <div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
+                <span style="width:8px;height:8px;border-radius:2px;background:${color};flex-shrink:0;opacity:0.88;"></span>
+                <span style="font-size:0.68rem;color:var(--text-main);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(label)}">${esc(label)}</span>
+                <span style="font-size:0.66rem;font-weight:700;color:var(--text-muted);flex-shrink:0;">${count} <span style="font-weight:400;opacity:0.7;">(${pct}%)</span></span>
+            </div>`;
+    }).join('');
+}
+
+function renderDeptAnalytics(activeWorkers) {
+    const container = document.getElementById('dist-analytics-enhanced');
+    if (!container) return;
+
+    // ── gather stats ──────────────────────────────────────────────
+    let totalAll = 0, presentCount = 0, absentCount = 0, passesCount = 0;
+    const areaCounts = {}, tradeCounts = {}, deptCounts = {}, statusCounts = {};
+
+    activeWorkers.forEach(w => {
+        if (!w || w.isArchived) return;
+        totalAll++;
+        const status = w.dailyStatus || 'Unknown';
+        statusCounts[status] = (statusCounts[status] || 0) + 1;
+
+        if (status === 'Present') {
+            presentCount++;
+            const area  = (w.area  || 'Unassigned').trim();
+            const trade = (w.trade || 'Helper').trim();
+            const dept  = w.department || (typeof inferWorkerDepartment === 'function' ? inferWorkerDepartment(w) : 'Job-site Construction');
+            areaCounts[area]  = (areaCounts[area]  || 0) + 1;
+            tradeCounts[trade]= (tradeCounts[trade] || 0) + 1;
+            deptCounts[dept]  = (deptCounts[dept]  || 0) + 1;
+        } else if (status === 'Absent')  absentCount++;
+        else if  (status === 'Passes')  passesCount++;
+    });
+
+    const offSite = absentCount + passesCount;
+
+    // ── status donut (special colours) ───────────────────────────
+    function statusStyleGetter(s) {
+        if (s === 'Present') return { primary: 'var(--color-notion-green, #2d6b49)' };
+        if (s === 'Absent')  return { primary: 'var(--color-notion-red, #eb5757)' };
+        if (s === 'Passes')  return { primary: 'var(--color-notion-orange, #d9730d)' };
+        return { primary: 'var(--color-notion-gray, #59574f)' };
+    }
+    function deptStyleGetter(d) {
+        if (typeof DEPARTMENT_META !== 'undefined' && DEPARTMENT_META[d]) return { primary: DEPARTMENT_META[d].color };
+        return { primary: '#64748b' };
+    }
+
+    // ── stat summary row ──────────────────────────────────────────
+    const attendance = totalAll > 0 ? ((presentCount / totalAll) * 100).toFixed(0) : 0;
+
+    const statCards = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:20px;">
+            ${[
+                { label: 'Total Volunteers', value: totalAll,        icon: '👥', color: 'var(--text-main)', bg: 'var(--color-surface-secondary, #f1f1ef)' },
+                { label: 'Present Today',    value: presentCount,    icon: '✅', color: 'var(--color-notion-green, #2d6b49)', bg: 'var(--color-notion-green-bg, #edf3ec)' },
+                { label: 'Off-site',         value: offSite,         icon: '🚫', color: 'var(--color-notion-red, #eb5757)', bg: 'var(--color-notion-red-bg, #ffeeee)' },
+                { label: 'Attendance Rate',  value: attendance+'%',  icon: '📊', color: 'var(--color-notion-blue, #1c5f82)', bg: 'var(--color-notion-blue-bg, #ebf3f5)' },
+            ].map(s => `
+                <div style="background:${s.bg};border:1px solid var(--border-color);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:1.3rem;">${s.icon}</span>
+                    <div>
+                        <div style="font-size:1.1rem;font-weight:800;color:${s.color};line-height:1;">${s.value}</div>
+                        <div style="font-size:0.65rem;font-weight:600;color:${s.color};opacity:0.85;margin-top:2px;">${s.label}</div>
+                    </div>
+                </div>`).join('')}
+        </div>`;
+
+    // ── four charts (Operations / Department Analytics) ──────────
+    const charts = [
+        { title: '📋 Attendance Status', counts: statusCounts, total: totalAll,     getter: statusStyleGetter, tipId: 'tip-status' },
+        { title: '🏢 By Department',     counts: deptCounts,   total: presentCount, getter: deptStyleGetter,   tipId: 'tip-dept'   },
+        { title: '📍 By Area',           counts: areaCounts,   total: presentCount, getter: getAreaStyle,      tipId: 'tip-area'   },
+        { title: '🔧 By Trade',          counts: tradeCounts,  total: presentCount, getter: getTradeStyle,     tipId: 'tip-trade'  },
+    ].map(({ title, counts, total, getter, tipId }) => {
+        const donutSize = 150;
+        const donutHtml  = buildDonutChart(counts, total, getter, donutSize, tipId);
+        const legendHtml = buildDonutLegend(counts, total, getter);
+        return `
+            <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;min-width:0;">
+                <div style="font-size:0.75rem;font-weight:700;color:var(--text-main);">${title}</div>
+                <div style="display:flex;align-items:flex-start;gap:14px;min-width:0;">
+                    ${donutHtml}
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;max-height:130px;overflow-y:auto;scrollbar-width:none;">
+                        ${legendHtml}
+                    </div>
+                </div>
+            </div>`;
+    }).join('');
+
+    container.innerHTML = `
+        <style>
+            #dist-analytics-enhanced svg path { transition: opacity 0.15s, transform 0.15s; }
+        </style>
+        <div style="border-bottom:1px solid var(--border-color);padding-bottom:16px;margin-bottom:16px;">
+            ${statCards}
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">
+                ${charts}
+            </div>
+        </div>`;
+
+    // Also trigger Housing & Residence overview update if panel exists
+    if (document.getElementById('dist-housing-panel')) {
+        renderHousingOverview(activeWorkers);
+    }
+}
+
+function renderHousingOverview(activeWorkers) {
+    const container = document.getElementById('dist-housing-panel');
+    if (!container) return;
+
+    const workers = (activeWorkers || (typeof workersData !== 'undefined' ? workersData : [])).filter(w => w && !w.isArchived);
+
+    let totalVolunteers = 0, presentCount = 0;
+    let workResAssigned = 0, housingAssigned = 0;
+    const workResCounts = {}, housingCounts = {};
+    const workResMap = {};
+    const housingMap = {};
+
+    workers.forEach(w => {
+        totalVolunteers++;
+        const isPresent = w.dailyStatus === 'Present';
+        if (isPresent) presentCount++;
+
+        const rawRes = (w.workResidence || '').trim();
+        const rawHous = (w.visitationHousing || (typeof detectResidence === 'function' ? detectResidence(w) : '') || '').trim();
+
+        if (rawRes) workResAssigned++;
+        if (rawHous) housingAssigned++;
+
+        const wRes = rawRes || 'Unassigned Residence';
+        const wHous = rawHous || 'Unassigned Housing';
+
+        if (isPresent) {
+            workResCounts[wRes] = (workResCounts[wRes] || 0) + 1;
+            housingCounts[wHous] = (housingCounts[wHous] || 0) + 1;
+        }
+
+        if (!workResMap[wRes]) {
+            workResMap[wRes] = { total: 0, present: 0, absent: 0, passes: 0, departments: {} };
+        }
+        const st = (w.dailyStatus || 'Present').toLowerCase().trim();
+        if (st === 'present') workResMap[wRes].present++;
+        else if (st === 'absent') workResMap[wRes].absent++;
+        else if (st.startsWith('pass')) workResMap[wRes].passes++;
+
+        const dept = w.department || (typeof inferWorkerDepartment === 'function' ? inferWorkerDepartment(w) : 'Job-site Construction');
+        workResMap[wRes].departments[dept] = (workResMap[wRes].departments[dept] || 0) + 1;
+
+        if (!housingMap[wHous]) {
+            housingMap[wHous] = { total: 0, present: 0, absent: 0, passes: 0, departments: {} };
+        }
+        housingMap[wHous].total++;
+        if (st === 'present') housingMap[wHous].present++;
+        else if (st === 'absent') housingMap[wHous].absent++;
+        else if (st.startsWith('pass')) housingMap[wHous].passes++;
+
+        housingMap[wHous].departments[dept] = (housingMap[wHous].departments[dept] || 0) + 1;
+    });
+
+    const workResRate = totalVolunteers > 0 ? Math.round((workResAssigned / totalVolunteers) * 100) : 0;
+    const housingRate = totalVolunteers > 0 ? Math.round((housingAssigned / totalVolunteers) * 100) : 0;
+    const unassignedRes = totalVolunteers - workResAssigned;
+    const unassignedHous = totalVolunteers - housingAssigned;
+
+    const resStyleGetter = typeof getResidenceStyle === 'function' ? getResidenceStyle : () => ({ primary: '#0284c7' });
+
+    // ── Stat Cards for Housing Tab ──
+    const statCards = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;">
+            ${[
+                { label: 'Total Volunteers',   value: totalVolunteers, icon: '👥', color: 'var(--text-main)', bg: 'var(--color-surface-secondary, #f1f1ef)' },
+                { label: 'In Work Residence',  value: `${workResAssigned} (${workResRate}%)`, icon: '🛏️', color: '#0369a1', bg: '#e0f2fe' },
+                { label: 'In Housing Cluster', value: `${housingAssigned} (${housingRate}%)`, icon: '🏠', color: '#7c3aed', bg: '#ede9fe' },
+                { label: 'Unassigned Resid.',  value: unassignedRes, icon: '⚠️', color: unassignedRes > 0 ? '#d97706' : 'var(--text-muted)', bg: unassignedRes > 0 ? '#fef3c7' : 'var(--color-surface-secondary, #f1f1ef)' },
+                { label: 'Unassigned Housing', value: unassignedHous, icon: '⚠️', color: unassignedHous > 0 ? '#d97706' : 'var(--text-muted)', bg: unassignedHous > 0 ? '#fef3c7' : 'var(--color-surface-secondary, #f1f1ef)' },
+            ].map(s => `
+                <div style="background:${s.bg};border:1px solid var(--border-color);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:1.3rem;">${s.icon}</span>
+                    <div>
+                        <div style="font-size:1.1rem;font-weight:800;color:${s.color};line-height:1;">${s.value}</div>
+                        <div style="font-size:0.65rem;font-weight:600;color:${s.color};opacity:0.85;margin-top:2px;">${s.label}</div>
+                    </div>
+                </div>`).join('')}
+        </div>`;
+
+    // ── Donut Charts for Housing Tab ──
+    const housingCharts = [
+        { title: '🛏️ By Work Residence',  counts: workResCounts, total: presentCount, getter: resStyleGetter, tipId: 'tip-dist-housing-work-res' },
+        { title: '🏠 By Housing Cluster', counts: housingCounts, total: presentCount, getter: resStyleGetter, tipId: 'tip-dist-housing-cluster'  },
+    ].map(({ title, counts, total, getter, tipId }) => {
+        const donutSize = 150;
+        const donutHtml  = buildDonutChart(counts, total, getter, donutSize, tipId);
+        const legendHtml = buildDonutLegend(counts, total, getter);
+        return `
+            <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;min-width:0;">
+                <div style="font-size:0.75rem;font-weight:700;color:var(--text-main);">${title}</div>
+                <div style="display:flex;align-items:flex-start;gap:14px;min-width:0;">
+                    ${donutHtml}
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;max-height:130px;overflow-y:auto;scrollbar-width:none;">
+                        ${legendHtml}
+                    </div>
+                </div>
+            </div>`;
+    }).join('');
+
+    const analyticsHeaderHtml = `
+        <div style="margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid var(--border-color);">
+            ${statCards}
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">
+                ${housingCharts}
+            </div>
+        </div>`;
+
+    function renderLocationCard(name, data, type) {
+        const isWorkRes = type === 'workResidence';
+        const icon = isWorkRes ? '🛏️' : '🏠';
+        const badgeLabel = isWorkRes ? 'Work Residence' : 'Housing Cluster';
+        const style = typeof getResidenceStyle === 'function' ? getResidenceStyle(name) : { primary: '#4f46e5', bg: '#e0e7ff', text: '#4338ca' };
+        const offSiteCount = data.absent + data.passes;
+
+        const topDepts = Object.entries(data.departments).sort((a, b) => b[1] - a[1]).slice(0, 3);
+        const tagsHtml = topDepts.map(([dept, count]) => {
+            return `<span style="font-size:0.65rem; padding:1px 5px; border-radius:3px; background:var(--bg-color); color:var(--text-muted); border:1px solid var(--border-color);">${esc(dept)}: <strong>${count}</strong></span>`;
+        }).join(' ');
+
+        return `
+            <div class="hover-card housing-overview-card" data-type="${type}" data-name="${esc(name).toLowerCase()}" onclick="openResidenceRosterModal('${type}', '${esc(name)}')" style="background:var(--card-bg); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; cursor:pointer; display:flex; flex-direction:column; justify-content:space-between; transition:transform 0.15s, box-shadow 0.15s; position:relative; overflow:hidden;">
+                <div style="position:absolute; top:0; left:0; width:4px; height:100%; background:${style.primary};"></div>
+                <div>
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; gap:8px;">
+                        <div style="display:flex; align-items:center; gap:6px; min-width:0;">
+                            <span style="font-size:1.15rem; flex-shrink:0;">${icon}</span>
+                            <span style="font-weight:700; font-size:0.85rem; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${esc(name)}">${esc(name)}</span>
+                        </div>
+                        <span class="badge" style="background:${style.bg}; color:${style.text}; font-weight:700; font-size:0.65rem; padding:2px 7px; border-radius:9999px; flex-shrink:0;">
+                            ${badgeLabel}
+                        </span>
+                    </div>
+
+                    <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:4px;">
+                        <div>
+                            <span style="font-size:1.35rem; font-weight:800; color:var(--text-main); font-variant-numeric:tabular-nums; line-height:1;">${data.present}</span>
+                            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:500;"> / ${data.total} present</span>
+                        </div>
+                        ${offSiteCount > 0 ? `<span style="font-size:0.7rem; color:#ef4444; font-weight:600;">${offSiteCount} off-site</span>` : ''}
+                    </div>
+                </div>
+
+                ${tagsHtml ? `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--border-color); display:flex; flex-wrap:wrap; gap:4px;">${tagsHtml}</div>` : ''}
+            </div>
+        `;
+    }
+
+    const sortedWorkRes = Object.entries(workResMap).sort((a, b) => b[1].total - a[1].total);
+    const sortedHousing = Object.entries(housingMap).sort((a, b) => b[1].total - a[1].total);
+
+    const workResCardsHtml = sortedWorkRes.map(([name, data]) => renderLocationCard(name, data, 'workResidence')).join('');
+    const housingCardsHtml = sortedHousing.map(([name, data]) => renderLocationCard(name, data, 'housing')).join('');
+
+    const totalLocations = sortedWorkRes.length + sortedHousing.length;
+
+    container.innerHTML = `
+        <style>
+            #dist-housing-panel svg path { transition: opacity 0.15s, transform 0.15s; }
+        </style>
+        ${analyticsHeaderHtml}
+        <div>
+            <div style="margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:1.15rem;">🏡</span>
+                    <div>
+                        <h3 style="font-size:0.88rem; font-weight:700; color:var(--text-main); margin:0;">Work Residence &amp; Housing Overview</h3>
+                        <p style="font-size:0.7rem; color:var(--text-muted); margin:2px 0 0 0;">Click any card to inspect resident volunteer roster</p>
+                    </div>
+                </div>
+
+                <div style="display:flex; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <div style="display:flex; background:var(--bg-color); border:1px solid var(--border-color); border-radius:6px; padding:2px;" id="housing-overview-filter-bar">
+                        <button type="button" class="btn-housing-filter active" data-filter="all" style="padding:4px 10px; font-size:0.72rem; font-weight:700; border:none; border-radius:4px; background:var(--color-primary); color:#ffffff; cursor:pointer; transition:all 0.15s;">
+                            All (${totalLocations})
+                        </button>
+                        <button type="button" class="btn-housing-filter" data-filter="workResidence" style="padding:4px 10px; font-size:0.72rem; font-weight:700; border:none; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; transition:all 0.15s;">
+                            🛏️ Work Residences (${sortedWorkRes.length})
+                        </button>
+                        <button type="button" class="btn-housing-filter" data-filter="housing" style="padding:4px 10px; font-size:0.72rem; font-weight:700; border:none; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; transition:all 0.15s;">
+                            🏠 Housing Clusters (${sortedHousing.length})
+                        </button>
+                    </div>
+
+                    <div style="position:relative; min-width:180px; max-width:240px;">
+                        <input type="text" id="housing-overview-search" placeholder="Search residence / housing..." style="width:100%; padding:4px 10px 4px 26px; font-size:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-sm, 4px); background:var(--bg-color); color:var(--text-main);">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position:absolute; left:8px; top:50%; transform:translateY(-50%); color:var(--text-muted); pointer-events:none;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                    </div>
+                </div>
+            </div>
+
+            <div id="housing-overview-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px;">
+                ${workResCardsHtml}
+                ${housingCardsHtml}
+            </div>
+
+            <div id="housing-overview-no-match" style="display:none; text-align:center; padding:28px 16px; color:var(--text-muted); font-size:0.8rem; font-style:italic;">
+                No residences or housing clusters match the search criteria.
+            </div>
+        </div>
+    `;
+
+    // Attach filter & search listeners
+    const gridEl = document.getElementById('housing-overview-grid');
+    const searchEl = document.getElementById('housing-overview-search');
+    const noMatchEl = document.getElementById('housing-overview-no-match');
+    const filterBtns = container.querySelectorAll('.btn-housing-filter');
+
+    let currentFilter = 'all';
+
+    function applyHousingFilter() {
+        const query = searchEl ? searchEl.value.trim().toLowerCase() : '';
+        const cards = gridEl ? Array.from(gridEl.querySelectorAll('.housing-overview-card')) : [];
+        let visibleCount = 0;
+
+        cards.forEach(card => {
+            const matchesType = currentFilter === 'all' || card.dataset.type === currentFilter;
+            const matchesQuery = !query || card.dataset.name.includes(query);
+
+            if (matchesType && matchesQuery) {
+                card.style.display = 'flex';
+                visibleCount++;
+            } else {
+                card.style.display = 'none';
+            }
+        });
+
+        if (noMatchEl) noMatchEl.style.display = visibleCount === 0 ? 'block' : 'none';
+    }
+
+    filterBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            filterBtns.forEach(b => {
+                b.classList.remove('active');
+                b.style.background = 'transparent';
+                b.style.color = 'var(--text-muted)';
+            });
+            btn.classList.add('active');
+            btn.style.background = 'var(--color-primary)';
+            btn.style.color = '#ffffff';
+            currentFilter = btn.dataset.filter;
+            applyHousingFilter();
+        });
+    });
+
+    if (searchEl) {
+        searchEl.addEventListener('input', applyHousingFilter);
+    }
+}
+
+function openDepartmentRosterModal(deptName, subDeptName) {
+    const modal = document.getElementById('area-roster-modal');
+    const title = document.getElementById('area-roster-title');
+    const body = document.getElementById('area-roster-body');
+    if (!modal || !body) return;
+
+    const isWoodlandShops = deptName === 'Woodland Shops';
+
+    // Filter to strictly deployable (Present) workers; exclude absent and on-pass personnel
+    let workers = workersData.filter(w => {
+        if (!w || w.isArchived) return false;
+        const wDept = w.department || (typeof inferWorkerDepartment === 'function' ? inferWorkerDepartment(w) : 'Job-site Construction');
+        if (wDept !== deptName) return false;
+        if (w.dailyStatus === 'Absent' || w.dailyStatus === 'Passes') return false;
+        return true;
+    });
+
+    const meta = (typeof DEPARTMENT_META !== 'undefined' && DEPARTMENT_META[deptName]) ? DEPARTMENT_META[deptName] : { icon: '🏢' };
+    const headerLabel = subDeptName ? `${meta.icon} ${deptName} : ${subDeptName}` : `${meta.icon} ${deptName}`;
+    title.textContent = `${headerLabel} (${workers.length} deployable)`;
+
+    if (workers.length === 0) {
+        body.innerHTML = `<div style="text-align:center; padding:36px 16px; color:var(--text-muted); font-style:italic; font-size:0.85rem;">No deployable volunteers currently present in this department today.</div>`;
+        modal.classList.add('active');
+        if (window.trapFocus) window.trapFocus(modal);
+        return;
+    }
+
+    const subShopIcons = {
+        'Carpenter Shop': '🪚',
+        'Painter Shop': '🎨',
+        'Tinsmith Shop': '🔨',
+        'Steelman/Welder Shop': '⚡',
+        'Powder Coating Shop': '🛡️',
+        'Electrical Shop': '💡'
+    };
+
+    // For Woodland Shops, group volunteers by Shop Specialty; for other departments, group by area
+    const groupKeyFn = isWoodlandShops
+        ? (w) => w.subDepartment || (typeof inferWorkerSubDepartment === 'function' ? inferWorkerSubDepartment(w) : '') || 'General Shop'
+        : (w) => w.area || 'Unassigned';
+
+    const groupCounts = {};
+    workers.forEach(w => {
+        const k = groupKeyFn(w);
+        groupCounts[k] = (groupCounts[k] || 0) + 1;
+    });
+
+    const groups = {};
+    workers.forEach(w => {
+        const k = groupKeyFn(w);
+        if (!groups[k]) groups[k] = [];
+        groups[k].push(w);
+    });
+
+    const sortedGroupNames = Object.keys(groups).sort((a, b) => {
+        if (isWoodlandShops) {
+            const priority = ['Carpenter Shop', 'Painter Shop', 'Tinsmith Shop', 'Steelman/Welder Shop', 'Powder Coating Shop', 'Electrical Shop'];
+            const idxA = priority.indexOf(a);
+            const idxB = priority.indexOf(b);
+            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+            if (idxA !== -1) return -1;
+            if (idxB !== -1) return 1;
+            return a.localeCompare(b);
+        }
+        if (a === 'Unassigned') return 1;
+        if (b === 'Unassigned') return -1;
+        if (typeof window.areaPriorityComparator === 'function') {
+            return window.areaPriorityComparator(a, b);
+        }
+        return a.localeCompare(b);
+    });
+
+    sortedGroupNames.forEach(grp => {
+        groups[grp].sort((a, b) => (a.dailyStatus === 'Present' ? 0 : 1) - (b.dailyStatus === 'Present' ? 0 : 1) || (a.trade || '').localeCompare(b.trade || '') || (a.name || '').localeCompare(b.name || ''));
+    });
+
+    const tradeCounts = {};
+    workers.forEach(w => {
+        const tr = w.trade || 'Unassigned';
+        tradeCounts[tr] = (tradeCounts[tr] || 0) + 1;
+    });
+    const sortedTrades = Object.keys(tradeCounts).sort();
+
+    // Determine default active filter chip (subDeptName if specified, otherwise 'all')
+    const initialFilter = (isWoodlandShops && subDeptName && groups[subDeptName]) ? subDeptName : 'all';
+
+    let html = `
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px;">
+            ${meta.description ? `
+                <div class="roster-dept-banner" style="font-size: 0.74rem; line-height: 1.4; color: var(--text-muted); background: var(--bg-color); padding: 8px 12px; border-radius: 6px; border-left: 3px solid ${meta.color || 'var(--color-primary)'}; display: flex; align-items: flex-start; gap: 8px;">
+                    <span style="font-size: 0.95rem; flex-shrink: 0; margin-top: 1px;">ℹ️</span>
+                    <div>
+                        <strong style="color: var(--text-main);">${esc(deptName)}:</strong> ${esc(meta.description)}
+                    </div>
+                </div>
+            ` : ''}
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color);">
+                <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;" id="roster-trade-filter-bar">
+                    <button class="roster-filter-chip ${initialFilter === 'all' ? 'active' : ''}" data-filter="all" style="padding: 3px 10px; font-size: 0.72rem; font-weight: 700; border-radius: var(--radius-full, 9999px); border: 1px solid var(--border-color); background: ${initialFilter === 'all' ? 'var(--color-primary)' : 'var(--card-bg)'}; color: ${initialFilter === 'all' ? '#ffffff' : 'var(--text-main)'}; cursor: pointer; transition: all 0.15s;">
+                        All (${workers.length})
+                    </button>
+    `;
+
+    if (isWoodlandShops) {
+        sortedGroupNames.forEach(shopName => {
+            const isSelected = initialFilter === shopName;
+            const icon = subShopIcons[shopName] || '🏭';
+            html += `
+                <button class="roster-filter-chip ${isSelected ? 'active' : ''}" data-filter="${esc(shopName)}" style="padding: 3px 10px; font-size: 0.72rem; font-weight: 700; border-radius: var(--radius-full, 9999px); border: 1px solid var(--border-color); background: ${isSelected ? 'var(--color-primary)' : 'var(--card-bg)'}; color: ${isSelected ? '#ffffff' : 'var(--text-main)'}; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 5px;">
+                    <span>${icon}</span>
+                    <span>${esc(shopName)}</span>
+                    <span style="font-size: 0.65rem; padding: 0 5px; border-radius: 9999px; background: ${isSelected ? 'rgba(255,255,255,0.2)' : 'var(--primary-light, #e0e7ff)'}; color: ${isSelected ? '#ffffff' : 'var(--primary-color, #4f46e5)'};">${groupCounts[shopName]}</span>
+                </button>
+            `;
+        });
+    } else {
+        sortedTrades.forEach(trade => {
+            const style = getTradeStyle(trade);
+            const isSelected = initialFilter === trade;
+            html += `
+                <button class="roster-filter-chip ${isSelected ? 'active' : ''}" data-filter="${esc(trade)}" style="padding: 3px 10px; font-size: 0.72rem; font-weight: 700; border-radius: var(--radius-full, 9999px); border: 1px solid var(--border-color); background: ${isSelected ? 'var(--color-primary)' : 'var(--card-bg)'}; color: ${isSelected ? '#ffffff' : 'var(--text-main)'}; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 5px;">
+                    <span style="width: 7px; height: 7px; border-radius: 50%; background: ${style.text || 'var(--color-primary)'};"></span>
+                    <span>${esc(trade)}</span>
+                    <span style="font-size: 0.65rem; padding: 0 5px; border-radius: 9999px; background: ${style.bg || 'var(--primary-light)'}; color: ${style.text || 'var(--primary-color)'};">${tradeCounts[trade]}</span>
+                </button>
+            `;
+        });
+    }
+
+    html += `
+                </div>
+                <div style="position: relative; min-width: 180px; max-width: 240px; flex: 1;">
+                    <input type="text" id="roster-quick-search" placeholder="Search name, trade, task..." autofocus style="width: 100%; padding: 4px 10px 4px 26px; font-size: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm, 4px); background: var(--bg-color); color: var(--text-main);">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                </div>
+            </div>
+
+            <div id="area-roster-sections" style="display: flex; flex-direction: column; gap: 16px;">
+    `;
+
+    sortedGroupNames.forEach(grpName => {
+        const grpWorkers = groups[grpName];
+        const grpStyle = typeof getAreaStyle === 'function' ? getAreaStyle(grpName) : { primary: 'var(--color-primary)' };
+        const iconPrefix = isWoodlandShops ? (subShopIcons[grpName] || '🏭') : '';
+        const shopDesc = isWoodlandShops
+            ? ((typeof getWoodlandSubShopDescription === 'function') ? getWoodlandSubShopDescription(grpName) : '')
+            : '';
+
+        html += `
+            <div class="roster-area-section" data-group="${esc(grpName)}" style="display: flex; flex-direction: column; gap: 8px;">
+                <div style="display: flex; flex-direction: column; gap: 2px; padding-bottom: 4px; border-bottom: 1px solid var(--border-color);">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        ${iconPrefix ? `<span style="font-size: 0.95rem;">${iconPrefix}</span>` : `<span style="width: 8px; height: 8px; border-radius: 50%; background: ${grpStyle.primary || 'var(--color-primary)'};"></span>`}
+                        <h4 style="font-size: 0.82rem; font-weight: 700; color: var(--text-main); margin: 0;">${esc(grpName)}</h4>
+                        <span style="font-size: 0.68rem; color: var(--text-muted); font-weight: 500;">(${grpWorkers.length})</span>
+                    </div>
+                    ${shopDesc ? `<div class="roster-shop-desc" style="font-size: 0.68rem; color: var(--text-muted); padding-left: ${iconPrefix ? '24px' : '16px'}; line-height: 1.35;">${esc(shopDesc)}</div>` : ''}
+                </div>
+                <div class="worker-roster-grid-4col" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;">
+        `;
+
+        grpWorkers.forEach(w => {
+            const style = getTradeStyle(w.trade);
+            const avatarHtml = (w.photoUrl || w.photo)
+                ? `<img src="${esc(w.photoUrl || w.photo)}" alt="${esc(w.name)}" style="width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border-color); flex-shrink: 0;">`
+                : `<div style="width: 36px; height: 36px; border-radius: 50%; background: ${style.bg || 'var(--primary-light)'}; color: ${style.text || 'var(--primary-color)'}; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; flex-shrink: 0; border: 1px solid ${style.text || 'transparent'}; opacity: 0.95;">${(w.name || '?').charAt(0).toUpperCase()}</div>`;
+
+            const statusBadge = w.dailyStatus === 'Present'
+                ? `<span style="font-size:0.63rem; font-weight:700; color:var(--color-success); background:var(--color-success-bg); border:1px solid var(--color-success-border); padding:1px 5px; border-radius:3px;">Present</span>`
+                : `<span style="font-size:0.63rem; font-weight:700; color:var(--color-danger); background:var(--color-danger-bg); border:1px solid var(--color-danger-border); padding:1px 5px; border-radius:3px;">${esc(w.dailyStatus)}</span>`;
+
+            const workerShop = w.subDepartment || (typeof inferWorkerSubDepartment === 'function' ? inferWorkerSubDepartment(w) : '');
+            const workerAge = (typeof getWorkerAge === 'function') ? getWorkerAge(w) : null;
+            const ageBadge = (workerAge != null && workerAge > 0)
+                ? `<span class="worker-roster-age" style="font-size: 0.65rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; background: var(--bg-color); color: var(--text-muted); border: 1px solid var(--border-color);" title="Age: ${workerAge} years old">${workerAge} yrs</span>`
+                : '';
+
+            const taskText = w.area ? (w.area + (w.specificTask ? ' · ' + w.specificTask : '')) : (w.specificTask || 'No Area Assigned');
+
+            html += `
+                <div class="hover-card worker-roster-card" data-trade="${esc(w.trade || '')}" data-shop="${esc(workerShop)}" data-area="${esc(w.area || '')}" data-name="${esc(w.name || '').toLowerCase()}" data-task="${esc(w.specificTask || '').toLowerCase()}" data-skill="${esc(w.skillLevel || '').toLowerCase()}" style="display: flex; align-items: flex-start; gap: 9px; background: var(--card-bg); border: 1px solid var(--border-color); padding: 8px 10px; border-radius: var(--radius-sm, 4px); box-shadow: var(--shadow-sm); min-width: 0; transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;">
+                    ${avatarHtml}
+                    <div style="flex: 1; min-width: 0; line-height: 1.25;">
+                        <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 6px;">
+                            <span style="font-weight: 700; font-size: 0.8rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(w.name)}">${esc(w.name)}</span>
+                            <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                                ${ageBadge}
+                                ${w.aNumber != null ? `<span style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted);">#${esc(w.aNumber)}</span>` : ''}
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 4px; margin-top: 3px; flex-wrap: wrap;">
+                            ${statusBadge}
+                            <span style="font-size: 0.67rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; background: ${style.bg}; color: ${style.text}; text-transform: uppercase; letter-spacing: 0.03em;">${esc(w.trade || 'General')}</span>
+                            ${workerShop ? `<span style="font-size: 0.65rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; background: #ecfeff; color: #0e7490; border: 1px solid #cffafe;">${esc(workerShop)}</span>` : ''}
+                        </div>
+                        <div class="worker-roster-task" style="font-size: 0.68rem; color: var(--text-muted); margin-top: 4px; line-height: 1.35; word-break: break-word; white-space: normal;" title="${esc(taskText)}">
+                            ${esc(taskText)}
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += `
+                </div>
+            </div>
+        `;
+    });
+
+    html += `
+            </div>
+            <div id="roster-no-match" style="display: none; text-align: center; padding: 24px; color: var(--text-muted); font-size: 0.8rem; font-style: italic;">
+                No workers match the selected filter.
+            </div>
+        </div>
+    `;
+
+    body.innerHTML = html;
+
+    const searchInput = document.getElementById('roster-quick-search');
+    const noMatchEl = document.getElementById('roster-no-match');
+    const sections = Array.from(body.querySelectorAll('.roster-area-section'));
+
+    function applyFilter() {
+        const activeChip = body.querySelector('.roster-filter-chip.active');
+        const activeFilter = activeChip ? activeChip.dataset.filter : 'all';
+        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+        let visibleTotal = 0;
+
+        sections.forEach(section => {
+            const cards = Array.from(section.querySelectorAll('.worker-roster-card'));
+            let sectionVisibleCount = 0;
+
+            cards.forEach(card => {
+                const matchesFilter = (activeFilter === 'all' || 
+                    (isWoodlandShops ? (card.dataset.shop === activeFilter || section.dataset.group === activeFilter) : card.dataset.trade === activeFilter));
+                const matchesQuery = (!query || 
+                    card.dataset.name.includes(query) || 
+                    card.dataset.task.includes(query) || 
+                    card.dataset.trade.toLowerCase().includes(query) ||
+                    (card.dataset.shop && card.dataset.shop.toLowerCase().includes(query)) ||
+                    (card.dataset.area && card.dataset.area.toLowerCase().includes(query)));
+
+                if (matchesFilter && matchesQuery) {
+                    card.style.display = 'flex';
+                    sectionVisibleCount++;
+                    visibleTotal++;
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+
+            if (sectionVisibleCount === 0) {
+                section.style.display = 'none';
+            } else {
+                section.style.display = 'flex';
+            }
+        });
+
+        if (noMatchEl) noMatchEl.style.display = visibleTotal === 0 ? 'block' : 'none';
+    }
+
+    body.querySelectorAll('.roster-filter-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            body.querySelectorAll('.roster-filter-chip').forEach(c => {
+                c.classList.remove('active');
+                c.style.background = 'var(--card-bg)';
+                c.style.color = 'var(--text-main)';
+                const badge = c.querySelector('span:last-child');
+                if (badge && isWoodlandShops) {
+                    badge.style.background = 'var(--primary-light, #e0e7ff)';
+                    badge.style.color = 'var(--primary-color, #4f46e5)';
+                }
+            });
+            chip.classList.add('active');
+            chip.style.background = 'var(--color-primary)';
+            chip.style.color = '#ffffff';
+            const activeBadge = chip.querySelector('span:last-child');
+            if (activeBadge && isWoodlandShops) {
+                activeBadge.style.background = 'rgba(255,255,255,0.2)';
+                activeBadge.style.color = '#ffffff';
+            }
+            applyFilter();
+        });
+    });
+
+    if (searchInput) {
+        searchInput.addEventListener('input', applyFilter);
+    }
+
+    // If pre-filtered to a specific sub-department, trigger filter immediately
+    if (initialFilter !== 'all') {
+        applyFilter();
+    }
+
+    modal.classList.add('active');
+    if (window.trapFocus) window.trapFocus(modal);
+}
+
+function openResidenceRosterModal(type, locationName) {
+    const modal = document.getElementById('area-roster-modal');
+    const title = document.getElementById('area-roster-title');
+    const body = document.getElementById('area-roster-body');
+    if (!modal || !body) return;
+
+    const isWorkRes = type === 'workResidence';
+    const isUnassigned = locationName.startsWith('Unassigned');
+    const icon = isWorkRes ? '🛏️' : '🏠';
+    const typeLabel = isWorkRes ? 'Work Residence' : 'Housing Cluster';
+
+    const workers = (typeof workersData !== 'undefined' ? workersData : []).filter(w => {
+        if (!w || w.isArchived) return false;
+        if (isWorkRes) {
+            const r = (w.workResidence || '').trim();
+            return isUnassigned ? !r : r === locationName;
+        } else {
+            const h = (w.visitationHousing || (typeof detectResidence === 'function' ? detectResidence(w) : '') || '').trim();
+            return isUnassigned ? !h : h === locationName;
+        }
+    });
+
+    title.textContent = `${icon} ${typeLabel}: ${locationName} (${workers.length} volunteer${workers.length !== 1 ? 's' : ''})`;
+
+    if (workers.length === 0) {
+        body.innerHTML = `<div style="text-align:center; padding:36px 16px; color:var(--text-muted); font-style:italic; font-size:0.85rem;">No active volunteers assigned to this location today.</div>`;
+        modal.classList.add('active');
+        if (window.trapFocus) window.trapFocus(modal);
+        return;
+    }
+
+    workers.sort((a, b) => (a.dailyStatus === 'Present' ? 0 : 1) - (b.dailyStatus === 'Present' ? 0 : 1) || (a.trade || '').localeCompare(b.trade || '') || (a.name || '').localeCompare(b.name || ''));
+
+    const deptCounts = {};
+    workers.forEach(w => {
+        const d = w.department || (typeof inferWorkerDepartment === 'function' ? inferWorkerDepartment(w) : 'Job-site Construction');
+        deptCounts[d] = (deptCounts[d] || 0) + 1;
+    });
+
+    const presentCount = workers.filter(w => w.dailyStatus === 'Present').length;
+    const offsiteCount = workers.length - presentCount;
+
+    let html = `
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px;">
+            <div class="roster-dept-banner" style="font-size: 0.74rem; line-height: 1.4; color: var(--text-muted); background: var(--bg-color); padding: 8px 12px; border-radius: 6px; border-left: 3px solid var(--color-primary); display: flex; align-items: flex-start; gap: 8px;">
+                <span style="font-size: 0.95rem; flex-shrink: 0; margin-top: 1px;">ℹ️</span>
+                <div>
+                    <strong style="color: var(--text-main);">${typeLabel} Accommodation Roster:</strong>
+                    Currently assigned to <strong>${esc(locationName)}</strong>. ${presentCount} present today, ${offsiteCount} off-site.
+                </div>
+            </div>
+
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color);">
+                <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;" id="roster-residence-filter-bar">
+                    <button class="roster-filter-chip active" data-filter="all" style="padding: 3px 10px; font-size: 0.72rem; font-weight: 700; border-radius: var(--radius-full, 9999px); border: 1px solid var(--border-color); background: var(--color-primary); color: #ffffff; cursor: pointer; transition: all 0.15s;">
+                        All (${workers.length})
+                    </button>
+                    ${Object.entries(deptCounts).map(([dept, count]) => {
+                        const m = (typeof DEPARTMENT_META !== 'undefined' && DEPARTMENT_META[dept]) ? DEPARTMENT_META[dept] : { color: '#64748b' };
+                        return `
+                            <button class="roster-filter-chip" data-filter="${esc(dept)}" style="padding: 3px 10px; font-size: 0.72rem; font-weight: 700; border-radius: var(--radius-full, 9999px); border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-main); cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 5px;">
+                                <span style="width: 7px; height: 7px; border-radius: 50%; background: ${m.color};"></span>
+                                <span>${esc(dept)}</span>
+                                <span style="font-size: 0.65rem; padding: 0 5px; border-radius: 9999px; background: var(--primary-light, #e0e7ff); color: var(--primary-color, #4f46e5);">${count}</span>
+                            </button>
+                        `;
+                    }).join('')}
+                </div>
+                <div style="position: relative; min-width: 180px; max-width: 240px; flex: 1;">
+                    <input type="text" id="roster-quick-search" placeholder="Search resident, trade, task..." autofocus style="width: 100%; padding: 4px 10px 4px 26px; font-size: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm, 4px); background: var(--bg-color); color: var(--text-main);">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                </div>
+            </div>
+
+            <div class="worker-roster-grid-4col" id="residence-roster-grid" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;">
+    `;
+
+    workers.forEach(w => {
+        const style = getTradeStyle(w.trade);
+        const avatarHtml = (w.photoUrl || w.photo)
+            ? `<img src="${esc(w.photoUrl || w.photo)}" alt="${esc(w.name)}" style="width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border-color); flex-shrink: 0;">`
+            : `<div style="width: 36px; height: 36px; border-radius: 50%; background: ${style.bg || 'var(--primary-light)'}; color: ${style.text || 'var(--primary-color)'}; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; flex-shrink: 0; border: 1px solid ${style.text || 'transparent'}; opacity: 0.95;">${(w.name || '?').charAt(0).toUpperCase()}</div>`;
+
+        const statusBadge = w.dailyStatus === 'Present'
+            ? `<span style="font-size:0.63rem; font-weight:700; color:var(--color-success); background:var(--color-success-bg); border:1px solid var(--color-success-border); padding:1px 5px; border-radius:3px;">Present</span>`
+            : `<span style="font-size:0.63rem; font-weight:700; color:var(--color-danger); background:var(--color-danger-bg); border:1px solid var(--color-danger-border); padding:1px 5px; border-radius:3px;">${esc(w.dailyStatus)}</span>`;
+
+        const workerAge = (typeof getWorkerAge === 'function') ? getWorkerAge(w) : null;
+        const ageBadge = (workerAge != null && workerAge > 0)
+            ? `<span class="worker-roster-age" style="font-size: 0.65rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; background: var(--bg-color); color: var(--text-muted); border: 1px solid var(--border-color);" title="Age: ${workerAge} years old">${workerAge} yrs</span>`
+            : '';
+
+        const dept = w.department || (typeof inferWorkerDepartment === 'function' ? inferWorkerDepartment(w) : 'Job-site Construction');
+        const deptMeta = (typeof DEPARTMENT_META !== 'undefined' && DEPARTMENT_META[dept]) ? DEPARTMENT_META[dept] : { icon: '📁' };
+        const taskText = w.area ? (w.area + (w.specificTask ? ' · ' + w.specificTask : '')) : (w.specificTask || 'No Area Assigned');
+
+        html += `
+            <div class="hover-card worker-roster-card" data-dept="${esc(dept)}" data-trade="${esc(w.trade || '')}" data-name="${esc(w.name || '').toLowerCase()}" data-task="${esc(w.specificTask || '').toLowerCase()}" data-skill="${esc(w.skillLevel || '').toLowerCase()}" style="display: flex; align-items: flex-start; gap: 9px; background: var(--card-bg); border: 1px solid var(--border-color); padding: 8px 10px; border-radius: var(--radius-sm, 4px); box-shadow: var(--shadow-sm); min-width: 0; transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;">
+                ${avatarHtml}
+                <div style="flex: 1; min-width: 0; line-height: 1.25;">
+                    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 6px;">
+                        <span style="font-weight: 700; font-size: 0.8rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(w.name)}">${esc(w.name)}</span>
+                        <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                            ${ageBadge}
+                            ${w.aNumber != null ? `<span style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted);">#${esc(w.aNumber)}</span>` : ''}
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px; margin-top: 3px; flex-wrap: wrap;">
+                        ${statusBadge}
+                        <span style="font-size: 0.67rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; background: ${style.bg}; color: ${style.text}; text-transform: uppercase; letter-spacing: 0.03em;">${esc(w.trade || 'General')}</span>
+                        <span style="font-size: 0.65rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; background: var(--bg-color); color: var(--text-muted); border: 1px solid var(--border-color);">${deptMeta.icon} ${esc(dept)}</span>
+                    </div>
+                    <div class="worker-roster-task" style="font-size: 0.68rem; color: var(--text-muted); margin-top: 4px; line-height: 1.35; word-break: break-word; white-space: normal;" title="${esc(taskText)}">
+                        ${esc(taskText)}
+                    </div>
+                    ${w.phone ? `<div style="font-size: 0.66rem; color: var(--color-primary); font-weight: 600; margin-top: 2px;">📞 ${esc(w.phone)}</div>` : ''}
+                </div>
+            </div>
+        `;
+    });
+
+    html += `
+            </div>
+            <div id="residence-roster-no-match" style="display: none; text-align: center; padding: 24px; color: var(--text-muted); font-size: 0.8rem; font-style: italic;">
+                No resident volunteers match the selected filter.
+            </div>
+        </div>
+    `;
+
+    body.innerHTML = html;
+
+    // Filter & search handlers
+    const searchInput = document.getElementById('roster-quick-search');
+    const noMatchEl = document.getElementById('residence-roster-no-match');
+    const cards = Array.from(body.querySelectorAll('.worker-roster-card'));
+
+    function applyResidenceFilter() {
+        const activeChip = body.querySelector('#roster-residence-filter-bar .roster-filter-chip.active');
+        const activeFilter = activeChip ? activeChip.dataset.filter : 'all';
+        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+        let visibleCount = 0;
+        cards.forEach(card => {
+            const matchesFilter = activeFilter === 'all' || card.dataset.dept === activeFilter;
+            const matchesQuery = !query || 
+                card.dataset.name.includes(query) || 
+                card.dataset.task.includes(query) || 
+                card.dataset.trade.toLowerCase().includes(query) ||
+                card.dataset.dept.toLowerCase().includes(query);
+
+            if (matchesFilter && matchesQuery) {
+                card.style.display = 'flex';
+                visibleCount++;
+            } else {
+                card.style.display = 'none';
+            }
+        });
+
+        if (noMatchEl) noMatchEl.style.display = visibleCount === 0 ? 'block' : 'none';
+    }
+
+    body.querySelectorAll('#roster-residence-filter-bar .roster-filter-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            body.querySelectorAll('#roster-residence-filter-bar .roster-filter-chip').forEach(c => {
+                c.classList.remove('active');
+                c.style.background = 'var(--card-bg)';
+                c.style.color = 'var(--text-main)';
+            });
+            chip.classList.add('active');
+            chip.style.background = 'var(--color-primary)';
+            chip.style.color = '#ffffff';
+            applyResidenceFilter();
+        });
+    });
+
+    if (searchInput) {
+        searchInput.addEventListener('input', applyResidenceFilter);
+    }
+
+    modal.classList.add('active');
+    if (window.trapFocus) window.trapFocus(modal);
+}
+return {
+    renderDeployabilityBanner: renderDeployabilityBanner,
+    renderDepartmentMatrix: renderDepartmentMatrix,
+    renderDeptAnalytics: renderDeptAnalytics,
+    renderHousingOverview: renderHousingOverview,
+    openDepartmentRosterModal: openDepartmentRosterModal,
+    openResidenceRosterModal: openResidenceRosterModal
+};
+})();
+
+// ===== distribution.js (area roster) - verbatim from 01_Rust_WC_DB/js/distribution.js =====
+var S5_distribution_2 = (function () {
+
+function openAreaRosterModal(areaName) {
+    const modal = document.getElementById('area-roster-modal');
+    const title = document.getElementById('area-roster-title');
+    const body = document.getElementById('area-roster-body');
+    if (!modal || !body) return;
+
+    const isAbsenteeGroup = (areaName === 'Absent and On Passes' || areaName === 'Absent Volunteers' || areaName === 'Volunteers on Passes');
+
+    title.textContent = areaName === 'Absent and On Passes' ? 'Absent and On Passes' :
+                        areaName === 'Absent Volunteers' ? 'Absent Personnel' :
+                        areaName === 'Volunteers on Passes' ? 'Personnel On Pass' : `Roster for ${areaName}`;
+
+    let workers = [];
+    if (areaName === 'Absent and On Passes') {
+        workers = workersData.filter(w => w && !w.isArchived && (w.dailyStatus === 'Absent' || w.dailyStatus === 'Passes'));
+    } else if (areaName === 'Absent Volunteers') {
+        workers = workersData.filter(w => w && !w.isArchived && w.dailyStatus === 'Absent');
+    } else if (areaName === 'Volunteers on Passes') {
+        workers = workersData.filter(w => w && !w.isArchived && w.dailyStatus === 'Passes');
+    } else {
+        workers = workersData.filter(w => {
+            if (!w || w.isArchived) return false;
+            const workerArea = w.area || 'Unassigned Area';
+            return workerArea === areaName && w.dailyStatus !== 'Absent' && w.dailyStatus !== 'Passes';
+        });
+    }
+
+    if (workers.length === 0) {
+        body.innerHTML = `<div style="text-align: center; padding: 36px 16px; color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No active workers assigned to this area today.</div>`;
+        modal.classList.add('active');
+        if (window.trapFocus) window.trapFocus(modal);
+        return;
+    }
+
+    // Sort workers by trade then name for a cohesive, professional layout
+    workers.sort((a, b) => (a.trade || '').localeCompare(b.trade || '') || (a.name || '').localeCompare(b.name || ''));
+
+    // Count trades present in this area
+    const tradeCounts = {};
+    workers.forEach(w => {
+        const tr = w.trade || 'Unassigned';
+        tradeCounts[tr] = (tradeCounts[tr] || 0) + 1;
+    });
+    const sortedTrades = Object.keys(tradeCounts).sort();
+
+    // Dynamic horizontal columns (1 to 4 columns based on worker count)
+    const initialCols = Math.min(Math.max(workers.length, 1), 4);
+
+    let html = `
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px;">
+            <!-- Top Controls Toolbar -->
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color);">
+                <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;" id="roster-trade-filter-bar">
+                    <button class="roster-filter-chip active" data-filter="all" style="padding: 3px 10px; font-size: 0.72rem; font-weight: 700; border-radius: var(--radius-full, 9999px); border: 1px solid var(--border-color); background: var(--color-primary); color: #ffffff; cursor: pointer; transition: all 0.15s;">
+                        All (${workers.length})
+                    </button>
+    `;
+
+    sortedTrades.forEach(trade => {
+        const style = getTradeStyle(trade);
+        html += `
+            <button class="roster-filter-chip" data-filter="${esc(trade)}" style="padding: 3px 10px; font-size: 0.72rem; font-weight: 700; border-radius: var(--radius-full, 9999px); border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-main); cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 5px;">
+                <span style="width: 7px; height: 7px; border-radius: 50%; background: ${style.text || 'var(--color-primary)'};"></span>
+                <span>${esc(trade)}</span>
+                <span style="font-size: 0.65rem; padding: 0 5px; border-radius: 9999px; background: ${style.bg || 'var(--primary-light)'}; color: ${style.text || 'var(--primary-color)'};">${tradeCounts[trade]}</span>
+            </button>
+        `;
+    });
+
+    html += `
+                </div>
+                <div style="position: relative; min-width: 180px; max-width: 240px; flex: 1;">
+                    <input type="text" id="roster-quick-search" placeholder="Search name, trade, task..." autofocus style="width: 100%; padding: 4px 10px 4px 26px; font-size: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm, 4px); background: var(--bg-color); color: var(--text-main);">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                </div>
+            </div>
+
+            <!-- Dynamic Horizontal Grid (Always spreads across horizontal space) -->
+            <div class="worker-roster-grid-4col" id="area-roster-grid" style="display: grid; grid-template-columns: repeat(${initialCols}, minmax(0, 1fr)); gap: 8px;">
+    `;
+
+    workers.forEach(w => {
+        const style = getTradeStyle(w.trade);
+        const avatarHtml = (w.photoUrl || w.photo)
+            ? `<img src="${esc(w.photoUrl || w.photo)}" alt="${esc(w.name)}" style="width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border-color); flex-shrink: 0;">`
+            : `<div style="width: 36px; height: 36px; border-radius: 50%; background: ${style.bg || 'var(--primary-light)'}; color: ${style.text || 'var(--primary-color)'}; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; flex-shrink: 0; border: 1px solid ${style.text || 'transparent'}; opacity: 0.95;">${(w.name || '?').charAt(0).toUpperCase()}</div>`;
+
+        html += `
+            <div class="hover-card worker-roster-card" data-trade="${esc(w.trade || '')}" data-name="${esc(w.name || '').toLowerCase()}" data-task="${esc(w.specificTask || '').toLowerCase()}" data-skill="${esc(w.skillLevel || '').toLowerCase()}" style="display: flex; align-items: center; gap: 9px; background: var(--card-bg); border: 1px solid var(--border-color); padding: 8px 10px; border-radius: var(--radius-sm, 4px); box-shadow: var(--shadow-sm); min-width: 0; transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;">
+                ${avatarHtml}
+                <div style="flex: 1; min-width: 0; line-height: 1.25;">
+                    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 6px;">
+                        <span style="font-weight: 700; font-size: 0.8rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(w.name)}">${esc(w.name)}</span>
+                        ${w.aNumber != null ? `<span style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted); flex-shrink: 0;">#${esc(w.aNumber)}</span>` : ''}
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px; margin-top: 3px; flex-wrap: wrap;">
+                        <span style="font-size: 0.67rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; background: ${style.bg}; color: ${style.text}; text-transform: uppercase; letter-spacing: 0.03em;">${esc(w.trade || 'General')}</span>
+                        ${w.skillLevel ? `<span style="font-size: 0.65rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; background: var(--color-surface-secondary, #f1f1ef); color: var(--text-muted); border: 1px solid var(--border-color);">Skill ${esc(w.skillLevel)}</span>` : ''}
+                    </div>
+                    ${!isAbsenteeGroup
+                        ? `<div style="font-size: 0.68rem; color: var(--text-muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(w.specificTask || 'General Task')}">${esc(w.specificTask || 'General Task')}</div>`
+                        : `<div style="font-size: 0.67rem; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(w.address || 'No Home Address')}">📍 ${esc(w.address || 'No Home Address')}</div>
+                           <div style="font-size: 0.67rem; color: var(--color-primary); font-weight: 600; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">📞 ${esc(w.phone || 'No Phone')}</div>
+                           ${w.dailyStatus === 'Absent' ? `<div style="font-size: 0.67rem; color: var(--color-danger); font-weight: 700; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(w.absentReason || 'N/A')}">Reason: ${esc(w.absentReason || 'N/A')}</div>` : ''}`
+                    }
+                </div>
+            </div>
+        `;
+    });
+
+    html += `
+            </div>
+            <div id="roster-no-match" style="display: none; text-align: center; padding: 24px; color: var(--text-muted); font-size: 0.8rem; font-style: italic;">
+                No workers match the selected filter.
+            </div>
+        </div>
+    `;
+
+    body.innerHTML = html;
+
+    // Attach interactive filter logic
+    const gridEl = document.getElementById('area-roster-grid');
+    const filterChips = body.querySelectorAll('.roster-filter-chip');
+    const searchInput = document.getElementById('roster-quick-search');
+    const noMatchEl = document.getElementById('roster-no-match');
+    const cards = Array.from(gridEl ? gridEl.querySelectorAll('.worker-roster-card') : []);
+
+    function applyFilter() {
+        const activeChip = body.querySelector('.roster-filter-chip.active');
+        const activeFilter = activeChip ? activeChip.dataset.filter : 'all';
+        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+        let visibleCount = 0;
+        cards.forEach(card => {
+            const trade = card.dataset.trade;
+            const name = card.dataset.name;
+            const task = card.dataset.task;
+            const skill = card.dataset.skill;
+
+            const matchesTrade = (activeFilter === 'all' || trade === activeFilter);
+            const matchesQuery = !query || name.includes(query) || trade.toLowerCase().includes(query) || task.includes(query) || skill.includes(query);
+
+            if (matchesTrade && matchesQuery) {
+                card.style.display = 'flex';
+                visibleCount++;
+            } else {
+                card.style.display = 'none';
+            }
+        });
+
+        if (gridEl) {
+            const cols = Math.min(Math.max(visibleCount, 1), 4);
+            gridEl.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+        }
+
+        if (noMatchEl) {
+            noMatchEl.style.display = visibleCount === 0 ? 'block' : 'none';
+        }
+    }
+
+    filterChips.forEach(chip => {
+        chip.addEventListener('click', () => {
+            filterChips.forEach(c => {
+                c.classList.remove('active');
+                c.style.background = 'var(--card-bg)';
+                c.style.color = 'var(--text-main)';
+            });
+            chip.classList.add('active');
+            chip.style.background = 'var(--color-primary)';
+            chip.style.color = '#ffffff';
+            applyFilter();
+        });
+    });
+
+    if (searchInput) {
+        searchInput.addEventListener('input', applyFilter);
+    }
+
+    if (window.trapFocus) window.trapFocus(modal);
+    modal.classList.add('active');
+}
+return {
+    openAreaRosterModal: openAreaRosterModal
+};
+})();
+
+// ===== ui.js (department tabs) - verbatim from 01_Rust_WC_DB/js/ui.js =====
+var S5_ui = (function () {
+
+    function switchDistTab(tabName) {
+        // Toggle tab button styles
+        document.querySelectorAll('.dist-tab-btn').forEach(function (btn) {
+            var isActive = btn.getAttribute('data-dist-tab') === tabName;
+            btn.classList.toggle('active', isActive);
+            btn.style.color = isActive ? 'var(--primary-color)' : 'var(--text-muted)';
+            btn.style.background = isActive ? 'var(--primary-light)' : 'transparent';
+            btn.style.boxShadow = isActive ? '0 1px 3px rgba(0,0,0,0.08)' : 'none';
+        });
+        // Toggle panes
+        var deptPane = document.getElementById('dist-pane-departments');
+        var housingPane = document.getElementById('dist-pane-housing');
+        if (deptPane) deptPane.style.display = tabName === 'departments' ? 'flex' : 'none';
+        if (housingPane) housingPane.style.display = tabName === 'housing' ? 'flex' : 'none';
+        // Lazy-render housing when its tab is opened
+        if (tabName === 'housing' && typeof window.renderHousingOverview === 'function') {
+            var aw = (typeof workersData !== 'undefined') ? workersData.filter(function (w) { return w && !w.isArchived; }) : [];
+            window.renderHousingOverview(aw);
+        }
+    }
+return {
+    switchDistTab: switchDistTab
+};
+})();
+
+// ===== duty.js (overnight duty) - verbatim from 01_Rust_WC_DB/js/duty.js =====
+var S5_duty_2 = (function () {
+
+const DutyModule = (function () {
+    // Current state
+    let currentDate = new Date();
+    let selectedAreaId = null;
+    let currentViewMode = 'week'; // 'week' or 'month'
+
+    // Assignment & replacement state variables
+    let _pendingAssign = {};
+    let _pendingReplace = {};
+    let _pendingTag = {};
+    let oldANumber = null;
+
+    // Data caches
+    let _areas = [];
+    let _schedules = [];
+    let _workers = [];
+    let _dirty = true;
+
+    // View elements
+    let rootEl = null;
+
+    /* ------ Init ------ */
+
+    // Generate week schedule for the currently selected area (module scope so
+    // it can be exposed for direct invocation by the header "Schedule Duty" button)
+    async function requestWeekGeneration() {
+        if (!selectedAreaId) { showToast('Select an area first.'); return; }
+        if (selectedAreaId === 'combined') {
+            showToast('Please select a specific area tab to generate its schedule.');
+            return;
+        }
+        const area = _areas.find(a => a.id === selectedAreaId);
+        if (!area) return;
+        const minWorkers = area.workersNeeded || 1;
+        if (!area.roster || area.roster.length < minWorkers) {
+            showToast(`"${area.name}" roster needs at least ${minWorkers} workers.`);
+            return;
+        }
+        if (await showConfirm(`Generate schedule for "${area.name}" this week? Existing manual assignments will be kept.`)) {
+            await generateWeekSchedule(area);
+        }
+    }
+
+    async function init() {
+        rootEl = document.getElementById('duty-app-root');
+        if (!rootEl) return;
+        if (!window.dbStores || !window.dbStores.duty_schedules) {
+            console.error('Duty stores not found in IndexedDB.');
+            return;
+        }
+        if (!rootEl.dataset.initialized) {
+            renderLayout();
+            attachEventListeners();
+            rootEl.dataset.initialized = 'true';
+        }
+        try {
+            await loadData();
+        } catch (err) {
+            console.error('duty: loadData error:', err);
+        }
+    }
+
+    /* ------ Layout ------ */
+
+    function renderLayout() {
+        rootEl.innerHTML = `
+            <div style="display: flex; flex-direction: column; gap: 12px; height: 100%;">
+
+                <!-- Area Tabs -->
+                <div id="duty-area-tabs" class="duty-tab-bar">
+                    <!-- Rendered by JS -->
+                </div>
+
+                <div id="duty-calendar-workspace" class="duty-calendar-workspace" style="display: flex; gap: 16px; flex: 1; min-height: 0;">
+
+                    <!-- Sidebar: Area management -->
+                    <div id="duty-sidebar" style="flex: 0 0 250px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex-shrink: 0;">
+                        <div class="table-card" style="padding: 12px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <h3 style="font-size: 0.85rem; font-weight: 700; color: var(--text-main); margin-bottom: 0;">Areas</h3>
+                                <button id="btn-add-duty-area" class="btn btn-secondary btn-sm" style="padding: 3px 8px; font-size: 0.7rem;" title="Add a new duty area">+ Add</button>
+                            </div>
+                            <div id="duty-areas-list" style="display: flex; flex-direction: column; gap: 6px;">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Main Content: Calendar -->
+                    <div class="table-card" style="flex: 1; display: flex; flex-direction: column; padding: 16px; overflow: hidden; min-width: 0;">
+                        <!-- Calendar nav bar -->
+                        <div class="duty-calendar-toolbar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-shrink: 0;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <button id="duty-prev-date" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;" title="Previous">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                                </button>
+                                <button id="duty-today" class="btn btn-secondary btn-sm" style="height: 28px; font-weight: 600; font-size: 0.72rem; padding: 0 10px;" title="This Week / Month">Today</button>
+                                <button id="duty-next-date" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;" title="Next">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                </button>
+                                <h2 id="duty-current-date-label" style="font-size: 1.05rem; font-weight: 700; margin: 0 0 0 8px; color: var(--text-main);"></h2>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <div class="view-toggle" style="display: flex; background: var(--bg-body); padding: 3px; border-radius: 8px; border: 1px solid var(--border-color);">
+                                    <button id="btn-view-week" class="btn btn-sm" style="background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-main); font-weight: 600; font-size: 0.75rem; padding: 4px 12px;">Week</button>
+                                    <button id="btn-view-month" class="btn btn-sm" style="background: transparent; border: none; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; padding: 4px 12px;">Month</button>
+                                    <button id="btn-view-roster" class="btn btn-sm" style="background: transparent; border: none; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; padding: 4px 12px;">Roster</button>
+                                </div>
+                                <button id="btn-toggle-expand" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 4px 10px; display: flex; align-items: center; gap: 4px;" title="Toggle full-width calendar">
+                                    <svg class="expand-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                        <polyline points="15 3 21 3 21 9"></polyline>
+                                        <polyline points="9 21 3 21 3 15"></polyline>
+                                        <line x1="21" y1="3" x2="14" y2="10"></line>
+                                        <line x1="3" y1="21" x2="10" y2="14"></line>
+                                    </svg>
+                                    <span>Expand</span>
+                                </button>
+                                <button id="btn-gen-week" class="btn btn-primary btn-sm" style="font-size: 0.72rem; padding: 4px 10px;" title="Generate schedule for this week using area roster">Gen Week</button>
+                                <button id="btn-clear-day" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 4px 10px; color: var(--danger); border-color: rgba(220, 38, 38, 0.25);" title="Clear all scheduled volunteers for the active day">Clear Day</button>
+                                <button id="btn-clear-week" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 4px 10px; color: var(--danger); border-color: rgba(220, 38, 38, 0.25);" title="Clear all scheduled volunteers for the active week">Clear Week</button>
+                                <button id="btn-print-duty" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 4px 10px;" title="Print schedule">Print</button>
+                            </div>
+                        </div>
+
+                        <!-- Selected area label -->
+                        <div id="duty-selected-area-label" style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; flex-shrink: 0;">
+                            Select an area above.
+                        </div>
+
+                        <!-- Calendar grid -->
+                        <div id="duty-calendar-grid" class="custom-scrollbar" style="flex: 1; overflow-y: auto; border: 1px solid var(--border-color); border-radius: var(--radius-sm); position: relative; min-height: 260px;">
+                            <!-- Calendar populated by JS -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ------ Modals ------ -->
+            <div id="duty-area-modal" class="modal-overlay">
+                <div class="modal-content" style="max-width: 420px;">
+                    <div class="modal-header">
+                        <h2 id="duty-area-modal-title">Add Duty Area</h2>
+                        <button class="close-btn" onclick="window.releaseFocusTrap();document.getElementById('duty-area-modal').classList.remove('active')">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="duty-area-form">
+                            <input type="hidden" id="duty-area-id">
+                            <div class="form-group">
+                                <label>Area Name</label>
+                                <input type="text" id="duty-area-name" required>
+                            </div>
+                            <div class="form-group" style="display:flex;gap:12px;">
+                                <div style="flex:1;">
+                                    <label>Workers Needed/Shift</label>
+                                    <input type="number" id="duty-area-workers" min="1" value="2" required>
+                                </div>
+                                <div style="flex:0 0 60px;">
+                                    <label>Color</label>
+                                    <input type="color" id="duty-area-color" value="#3b82f6" style="width:100%;height:36px;padding:2px;cursor:pointer;">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Shift Time</label>
+                                <input type="text" id="duty-area-shift" value="22:00-06:00" placeholder="e.g. 22:00-06:00">
+                            </div>
+                            <div class="modal-actions">
+                                <button type="button" class="btn btn-secondary" onclick="window.releaseFocusTrap();document.getElementById('duty-area-modal').classList.remove('active')">Cancel</button>
+                                <button type="submit" class="btn btn-primary">Save Area</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div id="duty-roster-modal" class="modal-overlay">
+                <div class="modal-content modal-4col-roster" style="max-width: 1200px; width: 96vw; display: flex; flex-direction: column; max-height: 88vh;">
+                    <div class="modal-header">
+                        <h2 id="duty-roster-modal-title">Manage Roster</h2>
+                        <button class="close-btn" onclick="window.releaseFocusTrap();document.getElementById('duty-roster-modal').classList.remove('active')">&times;</button>
+                    </div>
+                    <div class="modal-body" style="flex: 1; overflow-y: hidden; display: flex; flex-direction: column; gap: 10px;">
+                        <input type="text" id="duty-roster-search" class="search-bar" placeholder="Search workers..." style="width: 100%;" title="Type to filter workers">
+                        <div id="duty-roster-selection-list" class="custom-scrollbar" style="flex: 1; overflow-y: auto; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 8px;">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                    <div class="modal-actions" style="padding-top: 12px; border-top: 1px solid var(--border-color);">
+                        <button type="button" class="btn btn-secondary" onclick="window.releaseFocusTrap();document.getElementById('duty-roster-modal').classList.remove('active')" title="Discard changes">Cancel</button>
+                        <button type="button" id="btn-save-roster" class="btn btn-primary" title="Save which workers can be assigned to this area">Save Roster</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="duty-override-modal" class="modal-overlay">
+                <div class="modal-content" style="max-width: 400px;">
+                    <div class="modal-header">
+                        <h2>Manual Override Reason</h2>
+                        <button class="close-btn" onclick="if(window.__dutyCloseOverride) window.__dutyCloseOverride()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;" id="duty-override-info">Moving worker to a new schedule slot.</p>
+                        <div class="form-group">
+                            <label>Reason for override</label>
+                            <textarea id="duty-override-reason" style="width: 100%; min-height: 80px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; font-family: inherit; font-size: 0.85rem;" placeholder="e.g. Swapping with another worker, covering absence..." required></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" onclick="if(window.__dutyCloseOverride) window.__dutyCloseOverride()">Cancel</button>
+                        <button type="button" id="btn-override-confirm" class="btn btn-primary">Confirm Override</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Assign Worker Modal (click empty slot) -->
+            <div id="duty-assign-modal" class="modal-overlay">
+                <div class="modal-content" style="max-width: 420px;">
+                    <div class="modal-header">
+                        <h2 id="duty-assign-modal-title">Assign Worker</h2>
+                        <button class="close-btn" onclick="window.releaseFocusTrap();document.getElementById('duty-assign-modal').classList.remove('active')">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;" id="duty-assign-date-label"></p>
+                        <input type="text" id="duty-assign-search" class="search-bar" placeholder="Search roster..." style="width: 100%; margin-bottom: 8px;">
+                        <div id="duty-assign-list" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Replace Worker Modal -->
+            <div id="duty-replace-modal" class="modal-overlay">
+                <div class="modal-content" style="max-width: 420px;">
+                    <div class="modal-header">
+                        <h2>Replace Worker</h2>
+                        <button class="close-btn" onclick="window.releaseFocusTrap();document.getElementById('duty-replace-modal').classList.remove('active')">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;" id="duty-replace-info"></p>
+                        <input type="text" id="duty-replace-search" class="search-bar" placeholder="Search roster..." style="width: 100%; margin-bottom: 8px;">
+                        <div id="duty-replace-list" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Worker Actions Popover (right-click on tag) -->
+            <div id="duty-worker-popover" style="display:none; position:fixed; z-index: var(--z-system); background: var(--card-bg); border: 1px solid var(--border-color); border-radius: var(--radius-sm); box-shadow: var(--shadow-lg); padding: 4px; min-width: 160px;">
+                <button class="popover-action" data-action="remove" style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border: none; background: transparent; cursor: pointer; font-size: 0.8rem; color: var(--danger); text-align: left; border-radius: 4px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    Remove
+                </button>
+                <button class="popover-action" data-action="replace" style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border: none; background: transparent; cursor: pointer; font-size: 0.8rem; color: var(--text-main); text-align: left; border-radius: 4px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"></polyline><path d="M21 3l-7 7"></path><polyline points="9 21 3 21 3 15"></polyline><path d="M3 21l7-7"></path></svg>
+                    Replace
+                </button>
+            </div>
+        `;
+    }
+
+    /* ------ Event Listeners ------ */
+
+    function attachEventListeners() {
+        // Prev/Next date
+        document.getElementById('duty-prev-date')?.addEventListener('click', () => {
+            if (currentViewMode === 'week') {
+                currentDate = new Date(currentDate);
+                currentDate.setDate(currentDate.getDate() - 7);
+            } else if (currentViewMode === 'roster') {
+                currentDate = new Date(currentDate);
+                currentDate.setDate(currentDate.getDate() - 1);
+            } else {
+                currentDate = new Date(currentDate);
+                currentDate.setMonth(currentDate.getMonth() - 1);
+            }
+            renderCalendar();
+        });
+
+        document.getElementById('duty-next-date')?.addEventListener('click', () => {
+            if (currentViewMode === 'week') {
+                currentDate = new Date(currentDate);
+                currentDate.setDate(currentDate.getDate() + 7);
+            } else if (currentViewMode === 'roster') {
+                currentDate = new Date(currentDate);
+                currentDate.setDate(currentDate.getDate() + 1);
+            } else {
+                currentDate = new Date(currentDate);
+                currentDate.setMonth(currentDate.getMonth() + 1);
+            }
+            renderCalendar();
+        });
+
+        document.getElementById('duty-today')?.addEventListener('click', () => {
+            currentDate = new Date();
+            renderCalendar();
+        });
+
+        // Week/Month toggle
+        document.getElementById('btn-view-week')?.addEventListener('click', (e) => {
+            if (currentViewMode === 'week') return;
+            currentViewMode = 'week';
+            const monthBtn = document.getElementById('btn-view-month');
+            e.target.style.background = 'var(--bg-color)';
+            e.target.style.border = '1px solid var(--border-color)';
+            e.target.style.color = 'var(--text-main)';
+            monthBtn.style.background = 'transparent';
+            monthBtn.style.border = 'none';
+            monthBtn.style.color = 'var(--text-muted)';
+            renderCalendar();
+        });
+
+        document.getElementById('btn-view-month')?.addEventListener('click', (e) => {
+            if (currentViewMode === 'month') return;
+            currentViewMode = 'month';
+            const weekBtn = document.getElementById('btn-view-week');
+            e.target.style.background = 'var(--bg-color)';
+            e.target.style.border = '1px solid var(--border-color)';
+            e.target.style.color = 'var(--text-main)';
+            weekBtn.style.background = 'transparent';
+            weekBtn.style.border = 'none';
+            weekBtn.style.color = 'var(--text-muted)';
+            currentDate = new Date(currentDate);
+            currentDate.setDate(1);
+            renderCalendar();
+        });
+
+        document.getElementById('btn-view-roster')?.addEventListener('click', (e) => {
+            if (currentViewMode === 'roster') return;
+            currentViewMode = 'roster';
+            const weekBtn = document.getElementById('btn-view-week');
+            const monthBtn = document.getElementById('btn-view-month');
+            e.target.style.background = 'var(--bg-color)';
+            e.target.style.border = '1px solid var(--border-color)';
+            e.target.style.color = 'var(--text-main)';
+            if (weekBtn) {
+                weekBtn.style.background = 'transparent';
+                weekBtn.style.border = 'none';
+                weekBtn.style.color = 'var(--text-muted)';
+            }
+            if (monthBtn) {
+                monthBtn.style.background = 'transparent';
+                monthBtn.style.border = 'none';
+                monthBtn.style.color = 'var(--text-muted)';
+            }
+            renderCalendar();
+        });
+
+        // Expand/Collapse calendar view
+        document.getElementById('btn-toggle-expand')?.addEventListener('click', (e) => {
+            const workspace = document.getElementById('duty-calendar-workspace');
+            const sidebar = document.getElementById('duty-sidebar');
+            const btn = document.getElementById('btn-toggle-expand');
+            if (!workspace || !sidebar || !btn) return;
+
+            const isExpanded = workspace.classList.contains('expanded');
+            const span = btn.querySelector('span');
+            const svg = btn.querySelector('svg');
+
+            if (isExpanded) {
+                // Collapse / show sidebar
+                workspace.classList.remove('expanded');
+                sidebar.style.marginLeft = '0px';
+                sidebar.style.opacity = '1';
+                sidebar.style.pointerEvents = 'auto';
+                if (span) span.textContent = 'Expand';
+                if (svg) {
+                    svg.innerHTML = `
+                        <polyline points="15 3 21 3 21 9"></polyline>
+                        <polyline points="9 21 3 21 3 15"></polyline>
+                        <line x1="21" y1="3" x2="14" y2="10"></line>
+                        <line x1="3" y1="21" x2="10" y2="14"></line>
+                    `;
+                }
+            } else {
+                // Expand / hide sidebar
+                workspace.classList.add('expanded');
+                sidebar.style.marginLeft = '-266px'; // 250px width + 16px gap
+                sidebar.style.opacity = '0';
+                sidebar.style.pointerEvents = 'none';
+                if (span) span.textContent = 'Collapse';
+                if (svg) {
+                    svg.innerHTML = `
+                        <polyline points="4 14 10 14 10 20"></polyline>
+                        <polyline points="20 10 14 10 14 4"></polyline>
+                        <line x1="14" y1="10" x2="21" y2="3"></line>
+                        <line x1="10" y1="14" x2="3" y2="21"></line>
+                    `;
+                }
+            }
+        });
+
+        // Add area
+        document.getElementById('btn-add-duty-area')?.addEventListener('click', () => {
+            const titleEl = document.getElementById('duty-area-modal-title');
+            if (titleEl) titleEl.textContent = 'Add Duty Area';
+            const formEl = document.getElementById('duty-area-form');
+            if (formEl) formEl.reset();
+            const idEl = document.getElementById('duty-area-id');
+            if (idEl) idEl.value = '';
+            const colorEl = document.getElementById('duty-area-color');
+            if (colorEl) colorEl.value = _getNextColor();
+            const shiftEl = document.getElementById('duty-area-shift');
+            if (shiftEl) shiftEl.value = '22:00-06:00';
+            const modalEl = document.getElementById('duty-area-modal');
+            if (modalEl) { if (window.trapFocus) window.trapFocus(modalEl); modalEl.classList.add('active'); }
+        });
+
+        // Area form submit
+        document.getElementById('duty-area-form')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                const idEl = document.getElementById('duty-area-id');
+                const nameEl = document.getElementById('duty-area-name');
+                const workersEl = document.getElementById('duty-area-workers');
+                const colorEl = document.getElementById('duty-area-color');
+                const shiftEl = document.getElementById('duty-area-shift');
+                const modalEl = document.getElementById('duty-area-modal');
+                if (!idEl || !nameEl || !workersEl || !colorEl || !shiftEl || !modalEl) return;
+                const isNew = !idEl.value;
+                const id = idEl.value || safeUUID();
+                const name = nameEl.value.trim();
+                const workersNeeded = parseInt(workersEl.value, 10);
+                const color = colorEl.value;
+                const shiftTime = shiftEl.value.trim();
+
+                // Preserve existing fields when editing
+                let existing = null;
+                if (!isNew) {
+                    await window.dbStores.duty_areas.iterate(a => { if (a.id === id) existing = a; });
+                }
+
+                const area = {
+                    id,
+                    name,
+                    workersNeeded,
+                    color: color || '#3b82f6',
+                    shiftTime: shiftTime || '22:00-06:00',
+                    roster: existing?.roster || [],
+                    lastRotationIndex: existing?.lastRotationIndex ?? 0
+                };
+
+                await window.dbStores.duty_areas.setItem(id, area);
+                releaseFocusTrap();
+                modalEl.classList.remove('active');
+                if (window.markBadgesDirty) window.markBadgesDirty();
+                await loadData();
+
+                if (isNew) {
+                    selectedAreaId = id;
+                    await renderCalendar();
+                    setTimeout(async () => {
+                        if (await showConfirm(`Roster for "${name}" is empty. Set one up now?`)) {
+                            openAreaRosterModal(id);
+                        }
+                    }, 300);
+                }
+            } catch (err) {
+                console.error('Failed to save duty area:', err);
+                showToast('Failed to save area. Check console for details.');
+            }
+        });
+
+        // Roster search
+        document.getElementById('duty-roster-search')?.addEventListener('input', debounce((e) => {
+            const q = e.target.value.toLowerCase();
+            document.querySelectorAll('.roster-candidate-item').forEach(el => {
+                const text = el.textContent.toLowerCase();
+                el.style.display = text.includes(q) ? 'flex' : 'none';
+            });
+        }, 150));
+
+        // Save roster
+        document.getElementById('btn-save-roster')?.addEventListener('click', saveAreaRoster);
+
+        // Generate week schedule
+        document.getElementById('btn-gen-week')?.addEventListener('click', requestWeekGeneration);
+
+        // Print
+        document.getElementById('btn-print-duty')?.addEventListener('click', () => {
+            const html = _buildPrintHtml();
+            if (html) safePrint(html);
+        });
+
+        // Clear Day
+        document.getElementById('btn-clear-day')?.addEventListener('click', () => clearSchedules('day'));
+
+        // Clear Week
+        document.getElementById('btn-clear-week')?.addEventListener('click', () => clearSchedules('week'));
+
+        // Delegated: area tab clicks
+        document.getElementById('duty-area-tabs')?.addEventListener('click', (e) => {
+            const tab = e.target.closest('.duty-tab');
+            if (!tab) return;
+            const areaId = tab.dataset.areaId;
+            if (areaId) switchArea(areaId);
+        });
+
+        // Delegated: sidebar area clicks
+        document.getElementById('duty-areas-list')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-area-id]');
+            if (btn) {
+                e.stopPropagation();
+                const areaId = btn.dataset.areaId;
+                const area = _areas.find(a => a.id === areaId);
+                if (!area) return;
+
+                if (btn.classList.contains('btn-area-roster')) {
+                    openAreaRosterModal(areaId);
+                } else if (btn.classList.contains('btn-area-edit')) {
+                    const titleEl = document.getElementById('duty-area-modal-title');
+                    if (titleEl) titleEl.textContent = 'Edit Duty Area';
+                    const idEl = document.getElementById('duty-area-id');
+                    if (idEl) idEl.value = area.id;
+                    const nameEl = document.getElementById('duty-area-name');
+                    if (nameEl) nameEl.value = area.name;
+                    const workersEl = document.getElementById('duty-area-workers');
+                    if (workersEl) workersEl.value = area.workersNeeded;
+                    const colorEl = document.getElementById('duty-area-color');
+                    if (colorEl) colorEl.value = area.color || '#3b82f6';
+                    const shiftEl = document.getElementById('duty-area-shift');
+                    if (shiftEl) shiftEl.value = area.shiftTime || '22:00-06:00';
+                    const modalEl = document.getElementById('duty-area-modal');
+                    if (modalEl) { if (window.trapFocus) window.trapFocus(modalEl); modalEl.classList.add('active'); }
+                } else if (btn.classList.contains('btn-area-delete')) {
+                    _deleteDutyArea(area);
+                }
+                return;
+            }
+            // Click on sidebar area row &rarr; switch area
+            const row = e.target.closest('.duty-sidebar-area');
+            if (row && row.dataset.areaId) {
+                switchArea(row.dataset.areaId);
+            }
+        });
+
+        // Click empty slot in calendar
+        document.getElementById('duty-calendar-grid')?.addEventListener('click', (e) => {
+            const slot = e.target.closest('.duty-cal-empty-slot');
+            if (slot) {
+                const dateStr = slot.dataset.date;
+                const areaId = slot.dataset.areaId;
+                _handleEmptySlotClick(dateStr, areaId);
+                return;
+            }
+            const tag = e.target.closest('.duty-cal-worker-tag');
+            if (tag && !e.target.closest('svg')) {
+                const aNumber = parseInt(tag.dataset.anumber, 10);
+                const dateStr = tag.dataset.date;
+                _handleWorkerTagClick(aNumber, dateStr, e);
+                return;
+            }
+
+            // Click month cell in combined view
+            const monthCell = e.target.closest('.duty-cal-cell-month');
+            if (monthCell) {
+                const dateStr = monthCell.dataset.date;
+                if (dateStr) {
+                    currentDate = new Date(dateStr);
+                    currentViewMode = 'week';
+
+                    const weekBtn = document.getElementById('btn-view-week');
+                    const monthBtn = document.getElementById('btn-view-month');
+                    if (weekBtn && monthBtn) {
+                        weekBtn.style.background = 'var(--bg-color)';
+                        weekBtn.style.border = '1px solid var(--border-color)';
+                        weekBtn.style.color = 'var(--text-main)';
+                        monthBtn.style.background = 'transparent';
+                        monthBtn.style.border = 'none';
+                        monthBtn.style.color = 'var(--text-muted)';
+                    }
+                    renderCalendar();
+                }
+            }
+        });
+
+        // Left-click on empty slot or worker tag &rarr; action modal
+        document.getElementById('duty-calendar-grid')?.addEventListener('dblclick', (e) => {
+            const slot = e.target.closest('.duty-cal-empty-slot');
+            if (slot) {
+                e.preventDefault();
+                const dateStr = slot.dataset.date;
+                const areaId = slot.dataset.areaId;
+                openAssignWorkerModal(dateStr, areaId);
+                return;
+            }
+            const tag = e.target.closest('.duty-cal-worker-tag');
+            if (tag && !e.target.closest('svg')) {
+                e.preventDefault();
+                const aNumber = parseInt(tag.dataset.anumber, 10);
+                const dateStr = tag.dataset.date;
+                _handleWorkerTagClick(aNumber, dateStr, e);
+                return;
+            }
+        });
+
+        // Assign modal: search + worker list
+        document.getElementById('duty-assign-search')?.addEventListener('input', debounce((e) => {
+            const q = e.target.value.toLowerCase();
+            document.querySelectorAll('#duty-assign-list .assign-candidate-item').forEach(el => {
+                const text = el.textContent.toLowerCase();
+                el.style.display = text.includes(q) ? 'flex' : 'none';
+            });
+        }, 150));
+
+        document.getElementById('duty-replace-search')?.addEventListener('input', debounce((e) => {
+            const q = e.target.value.toLowerCase();
+            document.querySelectorAll('#duty-replace-list .replace-candidate-item').forEach(el => {
+                const text = el.textContent.toLowerCase();
+                el.style.display = text.includes(q) ? 'flex' : 'none';
+            });
+        }, 150));
+
+        // Delegated: assign/replace worker from modals
+        document.getElementById('duty-assign-list')?.addEventListener('click', (e) => {
+            const item = e.target.closest('.assign-candidate-item');
+            if (item && !item.getAttribute('data-blocked')) {
+                const aNumber = parseInt(item.dataset.aNumber, 10);
+                const dateStr = _pendingAssign.dateStr;
+                const areaId = _pendingAssign.areaId;
+                closeAllModals(['duty-assign-modal']);
+                assignWorker(dateStr, areaId, aNumber);
+            }
+        });
+
+        document.getElementById('duty-replace-list')?.addEventListener('click', (e) => {
+            const item = e.target.closest('.replace-candidate-item');
+            if (item && !item.getAttribute('data-blocked')) {
+                const newANumber = parseInt(item.dataset.aNumber, 10);
+                oldANumber = _pendingReplace.anumber;
+                const dateStr = _pendingReplace.dateStr;
+                closeAllModals(['duty-replace-modal']);
+                replaceWorker(dateStr, oldANumber, newANumber);
+            }
+        });
+
+        // Worker popover actions (right-click or middle-click on tag)
+        document.getElementById('duty-worker-popover')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('.popover-action');
+            if (!btn) return;
+            closePopover();
+            const action = btn.dataset.action;
+            if (action === 'remove') {
+                removeWorker(_pendingTag.dateStr, _pendingTag.anumber);
+            } else if (action === 'replace') {
+                openReplaceModal(_pendingTag.dateStr, _pendingTag.anumber);
+            }
+        });
+
+        // Close popover on scroll outside
+        document.addEventListener('click', (e) => {
+            const popover = document.getElementById('duty-worker-popover');
+            if (popover && popover.style.display !== 'none' && !popover.contains(e.target)) {
+                closePopover();
+            }
+        });
+    }
+
+    /* ------ Data Loading ------ */
+
+    async function loadData() {
+        _workers = typeof workersData !== 'undefined' ? workersData : [];
+
+        // Load schedules from storage only when dirty (avoids IndexedDB read on every tab switch)
+        if (_dirty || _schedules.length === 0) {
+            _schedules = await window._storage.get('wc_duty_schedules') || [];
+            _dirty = false;
+        }
+
+        // Always reload areas (they may have changed independently)
+        _areas = [];
+        await window.dbStores.duty_areas.iterate(a => {
+            if (!a.color) a.color = '#3b82f6';
+            if (!a.shiftTime) a.shiftTime = '22:00-06:00';
+            if (a.lastRotationIndex === undefined) a.lastRotationIndex = 0;
+            if (!a.roster) a.roster = [];
+            _areas.push(a);
+        });
+
+        renderAreaTabs();
+        renderSidebarAreas();
+
+        // Auto-select if none selected or area was deleted
+        if (!selectedAreaId || (selectedAreaId !== 'combined' && !_areas.find(a => a.id === selectedAreaId))) {
+            selectedAreaId = _areas.length > 0 ? _areas[0].id : null;
+        }
+
+        renderCalendar();
+    }
+
+    /* ------ Area Tabs ------ */
+
+    function renderAreaTabs() {
+        const tabsEl = document.getElementById('duty-area-tabs');
+        if (!tabsEl) return;
+
+        if (_areas.length === 0) {
+            tabsEl.innerHTML = '<div style="color: var(--text-muted); font-size: 0.8rem; padding: 8px 0;">No areas defined. Click "+ Add" to create one.</div>';
+            return;
+        }
+
+        const isCombinedActive = selectedAreaId === 'combined';
+        let html = `
+            <button class="duty-tab ${isCombinedActive ? 'active' : ''}" data-area-id="combined" title="Combined calendar view of all areas">
+                <span class="duty-tab-dot" style="background: #64748b;"></span>
+                <span>All Areas</span>
+            </button>
+        `;
+
+        html += [..._areas].sort((a, b) => window.areaPriorityComparator(a.name, b.name)).map(area => {
+            const isActive = area.id === selectedAreaId;
+            const rosterCount = (area.roster || []).length;
+            const color = area.color || '#3b82f6';
+            return `
+                <button class="duty-tab ${isActive ? 'active' : ''}" data-area-id="${area.id}" title="${esc(area.name)} - ${rosterCount} worker${rosterCount !== 1 ? 's' : ''} in roster">
+                    <span class="duty-tab-dot" style="background: ${color};"></span>
+                    <span>${esc(area.name)}</span>
+                    <span class="duty-tab-badge">${rosterCount}</span>
+                </button>
+            `;
+        }).join('');
+
+        tabsEl.innerHTML = html;
+    }
+
+    /* --- Sidebar Area List --- */
+
+    function renderSidebarAreas() {
+        const listEl = document.getElementById('duty-areas-list');
+        if (!listEl) return;
+
+        if (_areas.length === 0) {
+            listEl.innerHTML = '<div style="color: var(--text-muted); font-size: 0.8rem; text-align: center; padding: 10px 0;">No areas defined.</div>';
+            return;
+        }
+
+        listEl.innerHTML = [..._areas].sort((a, b) => window.areaPriorityComparator(a.name, b.name)).map(area => {
+            const rosterCount = (area.roster || []).length;
+            const hasRoster = rosterCount > 0;
+            const isSelected = area.id === selectedAreaId;
+            const color = area.color || '#3b82f6';
+            return `
+                <div class="duty-sidebar-area ${isSelected ? 'selected' : ''}" data-area-id="${area.id}">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;">
+                            <span style="width: 8px; height: 8px; border-radius: 50%; background: ${color}; flex-shrink: 0;"></span>
+                            <span style="font-size: 0.82rem; font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${esc(area.name)}</span>
+                        </div>
+                        <div style="display: flex; gap: 3px; flex-shrink: 0;">
+                            <button class="btn-area-roster" data-area-id="${area.id}" style="background: transparent; border: 1px solid var(--border-color); border-radius: 4px; padding: 1px 5px; cursor: pointer; color: var(--primary-color); display: inline-flex; align-items: center;" title="Select workers for this area" aria-label="Select workers for this area">${ctxGroupSvg}</button>
+                            <button class="btn-area-edit" data-area-id="${area.id}" style="background: transparent; border: 1px solid var(--border-color); border-radius: 4px; padding: 1px 5px; cursor: pointer; color: var(--text-muted); display: inline-flex; align-items: center;" title="Edit area" aria-label="Edit area">${ctxEditSvg}</button>
+                            <button class="btn-area-delete" data-area-id="${area.id}" style="background: transparent; border: 1px solid #fca5a5; border-radius: 4px; padding: 1px 5px; cursor: pointer; color: var(--danger); display: inline-flex; align-items: center;" title="Delete area" aria-label="Delete area">${ctxArchiveSvg}</button>
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px; margin-top: 3px;">
+                        <span style="width: 6px; height: 6px; border-radius: 50%; background: ${hasRoster ? '#22c55e' : '#94a3b8'}; flex-shrink: 0;"></span>
+                        <span style="font-size: 0.65rem; color: var(--text-muted);">${hasRoster ? `${rosterCount} worker${rosterCount !== 1 ? 's' : ''}` : 'No roster'}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    /* --- Area Switch --- */
+
+    function switchArea(areaId) {
+        if (areaId === selectedAreaId) return;
+        selectedAreaId = areaId;
+        renderAreaTabs();
+        renderSidebarAreas();
+        renderCalendar();
+    }
+
+    /* --- Calendar View --- */
+
+    async function renderCalendar() {
+        try {
+            const gridEl = document.getElementById('duty-calendar-grid');
+            const labelEl = document.getElementById('duty-selected-area-label');
+            const dateLabel = document.getElementById('duty-current-date-label');
+            if (!gridEl) return;
+
+            if (!selectedAreaId || _areas.length === 0) {
+                gridEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.9rem;">Add a duty area to get started.</div>';
+                if (labelEl) labelEl.textContent = '';
+                if (dateLabel) dateLabel.textContent = '';
+                return;
+            }
+
+            // Refresh schedules data
+            _schedules = await window._storage.get('wc_duty_schedules') || [];
+
+            if (selectedAreaId === 'combined') {
+                if (labelEl) {
+                    labelEl.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#64748b;margin-right:6px;vertical-align:middle;"></span> Combined View - All Areas`;
+                }
+                if (currentViewMode === 'week') {
+                    renderCombinedWeekView(gridEl, dateLabel);
+                } else if (currentViewMode === 'roster') {
+                    renderCombinedRosterView(gridEl, dateLabel);
+                } else {
+                    renderCombinedMonthView(gridEl, dateLabel);
+                }
+                return;
+            }
+
+            const area = _areas.find(a => a.id === selectedAreaId);
+            if (!area) {
+                gridEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.9rem;">Select an area.</div>';
+                if (labelEl) labelEl.textContent = '';
+                if (dateLabel) dateLabel.textContent = '';
+                return;
+            }
+
+            if (labelEl) {
+                const color = area.color || '#3b82f6';
+                labelEl.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle;"></span> ${esc(area.name)} - ${esc(area.shiftTime || '22:00-06:00')} (${area.workersNeeded} needed)`;
+            }
+
+            if (currentViewMode === 'week') {
+                renderWeekView(gridEl, dateLabel, area);
+            } else if (currentViewMode === 'roster') {
+                renderRosterView(gridEl, dateLabel, area);
+            } else {
+                renderMonthView(gridEl, dateLabel, area);
+            }
+        } catch (err) {
+            console.error('Failed to render duty calendar:', err);
+            const gridEl = document.getElementById('duty-calendar-grid');
+            if (gridEl) {
+                gridEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--danger-color);font-size:0.9rem;">Error loading calendar schedules.</div>';
+            }
+        }
+    }
+
+    function hexToRgba(hex, alpha) {
+        const c = hex.replace('#', '');
+        const r = parseInt(c.substring(0, 2), 16);
+        const g = parseInt(c.substring(2, 4), 16);
+        const b = parseInt(c.substring(4, 6), 16);
+        return `rgba(${r},${g},${b},${alpha})`;
+    }
+
+    /* ------ Week View ------ */
+
+    function renderWeekView(gridEl, dateLabel, area) {
+        // Snap currentDate to Monday of its week
+        const monday = _getMonday(currentDate);
+        const dates = [];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(monday);
+            d.setDate(monday.getDate() + i);
+            dates.push(d);
+        }
+
+        // Build date label
+        const first = dates[0];
+        const last = dates[6];
+        const monthNames = ["January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ];
+        const firstMonth = first.getMonth();
+        const lastMonth = last.getMonth();
+        let label;
+        if (firstMonth === lastMonth) {
+            label = `${first.getDate()} - ${last.getDate()} ${monthNames[firstMonth].substring(0,3)} ${first.getFullYear()}`;
+        } else {
+            label = `${first.getDate()} ${monthNames[firstMonth].substring(0,3)} - ${last.getDate()} ${monthNames[lastMonth].substring(0,3)} ${first.getFullYear()}`;
+        }
+        dateLabel.textContent = label;
+
+        const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const todayStr = todayLocal();
+        const workerMap = _workers.reduce((m, w) => { m[w.aNumber] = w; return m; }, {});
+
+        let html = '<div class="duty-cal-header">';
+        html += '<div class="duty-cal-weekdays">';
+        dayNames.forEach(d => { html += `<div class="duty-cal-weekday">${d}</div>`; });
+        html += '</div></div>';
+
+        html += '<div class="duty-cal-grid">';
+
+        for (let i = 0; i < 7; i++) {
+            const date = dates[i];
+            const dateStr = getFormattedDateStr(date);
+            const isWeekend = date.getDay() % 6 === 0;
+            const isToday = dateStr === todayStr;
+
+            const daySched = _schedules.find(s => s.dateStr === dateStr);
+            const dayAssignments = daySched ? daySched.assignments.filter(a => a.areaId === area.id) : [];
+
+            html += `<div class="duty-cal-cell ${isWeekend ? 'weekend' : ''} ${isToday ? 'duty-cal-cell-today' : ''}" style="border-top:2px solid ${area.color};" data-date="${dateStr}">`;
+            html += `<div class="duty-cal-day-label">${date.getDate()}</div>`;
+            html += `<div class="duty-cal-worker-list">`;
+
+            // Show assigned workers
+            var displayNames = _disambiguateSurnames(dayAssignments, workerMap);
+            dayAssignments.forEach(a => {
+                const w = workerMap[a.aNumber];
+                const wName = w ? w.name : `#${a.aNumber}`;
+                const initial = w ? w.name.charAt(0) : '?';
+                const trade = w ? (w.trade || '') : '';
+                const tradeStyle = getTradeStyle(trade);
+                const isAuto = !a.overrideReason;
+                var label = displayNames[a.aNumber] || wName.split(',')[0];
+                html += `
+                    <div class="duty-cal-worker-tag" data-anumber="${a.aNumber}" data-date="${dateStr}" data-area="${area.id}"
+                         style="background: ${tradeStyle.bg}; color: ${tradeStyle.text};"
+                         title="${esc(wName)} - ${isAuto ? 'Auto-assigned' : 'Manual: ' + esc(a.overrideReason)}">
+                        <span style="width:16px;height:16px;border-radius:50%;background:${tradeStyle.text}22;display:flex;align-items:center;justify-content:center;font-size:0.55rem;font-weight:800;flex-shrink:0;">${initial}</span>
+                        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span>
+                        ${!isAuto ? '<span style="font-size:0.55rem;opacity:0.6;" title="Manual override">&#9998;</span>' : ''}
+                    </div>
+                `;
+            });
+
+            // Fill remaining slots (empty)
+            const assignedCount = dayAssignments.length;
+            const needed = area.workersNeeded;
+            for (let j = assignedCount; j < needed; j++) {
+                html += `<div class="duty-cal-empty-slot" data-date="${dateStr}" data-area-id="${area.id}" title="Click to assign a worker">+</div>`;
+            }
+
+            html += `</div></div>`;
+        }
+
+        html += '</div>';
+        gridEl.innerHTML = html;
+    }
+
+    /* ------ Month View ------ */
+
+    function renderMonthView(gridEl, dateLabel, area) {
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth();
+        const monthNames = ["January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ];
+        dateLabel.textContent = `${monthNames[month]} ${year}`;
+
+        const firstDay = new Date(year, month, 1);
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const startOffset = (firstDay.getDay() + 6) % 7; // Monday=0
+
+        const todayStr = todayLocal();
+        const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const workerMap = _workers.reduce((m, w) => { m[w.aNumber] = w; return m; }, {});
+
+        let html = '<div class="duty-cal-header">';
+        html += '<div class="duty-cal-weekdays">';
+        dayNames.forEach(d => { html += `<div class="duty-cal-weekday">${d}</div>`; });
+        html += '</div></div>';
+
+        html += '<div class="duty-cal-grid">';
+
+        // Empty cells before first day
+        for (let i = 0; i < startOffset; i++) {
+            html += `<div style="border:none;"></div>`;
+        }
+
+        for (let day = 1; day <= daysInMonth; day++) {
+            const date = new Date(year, month, day);
+            const dateStr = getFormattedDateStr(date);
+            const isWeekend = date.getDay() % 6 === 0;
+            const isToday = dateStr === todayStr;
+
+            const daySched = _schedules.find(s => s.dateStr === dateStr);
+            const dayAssignments = daySched ? daySched.assignments.filter(a => a.areaId === area.id) : [];
+            const count = dayAssignments.length;
+            const needed = area.workersNeeded;
+
+            html += `<div class="duty-cal-cell duty-cal-cell-month ${isWeekend ? 'weekend' : ''} ${isToday ? 'duty-cal-cell-today' : ''}" style="border-top:2px solid ${area.color};" data-date="${dateStr}">`;
+            html += `<div class="duty-cal-day-label">${day}</div>`;
+
+            if (count > 0) {
+                // Show first worker name, then "+N more"
+                var monthDisplayNames = _disambiguateSurnames(dayAssignments, workerMap);
+                const w = workerMap[dayAssignments[0].aNumber];
+                const firstName = monthDisplayNames[dayAssignments[0].aNumber] || (w ? w.name.split(',')[0] : `#${dayAssignments[0].aNumber}`);
+                html += `<div class="duty-cal-worker-name" title="${esc(w ? w.name : '')}">${esc(firstName)}</div>`;
+                if (count > 1) {
+                    html += `<div style="font-size:0.6rem;color:var(--text-muted);">+${count - 1} more</div>`;
+                }
+            } else {
+                html += `<div class="duty-cal-count">${needed > 0 ? '0/' + needed : ''}</div>`;
+            }
+
+            html += `</div>`;
+        }
+
+        html += '</div>';
+        gridEl.innerHTML = html;
+    }
+
+    /* ------ Helpers ------ */
+
+    function _getMonday(date) {
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = (day === 0 ? 6 : day - 1); // Mon=0
+        d.setDate(d.getDate() - diff);
+        d.setHours(0, 0, 0, 0);
+        return d;
+    }
+
+    function _getNextColor() {
+        const colors = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'];
+        const used = _areas.map(a => a.color).filter(Boolean);
+        for (const c of colors) {
+            if (!used.includes(c)) return c;
+        }
+        return colors[Math.floor(Math.random() * colors.length)];
+    }
+
+    function _disambiguateSurnames(assignments, workerMap) {
+        const display = {};
+        const groups = {};
+        assignments.forEach(function(a) {
+            const w = workerMap[a.aNumber];
+            const fullName = w ? w.name : '#' + a.aNumber;
+            var surnameRaw = fullName.split(',')[0].trim();
+            var key = surnameRaw.toUpperCase();
+            if (!groups[key]) groups[key] = { surname: surnameRaw, workers: [] };
+            var given = fullName.indexOf(',') !== -1 ? fullName.split(',').slice(1).join(',').trim() : '';
+            groups[key].workers.push({ assignment: a, given: given });
+        });
+        Object.keys(groups).forEach(function(key) {
+            var g = groups[key];
+            if (g.workers.length === 1) {
+                display[g.workers[0].assignment.aNumber] = g.surname;
+                return;
+            }
+            g.workers.forEach(function(w, idx) {
+                var given = w.given;
+                var label = g.surname;
+                for (var len = 1; len <= given.length; len++) {
+                    var prefix = given.substring(0, len);
+                    var collision = false;
+                    for (var oi = 0; oi < g.workers.length; oi++) {
+                        if (oi !== idx && g.workers[oi].given.substring(0, len) === prefix) { collision = true; break; }
+                    }
+                    if (!collision) { label = g.surname + ' ' + prefix; break; }
+                }
+                if (label === g.surname && given.length > 0) label = g.surname + ' ' + given;
+                display[w.assignment.aNumber] = label;
+            });
+        });
+        return display;
+    }
+
+    function _handleEmptySlotClick(dateStr, areaId) {
+        openAssignWorkerModal(dateStr, areaId);
+    }
+
+    function _handleWorkerTagClick(aNumber, dateStr, e) {
+        _pendingTag = { anumber: aNumber, dateStr };
+        const popover = document.getElementById('duty-worker-popover');
+        if (!popover) return;
+
+        const rect = e.target.getBoundingClientRect();
+        popover.style.display = 'block';
+
+        let left = rect.left + window.scrollX;
+        let top = rect.bottom + window.scrollY;
+
+        if (left + 160 > window.innerWidth) {
+            left = rect.right - 160 + window.scrollX;
+        }
+
+        popover.style.left = `${left}px`;
+        popover.style.top = `${top}px`;
+
+        e.stopPropagation();
+    }
+
+    function closePopover() {
+        const popover = document.getElementById('duty-worker-popover');
+        if (popover) popover.style.display = 'none';
+    }
+
+    function closeAllModals(exclude = []) {
+        const modals = ['duty-assign-modal', 'duty-replace-modal', 'duty-roster-modal', 'duty-area-modal', 'duty-override-modal'];
+        modals.forEach(id => {
+            if (!exclude.includes(id)) {
+                releaseFocusTrap();
+                document.getElementById(id)?.classList.remove('active');
+            }
+        });
+    }
+
+    function openAssignWorkerModal(dateStr, areaId) {
+        _pendingAssign = { dateStr, areaId };
+        const area = _areas.find(a => a.id === areaId);
+        if (!area) return;
+
+        const assignLabel = document.getElementById('duty-assign-date-label');
+        if (assignLabel) assignLabel.textContent = `Assign worker for ${area.name} on ${dateStr}`;
+        const assignSearch = document.getElementById('duty-assign-search');
+        if (assignSearch) assignSearch.value = '';
+
+        const listEl = document.getElementById('duty-assign-list');
+        if (!listEl) return;
+
+        const daySched = _schedules.find(s => s.dateStr === dateStr);
+        const assignedANumbers = daySched ? daySched.assignments.map(a => a.aNumber) : [];
+
+        const availableWorkers = _workers.filter(w => !assignedANumbers.includes(w.aNumber));
+
+        const roster = area.roster || [];
+        availableWorkers.sort((a, b) => {
+            const inRosterA = roster.includes(a.aNumber);
+            const inRosterB = roster.includes(b.aNumber);
+            if (inRosterA && !inRosterB) return -1;
+            if (!inRosterA && inRosterB) return 1;
+            return a.name.localeCompare(b.name);
+        });
+
+        listEl.innerHTML = availableWorkers.map(w => {
+            const inRoster = roster.includes(w.aNumber);
+            const tradeStyle = getTradeStyle(w.trade);
+            const blocked = window.isWorkerBlockedFromArea ? window.isWorkerBlockedFromArea(w.aNumber, area.name) : false;
+            const status = window.getCovidStatusSync ? window.getCovidStatusSync(w.aNumber) : null;
+            
+            var statusBadge = '';
+            var blockedAttr = '';
+            var blockedStyle = '';
+            if (blocked && status) {
+                var stateLabel = status.state === 'isolated' ? 'Isolated' : status.state === 'pending_assessment' ? 'Pending Assessment' : 'Blocked';
+                statusBadge = `<span style="font-size: 0.65rem; background: #fee2e2; color: #dc2626; padding: 2px 6px; border-radius: 4px; font-weight: 600; margin-left: auto;">${stateLabel}</span>`;
+                blockedAttr = 'data-blocked="true"';
+                blockedStyle = 'opacity: 0.55; cursor: not-allowed;';
+            } else if (inRoster) {
+                statusBadge = '<span style="font-size: 0.65rem; background: rgba(34, 197, 94, 0.15); color: #22c55e; padding: 2px 6px; border-radius: 4px; font-weight: 600;">Roster</span>';
+            }
+
+            return `
+                <div class="assign-candidate-item" data-a-number="${w.aNumber}" ${blockedAttr} style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; background: var(--card-bg); margin-bottom: 4px; ${blockedStyle}">
+                    <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+                       <span style="width: 24px; height: 24px; border-radius: 50%; background: ${tradeStyle.bg}; color: ${tradeStyle.text}; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700; flex-shrink: 0;">${w.name.charAt(0)}</span>
+                       <div style="min-width: 0; flex: 1;">
+                           <div style="font-weight: 600; font-size: 0.82rem; color: var(--text-main); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${esc(w.name)}</div>
+                           <div style="font-size: 0.65rem; color: var(--text-muted);">${esc(w.trade || 'Volunteer')}</div>
+                       </div>
+                    </div>
+                    ${statusBadge}
+                </div>
+            `;
+        }).join('');
+
+        if (availableWorkers.length === 0) {
+            listEl.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 12px; font-size: 0.8rem;">No available workers.</div>';
+        }
+
+        const assignModal = document.getElementById('duty-assign-modal');
+        if (assignModal) { if (window.trapFocus) window.trapFocus(assignModal); assignModal.classList.add('active'); }
+    }
+
+    async function assignWorker(dateStr, areaId, aNumber) {
+        try {
+            const area = _areas.find(a => a.id === areaId);
+            const areaName = area ? area.name : 'Unknown Area';
+            await updateScheduleAssignment(dateStr, aNumber, areaId, false, 'Manual Assignment');
+            await logAssignmentChange(aNumber, `Manually assigned to ${areaName} on ${dateStr}`);
+            showToast(`Assigned to ${areaName}`);
+        } catch (err) {
+            console.error('Failed to assign worker:', err);
+            showToast('Failed to assign worker. Database error.');
+        }
+    }
+
+    async function removeWorker(dateStr, aNumber) {
+        try {
+            if (await showConfirm('Remove this worker from duty on this day?')) {
+                await updateScheduleAssignment(dateStr, aNumber, null, true);
+                await logAssignmentChange(aNumber, `Removed from duty on ${dateStr}`);
+                showToast('Worker removed from schedule');
+            }
+        } catch (err) {
+            console.error('Failed to remove worker:', err);
+            showToast('Failed to remove worker. Database error.');
+        }
+    }
+
+    function openReplaceModal(dateStr, aNumber) {
+        _pendingReplace = { dateStr, anumber: aNumber };
+        const worker = _workers.find(w => w.aNumber === aNumber);
+        const workerName = worker ? worker.name : `#${aNumber}`;
+
+        const daySched = _schedules.find(s => s.dateStr === dateStr);
+        const assignment = daySched ? daySched.assignments.find(a => a.aNumber === aNumber) : null;
+        const areaId = assignment ? assignment.areaId : null;
+        const area = _areas.find(a => a.id === areaId);
+        if (!area) {
+            showToast('Assignment area not found.');
+            return;
+        }
+
+        const replaceInfo = document.getElementById('duty-replace-info');
+        if (replaceInfo) replaceInfo.textContent = `Replace ${workerName} for ${area.name} on ${dateStr}`;
+        const replaceSearch = document.getElementById('duty-replace-search');
+        if (replaceSearch) replaceSearch.value = '';
+
+        const listEl = document.getElementById('duty-replace-list');
+        if (!listEl) return;
+
+        const assignedANumbers = daySched ? daySched.assignments.map(a => a.aNumber) : [];
+        const availableWorkers = _workers.filter(w => w.aNumber !== aNumber && !assignedANumbers.includes(w.aNumber));
+
+        const roster = area.roster || [];
+        availableWorkers.sort((a, b) => {
+            const inRosterA = roster.includes(a.aNumber);
+            const inRosterB = roster.includes(b.aNumber);
+            if (inRosterA && !inRosterB) return -1;
+            if (!inRosterA && inRosterB) return 1;
+            return a.name.localeCompare(b.name);
+        });
+
+        listEl.innerHTML = availableWorkers.map(w => {
+            const inRoster = roster.includes(w.aNumber);
+            const tradeStyle = getTradeStyle(w.trade);
+            const blocked = window.isWorkerBlockedFromArea ? window.isWorkerBlockedFromArea(w.aNumber, area.name) : false;
+            const status = window.getCovidStatusSync ? window.getCovidStatusSync(w.aNumber) : null;
+            
+            var statusBadge = '';
+            var blockedAttr = '';
+            var blockedStyle = '';
+            if (blocked && status) {
+                var stateLabel = status.state === 'isolated' ? 'Isolated' : status.state === 'pending_assessment' ? 'Pending Assessment' : 'Blocked';
+                statusBadge = `<span style="font-size: 0.65rem; background: #fee2e2; color: #dc2626; padding: 2px 6px; border-radius: 4px; font-weight: 600; margin-left: auto;">${stateLabel}</span>`;
+                blockedAttr = 'data-blocked="true"';
+                blockedStyle = 'opacity: 0.55; cursor: not-allowed;';
+            } else if (inRoster) {
+                statusBadge = '<span style="font-size: 0.65rem; background: rgba(34, 197, 94, 0.15); color: #22c55e; padding: 2px 6px; border-radius: 4px; font-weight: 600;">Roster</span>';
+            }
+
+            return `
+                <div class="replace-candidate-item" data-a-number="${w.aNumber}" ${blockedAttr} style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; background: var(--card-bg); margin-bottom: 4px; ${blockedStyle}">
+                    <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+                       <span style="width: 24px; height: 24px; border-radius: 50%; background: ${tradeStyle.bg}; color: ${tradeStyle.text}; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700; flex-shrink: 0;">${w.name.charAt(0)}</span>
+                       <div style="min-width: 0; flex: 1;">
+                           <div style="font-weight: 600; font-size: 0.82rem; color: var(--text-main); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${esc(w.name)}</div>
+                           <div style="font-size: 0.65rem; color: var(--text-muted);">${esc(w.trade || 'Volunteer')}</div>
+                       </div>
+                    </div>
+                    ${statusBadge}
+                </div>
+            `;
+        }).join('');
+
+        if (availableWorkers.length === 0) {
+            listEl.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 12px; font-size: 0.8rem;">No available workers.</div>';
+        }
+
+        const replaceModal = document.getElementById('duty-replace-modal');
+        if (replaceModal) { if (window.trapFocus) window.trapFocus(replaceModal); replaceModal.classList.add('active'); }
+    }
+
+    async function replaceWorker(dateStr, oldANumber, newANumber) {
+        try {
+            let schedules = await window._storage.get('wc_duty_schedules') || [];
+            let daySched = schedules.find(s => s.dateStr === dateStr);
+            if (!daySched) return;
+
+            const assignmentIndex = daySched.assignments.findIndex(a => a.aNumber === oldANumber);
+            if (assignmentIndex === -1) return;
+
+            const areaId = daySched.assignments[assignmentIndex].areaId;
+            const area = _areas.find(a => a.id === areaId);
+            const areaName = area ? area.name : 'Unknown Area';
+
+            const oldWorker = _workers.find(w => w.aNumber === oldANumber);
+            const oldName = oldWorker ? oldWorker.name : `#${oldANumber}`;
+            const newWorker = _workers.find(w => w.aNumber === newANumber);
+            const newName = newWorker ? newWorker.name : `#${newANumber}`;
+
+            const reason = await showOverrideReasonModal(newName, dateStr);
+            if (reason === null) return;
+
+            daySched.assignments[assignmentIndex].aNumber = newANumber;
+            daySched.assignments[assignmentIndex].overrideReason = reason;
+            daySched.assignments[assignmentIndex].assignedAt = new Date().toISOString();
+
+            try {
+            await window.dbStores.duty_schedules.setAll(schedules);
+            } catch (e) {
+                console.error('Failed to save schedule after replacement:', e);
+                showToast('Failed to save replacement. Database error.');
+                return;
+            }
+
+            if (window.markBadgesDirty) window.markBadgesDirty();
+            _schedules = schedules;
+
+            await logAssignmentChange(oldANumber, `Replaced by ${newName} on ${dateStr} in ${areaName}. Reason: ${reason}`);
+            await logAssignmentChange(newANumber, `Replaced ${oldName} on ${dateStr} in ${areaName}. Reason: ${reason}`);
+
+            showToast(`Replaced ${oldName} with ${newName}`);
+            await renderCalendar();
+        } catch (err) {
+            console.error('Failed to replace worker on duty:', err);
+            showToast('Failed to replace worker. Database error.');
+        }
+    }
+
+    function renderCombinedWeekView(gridEl, dateLabel) {
+        const monday = _getMonday(currentDate);
+        const dates = [];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(monday);
+            d.setDate(monday.getDate() + i);
+            dates.push(d);
+        }
+
+        const first = dates[0];
+        const last = dates[6];
+        const monthNames = ["January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ];
+        const firstMonth = first.getMonth();
+        const lastMonth = last.getMonth();
+        let label;
+        if (firstMonth === lastMonth) {
+            label = `${first.getDate()} - ${last.getDate()} ${monthNames[firstMonth].substring(0,3)} ${first.getFullYear()}`;
+        } else {
+            label = `${first.getDate()} ${monthNames[firstMonth].substring(0,3)} - ${last.getDate()} ${monthNames[lastMonth].substring(0,3)} ${first.getFullYear()}`;
+        }
+        dateLabel.textContent = label;
+
+        const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const todayStr = todayLocal();
+        const workerMap = _workers.reduce((m, w) => { m[w.aNumber] = w; return m; }, {});
+
+        let html = '<div class="duty-cal-header">';
+        html += '<div class="duty-cal-weekdays">';
+        dayNames.forEach(d => { html += `<div class="duty-cal-weekday">${d}</div>`; });
+        html += '</div></div>';
+
+        html += '<div class="duty-cal-grid">';
+
+        for (let i = 0; i < 7; i++) {
+            const date = dates[i];
+            const dateStr = getFormattedDateStr(date);
+            const isWeekend = date.getDay() % 6 === 0;
+            const isToday = dateStr === todayStr;
+
+            const daySched = _schedules.find(s => s.dateStr === dateStr);
+
+            html += `<div class="duty-cal-cell ${isWeekend ? 'weekend' : ''} ${isToday ? 'duty-cal-cell-today' : ''}" data-date="${dateStr}" style="padding: 6px; min-height: 220px; display: flex; flex-direction: column;">`;
+            html += `<div class="duty-cal-day-label" style="font-weight: 700; margin-bottom: 6px;">${date.getDate()}</div>`;
+            html += `<div class="custom-scrollbar" style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1;">`;
+
+            [..._areas].sort((a, b) => window.areaPriorityComparator(a.name, b.name)).forEach(area => {
+                const dayAssignments = daySched ? daySched.assignments.filter(a => a.areaId === area.id) : [];
+                const color = area.color || '#3b82f6';
+
+                html += `
+                    <div class="combined-area-group" style="border-left: 3px solid ${color}; background: ${hexToRgba(color, 0.06)}; padding: 4px 6px; margin-bottom: 4px; border-radius: 4px;">
+                        <div style="font-size: 0.68rem; font-weight: 700; color: var(--text-main); margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(area.name)}">
+                            ${esc(area.name)}
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                `;
+
+                var displayNames = _disambiguateSurnames(dayAssignments, workerMap);
+                dayAssignments.forEach(a => {
+                    const w = workerMap[a.aNumber];
+                    const wName = w ? w.name : `#${a.aNumber}`;
+                    const initial = w ? w.name.charAt(0) : '?';
+                    const trade = w ? (w.trade || '') : '';
+                    const tradeStyle = getTradeStyle(trade);
+                    const isAuto = !a.overrideReason;
+                    var label = displayNames[a.aNumber] || wName.split(',')[0];
+                    html += `
+                        <div class="duty-cal-worker-tag" data-anumber="${a.aNumber}" data-date="${dateStr}" data-area="${area.id}"
+                             style="background: ${tradeStyle.bg}; color: ${tradeStyle.text}; padding: 2px 6px; font-size: 0.7rem; border-radius: 4px;"
+                             title="${esc(wName)} - ${isAuto ? 'Auto-assigned' : 'Manual: ' + esc(a.overrideReason)}">
+                            <span style="width:14px;height:14px;border-radius:50%;background:${tradeStyle.text}22;display:flex;align-items:center;justify-content:center;font-size:0.5rem;font-weight:800;flex-shrink:0;">${initial}</span>
+                            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span>
+                            ${!isAuto ? '<span style="font-size:0.5rem;opacity:0.6;" title="Manual override">&#9998;</span>' : ''}
+                        </div>
+                    `;
+                });
+
+                const assignedCount = dayAssignments.length;
+                const needed = area.workersNeeded;
+                for (let j = assignedCount; j < needed; j++) {
+                    html += `<div class="duty-cal-empty-slot" data-date="${dateStr}" data-area-id="${area.id}" style="padding: 2px; font-size: 0.65rem; border: 1px dashed var(--border-color); text-align: center; border-radius: 4px; cursor: pointer; color: var(--text-muted);" title="Click to assign to ${esc(area.name)}">+</div>`;
+                }
+
+                html += `
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += `</div></div>`;
+        }
+
+        html += '</div>';
+        gridEl.innerHTML = html;
+    }
+
+    function renderCombinedMonthView(gridEl, dateLabel) {
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth();
+        const monthNames = ["January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ];
+        dateLabel.textContent = `${monthNames[month]} ${year}`;
+
+        const firstDay = new Date(year, month, 1);
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const startOffset = (firstDay.getDay() + 6) % 7;
+
+        const todayStr = todayLocal();
+        const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+        let html = '<div class="duty-cal-header">';
+        html += '<div class="duty-cal-weekdays">';
+        dayNames.forEach(d => { html += `<div class="duty-cal-weekday">${d}</div>`; });
+        html += '</div></div>';
+
+        html += '<div class="duty-cal-grid">';
+
+        for (let i = 0; i < startOffset; i++) {
+            html += `<div style="border:none;"></div>`;
+        }
+
+        for (let day = 1; day <= daysInMonth; day++) {
+            const date = new Date(year, month, day);
+            const dateStr = getFormattedDateStr(date);
+            const isWeekend = date.getDay() % 6 === 0;
+            const isToday = dateStr === todayStr;
+
+            const daySched = _schedules.find(s => s.dateStr === dateStr);
+
+            html += `<div class="duty-cal-cell duty-cal-cell-month ${isWeekend ? 'weekend' : ''} ${isToday ? 'duty-cal-cell-today' : ''}" data-date="${dateStr}" style="padding: 4px; min-height: 80px; cursor: pointer;">`;
+            html += `<div class="duty-cal-day-label" style="font-weight: 700; margin-bottom: 4px;">${day}</div>`;
+            html += `<div style="display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start;">`;
+
+            const dots = [..._areas].sort((a, b) => window.areaPriorityComparator(a.name, b.name)).map(area => {
+                const dayAssignments = daySched ? daySched.assignments.filter(a => a.areaId === area.id) : [];
+                const count = dayAssignments.length;
+                const needed = area.workersNeeded;
+                const color = area.color || '#3b82f6';
+                const pct = needed > 0 ? (count / needed) : 1;
+                let borderStyle = '1px solid transparent';
+                if (pct < 1) {
+                    borderStyle = `1px dashed ${color}`;
+                }
+                return `
+                    <span style="display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: ${pct >= 1 ? color : 'transparent'}; border: ${borderStyle}; color: ${pct >= 1 ? '#ffffff' : color}; font-size: 0.55rem; font-weight: 800;"
+                          title="${esc(area.name)}: ${count}/${needed} assigned">
+                        ${count}
+                    </span>
+                `;
+            }).join('');
+
+            html += dots;
+            html += `</div></div>`;
+        }
+
+        html += '</div>';
+        gridEl.innerHTML = html;
+    }
+
+    /* ------ Roster Card View ------ */
+
+    function renderRosterView(gridEl, dateLabel, area) {
+        const dateStr = getFormattedDateStr(currentDate);
+        const monthNames = ["January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ];
+        dateLabel.textContent = `${monthNames[currentDate.getMonth()].substring(0,3)} ${currentDate.getDate()}, ${currentDate.getFullYear()}`;
+
+        const daySched = _schedules.find(s => s.dateStr === dateStr);
+        const dayAssignments = daySched ? daySched.assignments.filter(a => a.areaId === area.id) : [];
+        const workerMap = _workers.reduce((m, w) => { m[w.aNumber] = w; return m; }, {});
+
+        let html = `<div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;">${esc(area.shiftTime || '22:00-06:00')} - ${area.workersNeeded} workers needed</div>`;
+        html += '<div class="duty-roster-grid">';
+
+        dayAssignments.forEach(a => {
+            const w = workerMap[a.aNumber];
+            if (w) {
+                html += _renderRosterCard(w);
+            }
+        });
+
+        const needed = area.workersNeeded;
+        for (let j = dayAssignments.length; j < needed; j++) {
+            html += '<div class="duty-roster-card duty-roster-empty" style="display:flex;align-items:center;justify-content:center;border:2px dashed var(--border-color);color:var(--text-muted);font-size:0.75rem;font-weight:600;">Empty</div>';
+        }
+
+        html += '</div>';
+        gridEl.innerHTML = html;
+    }
+
+    function renderCombinedRosterView(gridEl, dateLabel) {
+        const dateStr = getFormattedDateStr(currentDate);
+        const monthNames = ["January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ];
+        dateLabel.textContent = `${monthNames[currentDate.getMonth()].substring(0,3)} ${currentDate.getDate()}, ${currentDate.getFullYear()}`;
+
+        const daySched = _schedules.find(s => s.dateStr === dateStr);
+        const workerMap = _workers.reduce((m, w) => { m[w.aNumber] = w; return m; }, {});
+
+        let html = '<div class="duty-roster-combined">';
+
+        [..._areas].sort((a, b) => window.areaPriorityComparator(a.name, b.name)).forEach(area => {
+            const color = area.color || '#3b82f6';
+            const dayAssignments = daySched ? daySched.assignments.filter(a => a.areaId === area.id) : [];
+            const needed = area.workersNeeded;
+
+            html += `
+                <div class="duty-roster-area-section">
+                    <div class="duty-roster-area-header" style="border-left: 3px solid ${color}; padding-left: 10px;">
+                        <span style="font-weight:700;font-size:0.9rem;">${esc(area.name)}</span>
+                        <span style="font-size:0.72rem;color:var(--text-muted);">${dayAssignments.length}/${needed} &middot; ${esc(area.shiftTime || '22:00-06:00')}</span>
+                    </div>
+                    <div class="duty-roster-grid">
+            `;
+
+            dayAssignments.forEach(a => {
+                const w = workerMap[a.aNumber];
+                if (w) {
+                    html += _renderRosterCard(w);
+                }
+            });
+
+            for (let j = dayAssignments.length; j < needed; j++) {
+                html += '<div class="duty-roster-card duty-roster-empty" style="display:flex;align-items:center;justify-content:center;border:2px dashed var(--border-color);color:var(--text-muted);font-size:0.75rem;font-weight:600;">Empty</div>';
+            }
+
+            html += `
+                    </div>
+                </div>
+            `;
+        });
+
+        html += '</div>';
+        gridEl.innerHTML = html;
+    }
+
+    function _renderRosterCard(worker) {
+        const tradeStyle = getTradeStyle(worker.trade);
+        const photoHtml = worker.photoUrl
+            ? `<img class="duty-roster-photo" src="${esc(worker.photoUrl)}" alt="${esc(worker.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">`
+            : '';
+        const fallbackStyle = worker.photoUrl
+            ? 'display:none;'
+            : 'display:flex;';
+        const fallbackInitial = worker.name ? worker.name.charAt(0).toUpperCase() : '?';
+        const age = typeof window.getAge === 'function' ? window.getAge(worker.birthday) : '';
+
+        return `
+            <div class="duty-roster-card" style="background:var(--card-bg);border:1px solid var(--border-color);">
+                <div class="duty-roster-photo-container">
+                    ${photoHtml}
+                    <div class="duty-roster-photo-fallback" style="${fallbackStyle}">${fallbackInitial}</div>
+                </div>
+                <div class="duty-roster-info">
+                    <div class="duty-roster-badge duty-roster-badge-anumber-big">#${worker.aNumber}</div>
+                    <div class="duty-roster-name">${esc(worker.name)}</div>
+                    <div class="duty-roster-badges">
+                        <span class="duty-roster-badge duty-roster-badge-trade" style="background:${tradeStyle.bg};color:${tradeStyle.text};">${esc(worker.trade || 'Volunteer')}</span>
+                        ${age ? `<span class="duty-roster-badge duty-roster-badge-age">${age}</span>` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    /* ------ Roster Management ------ */
+
+    async function openAreaRosterModal(areaId) {
+        const area = _areas.find(a => a.id === areaId);
+        if (!area) return;
+
+        const roster = area.roster || [];
+        const sorted = [..._workers].sort((a, b) => a.name.localeCompare(b.name));
+        const listEl = document.getElementById('duty-roster-selection-list');
+
+        const rosterTitle = document.getElementById('duty-roster-modal-title');
+        if (rosterTitle) rosterTitle.textContent = `Roster for ${esc(area.name)}`;
+        const rosterModal = document.getElementById('duty-roster-modal');
+        if (rosterModal) rosterModal.dataset.areaId = areaId;
+
+        if (listEl) {
+            listEl.innerHTML = `<div class="worker-roster-grid-4col" style="gap: 6px;">` + sorted.map(w => {
+                const avatar = (w.photoUrl || w.photo)
+                    ? `<img src="${esc(w.photoUrl || w.photo)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid var(--border-color);">`
+                    : `<div style="width:28px;height:28px;border-radius:50%;background:var(--primary-light);color:var(--primary-color);display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;flex-shrink:0;">${(w.name || '?').charAt(0).toUpperCase()}</div>`;
+                const isChecked = roster.includes(w.aNumber);
+                return `
+                <label class="roster-candidate-item" style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; background: var(--card-bg); ${isChecked ? 'border-color: var(--primary-color); background: rgba(59, 130, 246, 0.06);' : ''}" title="Add/remove ${esc(w.name)} from this area's roster">
+                    <input type="checkbox" value="${w.aNumber}" ${isChecked ? 'checked' : ''} style="flex-shrink: 0; accent-color: var(--primary-color);">
+                    ${avatar}
+                    <div style="flex:1;min-width:0;line-height:1.25;">
+                        <div style="font-weight:700;color:var(--text-main);font-size:0.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(w.name)}</div>
+                        <div style="font-size:0.67rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="font-weight:600;color:var(--primary-color);">#${esc(w.aNumber)}</span> &middot; ${esc(w.trade || 'Volunteer')}</div>
+                    </div>
+                </label>
+            `;
+            }).join('') + `</div>`;
+        }
+
+        const rosterSearch = document.getElementById('duty-roster-search');
+        if (rosterSearch) rosterSearch.value = '';
+        if (rosterModal) { if (window.trapFocus) window.trapFocus(rosterModal); rosterModal.classList.add('active'); }
+    }
+
+    async function saveAreaRoster() {
+        const rosterModal = document.getElementById('duty-roster-modal');
+        if (!rosterModal) return;
+        const areaId = rosterModal.dataset.areaId;
+        if (!areaId) return;
+
+        const checked = document.querySelectorAll('#duty-roster-selection-list input:checked');
+        const selectedIds = Array.from(checked).map(cb => parseInt(cb.value, 10));
+
+        const area = _areas.find(a => a.id === areaId);
+        if (area) {
+            area.roster = selectedIds;
+            await window.dbStores.duty_areas.setItem(areaId, area);
+        }
+
+        releaseFocusTrap();
+        rosterModal.classList.remove('active');
+        await loadData();
+    }
+
+    /* ------ Week Schedule Generation ------ */
+
+    async function generateWeekSchedule(area) {
+        const monday = _getMonday(currentDate);
+        const weekDates = [];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(monday);
+            d.setDate(monday.getDate() + i);
+            weekDates.push(d);
+        }
+
+        const roster = area.roster || [];
+        if (roster.length === 0) {
+            showToast(`"${area.name}" has no roster set.`);
+            return;
+        }
+
+        const schedules = await window.dbStores.duty_schedules.getAll();
+        let rotationIdx = area.lastRotationIndex || 0;
+
+        for (const date of weekDates) {
+            const dateStr = getFormattedDateStr(date);
+            let daySched = schedules.find(s => s.dateStr === dateStr);
+            if (!daySched) {
+                daySched = { dateStr, assignments: [] };
+                schedules.push(daySched);
+            }
+
+            // Count existing assignments for this area
+            const existingForArea = daySched.assignments.filter(a => a.areaId === area.id);
+            const needed = area.workersNeeded || 1;
+            const toAdd = needed - existingForArea.length;
+
+            if (toAdd > 0) {
+                let attempts = 0;
+                while (daySched.assignments.filter(a => a.areaId === area.id).length < needed && attempts < roster.length) {
+                    const workerId = roster[rotationIdx % roster.length];
+                    const alreadyAssigned = daySched.assignments.some(a => a.aNumber === workerId);
+                    const blocked = window.isWorkerBlockedFromArea ? window.isWorkerBlockedFromArea(workerId, area.name) : false;
+                    if (!alreadyAssigned && !blocked) {
+                        daySched.assignments.push({
+                            aNumber: workerId,
+                            areaId: area.id,
+                            overrideReason: null,
+                            assignedAt: new Date().toISOString()
+                        });
+                    }
+                    rotationIdx++;
+                    attempts++;
+                }
+            }
+        }
+
+        // Save updated rotation index
+        area.lastRotationIndex = rotationIdx;
+        try {
+            await window.dbStores.duty_areas.setItem(area.id, area);
+            await window._storage.set('wc_duty_schedules', schedules);
+        } catch (e) {
+            console.error('Failed to save generated schedule:', e);
+            showToast('Failed to save generated schedule.');
+            return;
+        }
+        if (window.markBadgesDirty) window.markBadgesDirty();
+
+        showToast(`Schedule generated for "${area.name}" this week.`);
+        _schedules = schedules;
+        await renderCalendar();
+    }
+
+    /* ------ Week Schedule Clearing ------ */
+
+    async function clearSchedules(type) {
+        const isCombined = selectedAreaId === 'combined';
+        let targetAreaName = 'ALL areas';
+        if (!isCombined) {
+            const area = _areas.find(a => a.id === selectedAreaId);
+            if (!area) return;
+            targetAreaName = area.name;
+        }
+
+        let datesToClear = [];
+        let confirmMsg = '';
+
+        if (type === 'day') {
+            const dateStr = getFormattedDateStr(currentDate);
+            datesToClear.push(dateStr);
+            confirmMsg = `Are you sure you want to clear all scheduled volunteers on ${dateStr} for ${targetAreaName}?`;
+        } else if (type === 'week') {
+            const monday = _getMonday(currentDate);
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(monday);
+                d.setDate(monday.getDate() + i);
+                datesToClear.push(getFormattedDateStr(d));
+            }
+            confirmMsg = `Are you sure you want to clear all scheduled volunteers for the week of ${datesToClear[0]} to ${datesToClear[6]} for ${targetAreaName}?`;
+        }
+
+        if (!await showConfirm(confirmMsg, { danger: true, title: 'Clear Schedule', confirmText: 'Clear' })) return;
+
+        let schedules = await window._storage.get('wc_duty_schedules') || [];
+        const backup = structuredClone(schedules);
+
+        try {
+            let clearedCount = 0;
+            const workersToLog = [];
+
+            schedules.forEach(s => {
+                if (datesToClear.includes(s.dateStr)) {
+                    const before = s.assignments.length;
+                    const removed = s.assignments.filter(a => isCombined || a.areaId === selectedAreaId);
+                    removed.forEach(a => {
+                        workersToLog.push({
+                            aNumber: a.aNumber,
+                            dateStr: s.dateStr,
+                            areaId: a.areaId
+                        });
+                    });
+
+                    s.assignments = s.assignments.filter(a => !(isCombined || a.areaId === selectedAreaId));
+                    clearedCount += (before - s.assignments.length);
+                }
+            });
+
+            if (clearedCount === 0) {
+                showToast('No assignments found to clear.');
+                return;
+            }
+
+            await window._storage.set('wc_duty_schedules', schedules);
+            _schedules = schedules;
+
+            // Log changes in historical logs
+            const areaMap = _areas.reduce((m, a) => { m[a.id] = a.name; return m; }, {});
+            for (const item of workersToLog) {
+                const aName = areaMap[item.areaId] || 'Unknown Area';
+                await logAssignmentChange(item.aNumber, `Cleared schedule for ${aName} on ${item.dateStr} via bulk clear`);
+            }
+
+            if (window.markBadgesDirty) window.markBadgesDirty();
+            var restoreSchedules = structuredClone(backup);
+            window.undoManager && window.undoManager.capture(function () {
+                window._storage.set('wc_duty_schedules', restoreSchedules).then(function () {
+                    _schedules = restoreSchedules;
+                    renderCalendar();
+                    showToast('Undo: schedules restored.');
+                });
+            }, { label: 'clear schedules' });
+            window.showUndoToast('Cleared ' + clearedCount + ' volunteer slot(s).', function () {
+                return window.undoManager && window.undoManager.undo();
+            });
+            await renderCalendar();
+        } catch (e) {
+            schedules = backup;
+            await window._storage.set('wc_duty_schedules', backup);
+            console.error('Schedule clearing failed, rolled back:', e);
+            showToast('Failed to clear schedules. Changes reverted.');
+        }
+    }
+
+    /* ------ Area Delete with Cascade ------ */
+
+    async function _deleteDutyArea(area) {
+        if (!await showConfirm(`Delete duty area "${area.name}"? This will remove its worker slots from all schedules.`, { danger: true, title: 'Delete Area', confirmText: 'Delete' })) return;
+        let schedules = await window._storage.get('wc_duty_schedules') || [];
+        let changed = false;
+        schedules.forEach(s => {
+            const before = s.assignments.length;
+            s.assignments = s.assignments.filter(a => a.areaId !== area.id);
+            if (s.assignments.length !== before) changed = true;
+        });
+        try {
+            if (changed) await window._storage.set('wc_duty_schedules', schedules);
+            const allAreas = await window._storage.get('wc_duty_areas') || [];
+            const filtered = allAreas.filter(a => a.id !== area.id);
+            await window._storage.set('wc_duty_areas', filtered);
+        } catch (e) {
+            console.error('Failed to delete duty area:', e);
+            showToast('Failed to delete area due to a storage error.');
+            return;
+        }
+        if (window.markBadgesDirty) window.markBadgesDirty();
+
+        if (selectedAreaId === area.id) {
+            selectedAreaId = null;
+        }
+
+        var restoreArea = structuredClone(area);
+        var restoreSchedules = structuredClone(schedules);
+        window.undoManager && window.undoManager.capture(function () {
+            window._storage.get('wc_duty_areas').then(function (areas) {
+                areas.push(restoreArea);
+                window._storage.set('wc_duty_areas', areas);
+            });
+            window._storage.get('wc_duty_schedules').then(function (sched) {
+                restoreSchedules.forEach(function (rs) {
+                    var existing = sched.findIndex(function (s) { return s.dateStr === rs.dateStr; });
+                    if (existing >= 0) sched[existing] = rs;
+                    else sched.push(rs);
+                });
+                window._storage.set('wc_duty_schedules', sched);
+            }).then(function () {
+                showToast('Undo: area "' + restoreArea.name + '" restored.');
+                if (window.markBadgesDirty) window.markBadgesDirty();
+                _dirty = true;
+                loadData();
+            });
+        }, { label: 'delete duty area' });
+        window.showUndoToast('Area "' + area.name + '" deleted.', function () {
+            return window.undoManager && window.undoManager.undo();
+        });
+
+        _dirty = true;
+        await loadData();
+    }
+
+    /* ------ Date Utils ------ */
+
+    function getFormattedDateStr(date) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+
+    /* ------ Override Modal ------ */
+
+    let _overrideResolve = null;
+
+    function closeOverrideModal() {
+        const overrideModal = document.getElementById('duty-override-modal');
+        if (overrideModal) { releaseFocusTrap(); overrideModal.classList.remove('active'); }
+        if (_overrideResolve) { const r = _overrideResolve; _overrideResolve = null; r(null); }
+    }
+
+    // Expose for inline onclick handlers in the template
+    window.__dutyCloseOverride = closeOverrideModal;
+
+    function showOverrideReasonModal(workerName, targetDate) {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('duty-override-modal');
+            const info = document.getElementById('duty-override-info');
+            const reasonEl = document.getElementById('duty-override-reason');
+            const confirmBtn = document.getElementById('btn-override-confirm');
+            if (!modal || !info || !reasonEl || !confirmBtn) {
+                resolve(null);
+                return;
+            }
+            info.textContent = 'Moving ' + workerName + ' to schedule on ' + targetDate + '.';
+            reasonEl.value = '';
+            if (window.trapFocus) window.trapFocus(modal);
+            modal.classList.add('active');
+            setTimeout(function () { reasonEl.focus(); }, 100);
+            _overrideResolve = resolve;
+            var onConfirm = function () {
+                var reason = reasonEl.value.trim();
+                if (!reason) {
+                    showToast('A reason is required for manual override.');
+                    return;
+                }
+                releaseFocusTrap();
+                modal.classList.remove('active');
+                if (_overrideResolve) { var r = _overrideResolve; _overrideResolve = null; r(reason); }
+                confirmBtn.removeEventListener('click', onConfirm);
+            };
+            confirmBtn.addEventListener('click', onConfirm);
+        });
+    }
+
+    /* ------ Legacy: updateScheduleAssignment (kept for drag-drop compat) ------ */
+
+    async function updateScheduleAssignment(dateStr, aNumber, newAreaId = null, remove = false, reason = '') {
+        let schedules = await window._storage.get('wc_duty_schedules') || [];
+        const backup = structuredClone(schedules);
+        try {
+            let daySched = schedules.find(s => s.dateStr === dateStr);
+            if (!daySched) {
+                daySched = { dateStr, assignments: [] };
+                schedules.push(daySched);
+            }
+
+            if (remove) {
+                daySched.assignments = daySched.assignments.filter(a => a.aNumber !== aNumber);
+            } else {
+                const existing = daySched.assignments.find(a => a.aNumber === aNumber);
+                if (existing) {
+                    existing.areaId = newAreaId;
+                    if (reason) existing.overrideReason = reason;
+                } else {
+                    daySched.assignments.push({ aNumber, areaId: newAreaId, overrideReason: reason || null, assignedAt: new Date().toISOString() });
+                }
+            }
+
+            await window._storage.set('wc_duty_schedules', schedules);
+        } catch (e) {
+            schedules = backup;
+            await window._storage.set('wc_duty_schedules', backup);
+            console.error('Schedule update failed, rolled back:', e);
+            showToast('Failed to update schedule. Changes reverted.');
+        }
+        if (window.markBadgesDirty) window.markBadgesDirty();
+        _schedules = await window._storage.get('wc_duty_schedules') || [];
+        await renderCalendar();
+    }
+
+    async function logAssignmentChange(aNumber, note) {
+        if (!window.dbStores || !window.dbStores.workers) return;
+        let worker = null;
+        await window.dbStores.workers.iterate(w => {
+            if (w.aNumber === aNumber) worker = w;
+        });
+        if (worker && window.historyData) {
+            window.historyData.push({
+                id: safeUUID(),
+                workerId: worker.aNumber,
+                date: new Date().toISOString(),
+                action: 'Duty Override',
+                details: note
+            });
+            if (typeof window.saveHistory === 'function') window.saveHistory();
+        }
+    }
+
+    // Public interface
+    window.removeDutyAssignment = async (dateStr, aNumber) => {
+        if (await showConfirm('Remove this worker from duty on this day?')) {
+            await updateScheduleAssignment(dateStr, aNumber, null, true);
+        }
+    };
+
+    function getRosteredTonight() {
+        var todayStr = new Date().toISOString().slice(0, 10);
+        var todaySched = _schedules.find(function (s) { return s.dateStr === todayStr; });
+        if (!todaySched) return [];
+        return (todaySched.assignments || []).map(function (a) { return a.aNumber; });
+    }
+
+    function _buildPrintHtml() {
+        var dateStr = getFormattedDateStr(currentDate);
+        var daySched = _schedules.find(function (s) { return s.dateStr === dateStr; });
+        if (!daySched || daySched.assignments.length === 0) {
+            showToast('No schedules found for tonight.');
+            return null;
+        }
+
+        var workerMap = _workers.reduce(function (m, w) { m[w.aNumber] = w; return m; }, {});
+        var monthNames = ["January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ];
+        var d = new Date(dateStr + 'T12:00:00');
+        var headerDate = monthNames[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+        var now = new Date();
+        var genDate = monthNames[now.getMonth()] + ' ' + now.getDate() + ', ' + now.getFullYear();
+
+        var sectionsHtml = '';
+        var grandTotal = 0;
+        var grandTrades = {};
+
+        var sortedAreas = [..._areas].sort(function (a, b) { return window.areaPriorityComparator(a.name, b.name); });
+
+        sortedAreas.forEach(function (area) {
+            var dayAssignments = daySched.assignments.filter(function (a) { return a.areaId === area.id; });
+            var needed = area.workersNeeded || 0;
+            var color = area.color || '#3b82f6';
+            var shiftTime = area.shiftTime || '22:00-06:00';
+
+            if (dayAssignments.length === 0 && needed === 0) return;
+
+            var cardsHtml = '';
+            var areaTradeCounts = {};
+            var areaTotal = 0;
+
+            dayAssignments.forEach(function (a) {
+                var w = workerMap[a.aNumber];
+                if (!w) return;
+                areaTotal++;
+                grandTotal++;
+                var t = w.trade || 'Volunteer';
+                areaTradeCounts[t] = (areaTradeCounts[t] || 0) + 1;
+                grandTrades[t] = (grandTrades[t] || 0) + 1;
+
+                var tradeStyle = getTradeStyle(w.trade);
+                var photo = w.photoUrl || w.photo;
+                var hasPhoto = !!photo;
+                var photoHtml = hasPhoto
+                    ? '<img src="' + esc(photo) + '" alt="" style="width:100%;height:100%;object-fit:cover;display:block;">'
+                    : '';
+                var fallbackDisplay = hasPhoto ? 'none' : 'flex';
+                var fallbackInitial = w.name ? w.name.charAt(0).toUpperCase() : '?';
+                var age = typeof window.getAge === 'function' ? window.getAge(w.birthday) : '';
+
+                cardsHtml += '<div class="dp-card" style="break-inside:avoid;page-break-inside:avoid;display:flex;align-items:center;gap:10px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;background:' + tradeStyle.bg + '30;border-left:3px solid ' + tradeStyle.text + ';">';
+                cardsHtml += '<div style="width:48px;height:48px;border-radius:6px;overflow:hidden;border:1px solid #e2e8f0;flex-shrink:0;position:relative;background:linear-gradient(135deg,#2563eb,#1d4ed8);display:flex;align-items:center;justify-content:center;">';
+                cardsHtml += photoHtml;
+                cardsHtml += '<div style="display:' + fallbackDisplay + ';align-items:center;justify-content:center;width:100%;height:100%;font-size:1.3rem;font-weight:800;color:#fff;">' + fallbackInitial + '</div>';
+                cardsHtml += '</div>';
+                cardsHtml += '<div style="flex:1;min-width:0;">';
+                cardsHtml += '<div style="display:flex;align-items:baseline;gap:6px;">';
+                cardsHtml += '<span style="font-weight:700;font-size:0.9rem;color:#0f172a;">' + esc(w.name) + '</span>';
+                cardsHtml += '<span style="font-size:0.65rem;color:#64748b;font-weight:600;">#' + w.aNumber + '</span>';
+                cardsHtml += '</div>';
+                cardsHtml += '<div style="display:flex;align-items:center;gap:4px;margin-top:2px;">';
+                cardsHtml += '<span style="font-size:0.7rem;font-weight:600;padding:1px 6px;border-radius:4px;background:' + tradeStyle.bg + ';color:' + tradeStyle.text + ';">' + esc(w.trade || 'Volunteer') + '</span>';
+                if (age) cardsHtml += '<span style="font-size:0.65rem;color:#64748b;">' + age + '</span>';
+                cardsHtml += '</div></div></div>';
+            });
+
+            for (var j = dayAssignments.length; j < needed; j++) {
+                cardsHtml += '<div style="break-inside:avoid;page-break-inside:avoid;display:flex;align-items:center;justify-content:center;padding:12px;border:2px dashed #cbd5e1;border-radius:6px;color:#94a3b8;font-size:0.75rem;font-weight:600;min-height:48px;">Empty</div>';
+                areaTotal++;
+                grandTotal++;
+            }
+
+            var tradeSummary = Object.keys(areaTradeCounts).sort().map(function (t) {
+                return esc(t) + ' (' + areaTradeCounts[t] + ')';
+            }).join(', ');
+
+            sectionsHtml += '<div class="dp-section" style="break-inside:avoid;page-break-inside:avoid;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:16px;">';
+            sectionsHtml += '<div style="border-left:4px solid ' + color + ';background:#f8fafc;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">';
+            sectionsHtml += '<div><span style="font-weight:800;font-size:0.95rem;color:#0f172a;">' + esc(area.name) + '</span>';
+            sectionsHtml += '<span style="font-size:0.7rem;color:#64748b;margin-left:8px;">' + dayAssignments.length + '/' + needed + ' &middot; ' + esc(shiftTime) + '</span></div>';
+            sectionsHtml += '</div>';
+            sectionsHtml += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px;padding:8px;">' + cardsHtml + '</div>';
+            if (tradeSummary) {
+                sectionsHtml += '<div style="font-size:0.65rem;color:#64748b;border-top:1px solid #e2e8f0;padding:4px 12px;">' + tradeSummary + ' &middot; Total: ' + areaTotal + '</div>';
+            }
+            sectionsHtml += '</div>';
+        });
+
+        var grandTradeSummary = Object.keys(grandTrades).sort().map(function (t) {
+            return esc(t) + ' (' + grandTrades[t] + ')';
+        }).join(', ');
+
+        return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Night Duty Roster - ' + headerDate + '</title>' +
+            '<style>' +
+            '@page { size: auto; margin: 8mm 10mm; }' +
+            '* { box-sizing: border-box; margin: 0; padding: 0; }' +
+            'body { font-family: \'Inter\', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #0f172a; background: #fff; padding: 0; }' +
+            '.dp-header { text-align: center; border-bottom: 2px solid #1e40af; padding-bottom: 10px; margin-bottom: 16px; }' +
+            '.dp-header h1 { font-size: 1.2rem; font-weight: 800; margin: 0 0 2px 0; letter-spacing: 0.02em; }' +
+            '.dp-header .sub { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.1em; }' +
+            '.dp-header .date { font-size: 0.85rem; color: #475569; margin-top: 2px; }' +
+            '.dp-footer { text-align: center; font-size: 0.65rem; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 8px; margin-top: 16px; }' +
+            '.dp-grand-summary { font-size: 0.7rem; color: #475569; text-align: center; margin-bottom: 16px; padding: 6px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }' +
+            '@media print { body { padding: 0 !important; margin: 0 auto !important; box-sizing: border-box !important; } .dp-section { break-inside: avoid !important; page-break-inside: avoid !important; } .dp-card { break-inside: avoid !important; page-break-inside: avoid !important; } img { image-rendering: -webkit-optimize-contrast; } }' +
+            '</style></head><body>' +
+            '<div class="dp-header">' +
+            '<div class="sub">Service Command Center</div>' +
+            '<h1>Night Duty Roster</h1>' +
+            '<div class="date">' + headerDate + '</div>' +
+            '</div>' +
+            '<div class="dp-grand-summary">' + grandTradeSummary + ' &middot; Total: ' + grandTotal + '</div>' +
+            sectionsHtml +
+            '<div class="dp-footer">Generated on ' + genDate + '</div>' +
+            '</body></html>';
+    }
+
+    return {
+        init,
+        loadData,
+        getRosteredTonight,
+        renderCalendar,
+        requestWeekGeneration
+    };
+})();
+return {
+    DutyModule: DutyModule
+};
+})();
+
+// ===== modals.js (focus trap) - verbatim from 01_Rust_WC_DB/js/modals.js =====
+var S5_modals = (function () {
+
+let lastFocusedElement = null;
+
+let _focusTrapStack = [];
+
+function restoreFocusAfterClose() {
+    var f = lastFocusedElement;
+    lastFocusedElement = null;
+    if (f && typeof f.focus === 'function') setTimeout(function () { f.focus(); }, 50);
+}
+
+function _focusFirstElement(modalEl) {
+    if (!modalEl) return;
+    var auto = modalEl.querySelector('[autofocus]');
+    if (auto) {
+        setTimeout(function () { auto.focus(); }, 50);
+        return;
+    }
+    var focusable = modalEl.querySelectorAll('input:not([type="hidden"]), select, textarea, button:not(.close-btn), [href], [tabindex]:not([tabindex="-1"])');
+    if (focusable.length > 0) {
+        setTimeout(function () { focusable[0].focus(); }, 50);
+    }
+}
+
+function trapFocus(modalEl) {
+    if (!modalEl) return;
+    _focusTrapStack.push(modalEl);
+    _focusFirstElement(modalEl);
+}
+
+function releaseFocusTrap() {
+    _focusTrapStack.pop();
+    if (_focusTrapStack.length > 0) {
+        _focusFirstElement(_focusTrapStack[_focusTrapStack.length - 1]);
+    }
+}
+return {
+    trapFocus: trapFocus,
+    releaseFocusTrap: releaseFocusTrap
+};
+})();
+
 // ===== Bridge: SiteMonitor data in, Service 5 templates out =====
 
 function api(path) {
@@ -11358,6 +15688,140 @@ window.S5Print = {
   // Prints a preview frame (Service 5's "Print Now").
   printFrame: function (frame) {
     if (frame && frame.contentWindow) { frame.contentWindow.focus(); frame.contentWindow.print(); }
+  }
+};
+
+// Service 5 keeps whole lists under storage keys; pages that edit (Overnight Duty)
+// get a storage whose lists are SiteMonitor's records: each changed item is saved
+// with PUT, each removed one deleted, so the server keeps its usual checks and log.
+var STORE_LISTS = {
+  wc_duty_schedules: ['duty_schedules', 'dateStr'], wc_duty_areas: ['duty_areas', 'id'], wc_ot_entries: ['ot_entries', 'id'],
+  wc_signatories_data: ['signatories', 'id']
+};
+var storeSeen = {};
+function storeKeyOf(field) { return function (x) { return String((x && (x[field] || x.id || x.name)) || ''); }; }
+var siteStorage = {
+  get: function (key) {
+    if (key === STORAGE_KEY) return Promise.resolve(workersData);
+    var c = STORE_LISTS[key];
+    if (!c) return Promise.resolve(null);
+    return api('/workforce/records/' + c[0]).then(function (l) {
+      storeSeen[key] = JSON.parse(JSON.stringify(l));
+      return l;
+    });
+  },
+  set: function (key, list) {
+    var c = STORE_LISTS[key];
+    if (!c || !Array.isArray(list)) return Promise.resolve();
+    var keyOf = storeKeyOf(c[1]);
+    var before = storeSeen[key] || [];
+    var send = function (method, id, body) {
+      return fetch('/api/workforce/records/' + c[0] + '/' + encodeURIComponent(id), {
+        method: method, credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined
+      });
+    };
+    var jobs = [];
+    var kept = {};
+    list.forEach(function (x) {
+      var id = keyOf(x);
+      if (!id) return;
+      kept[id] = true;
+      var old = before.find(function (b) { return keyOf(b) === id; });
+      if (!old || JSON.stringify(old) !== JSON.stringify(x)) jobs.push(send('PUT', id, x));
+    });
+    before.forEach(function (b) { var id = keyOf(b); if (id && !kept[id]) jobs.push(send('DELETE', id)); });
+    return Promise.all(jobs).then(function (rs) {
+      var bad = rs.filter(function (r) { return !r.ok; })[0];
+      if (bad) { showToast('Not saved: the server said ' + bad.status + '.'); throw new Error('not saved'); }
+      storeSeen[key] = JSON.parse(JSON.stringify(list));
+    });
+  }
+};
+
+// Service 5 pages shown inside SiteMonitor (frontend/public/print/s5view-*.html):
+// Service 5's markup and render code, fed SiteMonitor's records.
+window.S5View = {
+  // Service 5's shared helpers, where its page scripts expect them. Its local
+  // copies (safeSetItem) are off: no personnel data is kept in the browser.
+  globals: function () {
+    window._storage = siteStorage;
+    window.esc = esc;
+    window.showConfirm = showConfirm;
+    window.showErrorToast = function (m) { showToast(m); };
+    window.trapFocus = S5_modals.trapFocus;
+    window.releaseFocusTrap = S5_modals.releaseFocusTrap;
+    window.SIG_STORAGE_KEY = SIG_STORAGE_KEY;
+    window.defaultSignatories = defaultSignatories;
+    window.safeSetItem = function () {};
+    window.safeGetJSON = function (key, def) { return def; };
+  },
+  // Signatories: Service 5's signatories page script, saving to SiteMonitor's signatory records.
+  signatories: function () {
+    return Promise.all([loadWorkers(), siteStorage.get('wc_signatories_data')]).then(function (r) {
+      signatoriesData = Array.isArray(r[1]) ? r[1] : [];
+      if (typeof window.normalizeSignatoriesData === 'function') window.normalizeSignatoriesData();
+      window.renderSignatories();
+      document.body.setAttribute('data-ready', '1');
+    }).catch(fail);
+  },
+  // OT Calculator / OT Entries: Service 5's OT module, saving to SiteMonitor's OT records.
+  ot: function (entries) {
+    window._storage = siteStorage;
+    window.trapFocus = S5_modals.trapFocus;
+    window.releaseFocusTrap = S5_modals.releaseFocusTrap;
+    var M = S5_ot_calculator.OtCalcModule;
+    window.OtCalcModule = M;
+    // Service 5's sidebar button tells the module which page it is on.
+    var nav = document.createElement('button');
+    nav.id = 'nav-btn-ot-entries';
+    nav.hidden = true;
+    if (entries) nav.className = 'active';
+    document.body.appendChild(nav);
+    S5_ot_calculator.wireOtEvents();
+    return loadWorkers().then(function () { return M.init(); }).then(function () {
+      if (entries) M._renderEntriesPage();
+      document.body.setAttribute('data-ready', '1');
+    }).catch(fail);
+  },
+  // Overnight Duty: Service 5's duty module, saving to SiteMonitor's duty records.
+  duty: function () {
+    window._storage = siteStorage;
+    window.trapFocus = S5_modals.trapFocus;
+    window.releaseFocusTrap = S5_modals.releaseFocusTrap;
+    // Service 5's "Schedule Duty" header button (ui.js) generates the week.
+    var sched = document.getElementById('btn-duty-schedule');
+    if (sched) sched.addEventListener('click', function () { S5_duty_2.DutyModule.requestWeekGeneration(); });
+    return loadWorkers().then(function () { return S5_duty_2.DutyModule.init(); }).then(function () {
+      document.body.setAttribute('data-ready', '1');
+    }).catch(fail);
+  },
+
+  departments: function () {
+    var D = S5_dashboard;
+    // Service 5's buttons call these by name.
+    ['renderDeployabilityBanner', 'renderDepartmentMatrix', 'renderDeptAnalytics', 'renderHousingOverview', 'openDepartmentRosterModal', 'openResidenceRosterModal']
+      .forEach(function (k) { window[k] = D[k]; });
+    window.openAreaRosterModal = S5_distribution_2.openAreaRosterModal;
+    window.switchView = function () {};
+    var modal = document.getElementById('area-roster-modal');
+    var close = function () { if (modal) modal.classList.remove('active'); };
+    var x = document.getElementById('btn-close-roster-modal');
+    if (x) x.addEventListener('click', close);
+    if (modal) modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+    var bar = document.getElementById('dist-tab-bar');
+    if (bar) bar.addEventListener('click', function (e) {
+      var b = e.target.closest('.dist-tab-btn');
+      if (b) S5_ui.switchDistTab(b.getAttribute('data-dist-tab'));
+    });
+    return loadWorkers().then(function () {
+      var aw = workersData.filter(function (w) { return w && !w.isArchived; });
+      D.renderDeployabilityBanner(aw);
+      D.renderDepartmentMatrix(aw);
+      D.renderDeptAnalytics(aw);
+      S5_ui.switchDistTab('departments');
+      document.body.setAttribute('data-ready', '1');
+    }).catch(fail);
   }
 };
 })();

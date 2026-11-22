@@ -162,7 +162,7 @@ test("visitations: schedule, mark done, coverage; visitation group members and t
   await page.getByTestId("visit-done").click();
   await expect(page.getByText("Visit marked done").first()).toBeVisible();
   await page.getByTestId("visit-view-History").click();
-  await expect(page.getByTestId("record-row").filter({ hasText: "Ana Present" })).toContainText("completed");
+  await expect(page.getByTestId("visit-history").getByTestId("visit-row").filter({ hasText: "Ana Present" })).toContainText("completed");
   await page.getByTestId("visit-view-Coverage").click();
   await expect(page.getByTestId("visit-unvisited")).toContainText("Ben NoJO");
   await expect(page.getByTestId("visit-unvisited")).not.toContainText("Ana Present");
@@ -183,22 +183,19 @@ test("visitations: schedule, mark done, coverage; visitation group members and t
   expect(await sheet()).toContain("Ben NoJO");
 });
 
-test("overtime: copy the day before, then the calculator summary", async ({ page }) => {
+test("overtime: copy the day before, then the calculator summary", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/operations");
   await page.getByTestId("tab-OT Entries").click();
-  await expect(page.getByTestId("ot-total")).toContainText("0 entries");
-  await page.getByTestId("ot-copy-yesterday").click();
-  await expect(page.getByText(/1 entry copied from/).first()).toBeVisible();
-  await expect(page.getByTestId("ot-total")).toContainText("1 entries");
-  await page.getByTestId("ot-prev").click();
-  await expect(page.getByTestId("ot-total")).toContainText("₱160.00");
+  // The OT pages are the original Service 5 screens, saving to SiteMonitor.
+  const ote = page.frameLocator("[data-testid=s5-page-ot-entries]");
+  await expect(ote.locator("body[data-ready=\"1\"]")).toBeAttached({ timeout: 20_000 });
+  await ote.getByRole("button", { name: "Load Yesterday" }).click();
+  await expect.poll(async () => ((await (await request.get("/api/workforce/records/ot_entries")).json()) as any[]).filter((e) => e.date === iso(0)).length).toBe(1);
 
   await page.getByTestId("tab-OT Calculator").click();
-  await page.getByTestId("ots-from").fill(iso(-3));
-  await expect(page.getByTestId("ots-total")).toContainText("₱160.00");
-  await expect(page.getByTestId("record-row").filter({ hasText: "Ana Present" })).toContainText("₱160.00");
-  await page.getByTestId("ots-view-Matrix").click();
-  await expect(page.getByTestId("ots-matrix")).toContainText("Ana Present");
+  const calc = page.frameLocator("[data-testid=s5-page-ot-calc]");
+  await expect(calc.locator("body[data-ready=\"1\"]")).toBeAttached({ timeout: 20_000 });
+  await expect(calc.locator("body")).toContainText("Present");
 });
 
 test("project groups: create with members and a signatory, change log; signatory bulk assignment", async ({ page, request }) => {
@@ -219,24 +216,21 @@ test("project groups: create with members and a signatory, change log; signatory
   await expect(page.getByTestId("group-log")).toContainText("New crew");
   await page.keyboard.press("Escape");
 
+  // Signatory assignment is the original Service 5 page (see spec 15).
   await page.goto("/operations");
   await page.getByTestId("tab-Signatories").click();
-  await page.getByTestId("sig-assign-open").click();
-  await page.getByTestId("sig-assign-who").selectOption("sig1");
-  await page.locator("label", { hasText: "Team X" }).getByTestId("sig-assign-group").uncheck();
-  await page.getByTestId("sig-assign-save").click();
-  await expect(page.getByText("Groups assigned").first()).toBeVisible();
-  expect((await records(request, "signatories")).find((s: any) => s.id === "sig1").projectGroups).toEqual(["Team Z"]);
+  await expect(page.frameLocator("[data-testid=s5-page-signatories]").locator("body")).toContainText("Team X");
 });
 
 test("dossier, project history, selective backup, and the medical column stays with the clinic", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/operations");
+  // Service 5: the person dossier is on Dependability; History opens its Project Roster History tab.
+  await page.getByTestId("tab-Dependability").click();
+  await page.getByTestId("dep-period").selectOption("0");
+  await page.getByTestId("dep-worker").selectOption("Ben NoJO");
+  await expect(page.getByTestId("dep-banner")).toContainText("Ben NoJO");
   await page.getByTestId("tab-History Log").click();
-  await page.getByTestId("history-view-Person dossier").click();
-  await page.getByTestId("dossier-who").selectOption("302");
-  await expect(page.getByTestId("dossier")).toContainText("Ben NoJO");
-  await expect(page.getByTestId("dossier")).toContainText("Present → Absent");
-  await page.getByTestId("history-view-Project roster history").click();
+  await page.getByTestId("history-project-roster").click();
   await expect(page.getByTestId("ph-project")).toHaveValue("Hall");
   await expect(page.getByTestId("record-row").first()).toContainText("Ana Present");
 

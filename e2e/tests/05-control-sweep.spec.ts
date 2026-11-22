@@ -77,7 +77,14 @@ for (const [role, who] of [["VipClient", undefined], ["OfficeAdmin", undefined],
             await el.click({ timeout: 3000 });
           }
           await page.waitForTimeout(700);
-          const alive = (await page.locator("main").count()) > 0 || (await page.locator("[role=dialog]").count()) > 0;
+          // Some controls reload the page on purpose (e.g. switching a module): let it finish first.
+          await page.waitForLoadState("load").catch(() => {});
+          const isAlive = async () => (await page.locator("main").count()) > 0 || (await page.locator("[role=dialog]").count()) > 0;
+          let alive = await isAlive();
+          for (let i = 0; !alive && i < 6; i++) {
+            await page.waitForTimeout(500);
+            alive = await isAlive();
+          }
           if (!alive) problems.push("app disappeared after click");
         } catch (e: any) {
           problems.push(`click failed: ${String(e.message).split("\n")[0]}`);

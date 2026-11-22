@@ -82,6 +82,16 @@ async function printOf(page: Page, click: () => Promise<void>, title: string) {
 }
 const by = (page: Page, id: string) => () => page.getByTestId(id).click();
 const preview = (page: Page) => page.frameLocator("#s5-preview");
+/** Clicks a print button inside one of the Service 5 page frames and returns what it printed. */
+async function framePrint(page: Page, name: string, button: string, title: string) {
+  const loc = page.frameLocator(`[data-testid="s5-page-${name}"]`);
+  await expect(loc.locator("body[data-ready=\"1\"]")).toBeAttached({ timeout: 20_000 });
+  const fr = page.frames().find((f) => f.url().includes(`s5view-${name}.html`))!;
+  await fr.evaluate(() => { const w = window as any; w.__s5 = []; w.safePrint = (h: string) => w.__s5.push(h); });
+  await loc.locator(button).click();
+  await expect.poll(async () => (await fr.evaluate(() => (window as any).__s5 as string[])).map(titleOf).join("|")).toContain(title);
+  return (await fr.evaluate(() => (window as any).__s5 as string[])).join("");
+}
 
 test("Assignments: Service 5's Print Reports menu and Generate Forms (4-up folio job orders)", async ({ page }) => {
   await open(page, "/assignments");
@@ -191,15 +201,16 @@ test("Visitations: scheduled, one visit's form; groups: rosters and monthly shee
 
 test("Operations: overtime, duty, dependability, org chart job orders", async ({ page }) => {
   await open(page, "/operations");
+  // OT and duty are the original Service 5 pages; their own Print buttons print Service 5's sheets.
   await page.getByTestId("tab-OT Calculator").click();
-  await printOf(page, by(page, "ots-print"), "OVERTIME SCHEDULE");
-  await printOf(page, by(page, "ots-print-matrix"), "Overtime Compensation Breakdown");
-  await printOf(page, by(page, "ots-print-daily"), "Daily OT Breakdown");
+  await framePrint(page, "ot-calc", "#btn-ot-print-schedule", "OVERTIME SCHEDULE");
+  await framePrint(page, "ot-calc", "#btn-ot-print-matrix", "Overtime Compensation Breakdown");
+  await framePrint(page, "ot-calc", "#btn-ot-print-daily", "Daily OT Breakdown");
   await page.getByTestId("tab-OT Entries").click();
-  await printOf(page, by(page, "ot-schedule-print"), "OVERTIME SCHEDULE");
-  await printOf(page, by(page, "ot-matrix-print"), "Overtime Compensation Breakdown");
+  await framePrint(page, "ot-entries", "#ote-btn-print-schedule", "OVERTIME SCHEDULE");
+  await framePrint(page, "ot-entries", "#ote-btn-print-matrix", "Overtime Compensation Breakdown");
   await page.getByTestId("tab-Overnight Duty").click();
-  expect(await printOf(page, by(page, "duty-print"), "Night Duty Roster")).toContain("Main Gate");
+  expect(await framePrint(page, "duty", "#btn-print-duty", "Night Duty Roster")).toContain("Main Gate");
   await page.getByTestId("tab-Dependability").click();
   await printOf(page, by(page, "print-tab"), "Dependability Roster");
   await page.getByTestId("tab-Monthly Attendance").click();

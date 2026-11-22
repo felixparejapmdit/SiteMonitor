@@ -117,9 +117,11 @@ test("encrypted .agwcz backups: the right passphrase imports, a wrong one change
 
 test("Personnel page: counts, search, Ctrl+K, add and edit a worker", async ({ page }) => {
   await openAs(page, "OfficeAdmin", "/");
+  // Ctrl+K quick search, then the Personnel page.
   await page.keyboard.press("Control+k");
+  await page.getByTestId("quick-search-input").fill("Personnel");
+  await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/personnel$/);
-  await expect(page.getByTestId("worker-search")).toBeFocused();
   const total = Number(await page.getByTestId("count-Total active").innerText());
   expect(total).toBeGreaterThan(0);
 

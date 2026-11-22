@@ -14,7 +14,7 @@ use crate::api;
 use crate::components::ui::{EmptyState, Icon};
 use crate::views::personnel::save_file;
 use crate::views::profile::{age, excel_xml};
-use crate::views::workforce_ops::{s, s5print, today, use_workers};
+use crate::views::workforce_ops::{s, s5print, today, use_workers, WorkerPhoto};
 
 const FORMATS: &[(&str, &str)] = &[
     ("meeting", "Meeting attendance (name, trade, signature)"),
@@ -246,6 +246,7 @@ pub fn AttendanceGenerator() -> Element {
                         label { key: "{w.id}", class: "flex items-center gap-2 text-sm px-2 py-1 rounded hover:bg-hover",
                             input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "ag-pick", checked: picked().contains(&w.id),
                                 onchange: { let id = w.id; move |e: FormEvent| { if e.checked() { picked.write().insert(id); } else { picked.write().remove(&id); } } } }
+                            WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo, size: 26 }
                             span { class: "truncate", "{w.name}" }
                             span { class: "text-xs text-muted truncate", "{w.trade}" }
                         }
@@ -275,7 +276,7 @@ pub fn UpdateFormsPrint() -> Element {
     let mut f_group = use_signal(String::new);
     let mut f_housing = use_signal(String::new);
     let mut single = use_signal(String::new);
-    let mut photo = use_signal(|| false);
+    let mut photo = use_signal(|| true);
     let people: Vec<Worker> = workers.read().clone().unwrap_or_default().into_iter().filter(|w| !w.archived).collect();
     let list: Vec<Value> = profiles
         .read()
@@ -293,41 +294,51 @@ pub fn UpdateFormsPrint() -> Element {
     let count = if blank { copies() as usize } else { list.len() };
     rsx! {
         div { class: "space-y-4", "data-testid": "update-forms-print",
-            div { class: "card p-4 grid sm:grid-cols-2 lg:grid-cols-3 gap-3 no-print",
-                div { label { class: "label", r#for: "vru-cycle", "Update cycle / title banner" } input { id: "vru-cycle", class: "field", "data-testid": "vru-cycle", value: "{cycle}", oninput: move |e| cycle.set(e.value()) } }
+            div { class: "card p-5 space-y-4 no-print max-w-3xl", "data-testid": "vru-panel",
                 div {
-                    label { class: "label", r#for: "vru-mode", "Form type" }
-                    select { id: "vru-mode", class: "field", "data-testid": "vru-mode", onchange: move |e| mode.set(e.value()),
-                        option { value: "prefilled", selected: !blank, "Pre-filled (verification / correction lines)" }
-                        option { value: "blank", selected: blank, "Blank profiling sheet (for walk-ins / new)" }
-                    }
+                    p { class: "text-lg font-semibold", "Volunteer Records Update Form" }
+                    p { class: "text-sm text-muted", "Semi-Annual Verification & Profiling Sheet Generator" }
                 }
-                div {
-                    label { class: "label", r#for: "vru-paper", "Target paper size" }
-                    select { id: "vru-paper", class: "field", "data-testid": "vru-paper", onchange: move |e| paper.set(e.value()),
-                        for (v, l) in [("folio", "Folio / Long (8.5 x 13 in) (recommended)"), ("letter", "Letter (8.5 x 11 in)"), ("a4", "A4 (8.27 x 11.69 in)")] {
-                            option { key: "{v}", value: "{v}", selected: paper() == v, "{l}" }
+                p { class: "rounded-md bg-tag-blue-bg text-tag-blue-text text-sm px-3 py-2", "data-testid": "vru-notice",
+                    strong { "Bi-Annual Census / Update Cycle: " }
+                    "Distribute these 1-page individual verification sheets to volunteer workers. Volunteers review their current on-file data and write corrections directly on the lines provided."
+                }
+                div { label { class: "label", r#for: "vru-cycle", "Update Cycle / Title Banner" } input { id: "vru-cycle", class: "field", "data-testid": "vru-cycle", value: "{cycle}", oninput: move |e| cycle.set(e.value()) } }
+                div { class: "grid sm:grid-cols-2 gap-3",
+                    div {
+                        label { class: "label", r#for: "vru-mode", "Form Type" }
+                        select { id: "vru-mode", class: "field", "data-testid": "vru-mode", onchange: move |e| mode.set(e.value()),
+                            option { value: "prefilled", selected: !blank, "Pre-filled (Verification / Dotted Correction Lines)" }
+                            option { value: "blank", selected: blank, "Blank Profiling Sheet (For Walk-ins / New)" }
+                        }
+                    }
+                    div {
+                        label { class: "label", r#for: "vru-paper", "Target Paper Size" }
+                        select { id: "vru-paper", class: "field", "data-testid": "vru-paper", onchange: move |e| paper.set(e.value()),
+                            for (v, l) in [("folio", "Folio / Long (8.5 x 13 in) (Recommended)"), ("letter", "Letter (8.5 x 11 in)"), ("a4", "A4 (8.27 x 11.69 in)")] {
+                                option { key: "{v}", value: "{v}", selected: paper() == v, "{l}" }
+                            }
                         }
                     }
                 }
                 if blank {
                     div {
-                        label { class: "label", r#for: "vru-copies", "Number of blank copies to print" }
-                        input { id: "vru-copies", r#type: "number", min: "1", max: "200", class: "field", "data-testid": "vru-copies", value: "{copies}",
-                            oninput: move |e| copies.set(e.value().parse::<u32>().unwrap_or(1).clamp(1, 200)) }
+                        label { class: "label", r#for: "vru-copies", "Number of Blank Copies to Print" }
+                        input { id: "vru-copies", r#type: "number", min: "1", max: "250", inputmode: "numeric", class: "field w-40", "data-testid": "vru-copies", value: "{copies}",
+                            oninput: move |e| copies.set(e.value().parse::<u32>().unwrap_or(10).clamp(1, 250)) }
                     }
                 } else {
                     div {
-                        label { class: "label", r#for: "vru-scope", "Target volunteers (scope)" }
+                        label { class: "label", r#for: "vru-scope", "Target Volunteers (Scope)" }
                         select { id: "vru-scope", class: "field", "data-testid": "vru-scope", onchange: move |e| scope.set(e.value()),
-                            for (v, l) in [("active", "All active volunteers (excludes archived)"), ("project-group", "Filter by project group"), ("housing", "Filter by housing cluster / sitio"), ("single", "Single volunteer worker")] {
+                            for (v, l) in [("active", "All Active Volunteers (Excludes archived)"), ("project-group", "Filter by Project Group"), ("housing", "Filter by Housing Cluster / Sitio"), ("single", "Single Volunteer Worker")] {
                                 option { key: "{v}", value: "{v}", selected: scope() == v, "{l}" }
                             }
                         }
                     }
                     if scope() == "project-group" {
                         div {
-                            label { class: "label", r#for: "vru-group", "Select project group" }
+                            label { class: "label", r#for: "vru-group", "Select Project Group" }
                             select { id: "vru-group", class: "field", "data-testid": "vru-group", onchange: move |e| f_group.set(e.value()),
                                 option { value: "", "Choose…" }
                                 for g in distinct(&people, |w| w.project_group.clone()) { option { key: "{g}", value: "{g}", selected: f_group() == g, "{g}" } }
@@ -336,7 +347,7 @@ pub fn UpdateFormsPrint() -> Element {
                     }
                     if scope() == "housing" {
                         div {
-                            label { class: "label", r#for: "vru-housing", "Select housing cluster" }
+                            label { class: "label", r#for: "vru-housing", "Select Housing Cluster" }
                             select { id: "vru-housing", class: "field", "data-testid": "vru-housing", onchange: move |e| f_housing.set(e.value()),
                                 option { value: "", "Choose…" }
                                 for h in distinct(&people, |w| w.housing.clone()) { option { key: "{h}", value: "{h}", selected: f_housing() == h, "{h}" } }
@@ -345,22 +356,33 @@ pub fn UpdateFormsPrint() -> Element {
                     }
                     if scope() == "single" {
                         div {
-                            label { class: "label", r#for: "vru-single", "Select volunteer worker" }
+                            label { class: "label", r#for: "vru-single", "Select Volunteer Worker" }
                             select { id: "vru-single", class: "field", "data-testid": "vru-single", onchange: move |e| single.set(e.value()),
                                 option { value: "", "Choose…" }
                                 for w in people.iter() { option { key: "{w.id}", value: "{w.id}", selected: single() == w.id.to_string(), "{w.name}" } }
                             }
                         }
                     }
-                    label { class: "flex items-center gap-2 text-sm self-end pb-2",
-                        input { r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "vru-photo", checked: photo(), onchange: move |e| photo.set(e.checked()) }
-                        "Include worker photo in header (if on file)"
-                    }
                 }
-                div { class: "flex items-end",
+                label { class: "flex items-center gap-2 text-sm",
+                    input { id: "vru-include-photo", r#type: "checkbox", class: "w-4 h-4 accent-[#064e3b]", "data-testid": "vru-photo", checked: photo(), onchange: move |e| photo.set(e.checked()) }
+                    "Include worker photo in header (if available on file)"
+                }
+                div { class: "rounded-md border border-line p-3 flex flex-wrap justify-between gap-3 text-sm", "data-testid": "vru-summary",
+                    div {
+                        p { class: "text-xs uppercase tracking-wide text-muted", "Print Queue Summary" }
+                        p { class: "font-semibold", "data-testid": "vru-count-preview",
+                            {if blank { format!("Will print {} blank copies (1 page per sheet)", copies()) } else { format!("Will generate {} personalized update form(s) (1 page per volunteer)", count) }}
+                        }
+                    }
+                    div { class: "text-xs text-muted text-right", p { "1-Page Layout" } p { "Auto Page-break" } }
+                }
+                div { class: "flex justify-end",
                     button { class: "btn-primary", "data-testid": "vru-print", disabled: count == 0, onclick: { let ids: Vec<String> = list.iter().map(|p| s(p, "id")).collect(); move |_| s5print("updateForms", json!([{
                         "ids": ids, "blank": copies(), "options": { "mode": mode(), "cycle": cycle(), "paperSize": paper(), "includePhoto": photo() },
-                    }])) }, Icon { name: "archive" } "Print form(s) ({count})" }
+                    }])) },
+                        {if blank { format!("🖨️ Print {} Blank Forms", copies()) } else { format!("🖨️ Print {} Update Form{}", count, if count == 1 { "" } else { "s" }) }}
+                    }
                 }
             }
             if count == 0 {

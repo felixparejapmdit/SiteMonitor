@@ -845,6 +845,50 @@ fn roster_rows(days: Vec<(String, Vec<Value>)>) -> Vec<Value> {
 
 /// `GET /api/workforce/project-history` — who was on each project, day by day,
 /// from the daily snapshots and today (Service 5's "Project Roster History").
+/// `GET /api/workforce/dependability` — each person's attendance records, the way
+/// Service 5's analytics reads them (`queryWorkerSnapshots`): their attendance
+/// history, or else the daily snapshots. No clinic details.
+pub async fn dependability(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<Value>>> {
+    require_any(&user, &[Permission::ManageWorkforce, Permission::ViewWorkforceReports])?;
+    let snaps = workforce::list_records(&state.db, "history").await?;
+    let ts_of = |v: &Value, date: &str| match &v["timestamp"] {
+        Value::Number(n) => n.as_i64().unwrap_or(0),
+        Value::String(x) => chrono::DateTime::parse_from_rfc3339(x).map(|d| d.timestamp_millis()).unwrap_or(0),
+        _ => chrono::NaiveDate::parse_from_str(date.get(..10).unwrap_or(""), "%Y-%m-%d").map(|d| d.and_hms_opt(8, 0, 0).unwrap().and_utc().timestamp_millis()).unwrap_or(0),
+    };
+    let out = workforce::people(&state.db)
+        .await?
+        .into_iter()
+        .map(|x| {
+            let w = workforce::worker_of(&x);
+            let live = |k: &str| text(&x.p, k);
+            let mut records: Vec<Value> = match x.p["attendanceHistory"].as_array().filter(|h| !h.is_empty()) {
+                Some(h) => h
+                    .iter()
+                    .map(|e| {
+                        let date = if text(e, "date").is_empty() { text(e, "timestamp").chars().take(10).collect() } else { text(e, "date") };
+                        let pick = |k: &str| if text(e, k).is_empty() { live(k) } else { text(e, k) };
+                        let status = ["status", "newStatus", "dailyStatus"].iter().map(|k| text(e, k)).find(|v| !v.is_empty()).unwrap_or_else(|| "Present".into());
+                        json!({ "date": date, "timestamp": ts_of(e, &date), "dailyStatus": status, "area": pick("area"), "project": pick("project"), "specificTask": pick("specificTask") })
+                    })
+                    .collect(),
+                None => snaps
+                    .iter()
+                    .filter_map(|snap| {
+                        let m = snap["data"].as_array()?.iter().find(|d| (!w.a_number.is_empty() && text(d, "aNumber") == w.a_number) || text(d, "name").trim().eq_ignore_ascii_case(w.name.trim()))?;
+                        let date = text(snap, "dateStr");
+                        let status = if text(m, "dailyStatus").is_empty() { "Present".into() } else { text(m, "dailyStatus") };
+                        Some(json!({ "date": date, "timestamp": ts_of(snap, &date), "dailyStatus": status, "area": text(m, "area"), "project": text(m, "project"), "specificTask": text(m, "specificTask") }))
+                    })
+                    .collect(),
+            };
+            records.sort_by_key(|r| std::cmp::Reverse(r["timestamp"].as_i64().unwrap_or(0)));
+            json!({ "id": x.id, "name": w.name, "aNumber": w.a_number, "trade": w.trade, "hasPhoto": w.has_photo, "archived": w.archived, "records": records })
+        })
+        .collect();
+    Ok(Json(out))
+}
+
 pub async fn project_history(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<Value>>> {
     require_any(&user, &[Permission::ManageWorkforce, Permission::ViewWorkforceReports])?;
     let mut days: Vec<(String, Vec<Value>)> = workforce::all_snapshots(&state.db)

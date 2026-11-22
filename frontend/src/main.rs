@@ -163,6 +163,120 @@ struct NavItem {
     page: &'static str,
 }
 
+/// One quick search result.
+#[derive(Clone, PartialEq)]
+enum Hit {
+    Page { route: Route, page: &'static str, tab: &'static str, label: String, icon: &'static str },
+    Person(Worker),
+}
+
+/// Ctrl+K quick search: every page and tab you can open, and the people (by
+/// name, A# or trade). Arrows move, Enter opens, Esc closes.
+#[component]
+fn QuickSearch(on_close: EventHandler<()>) -> Element {
+    let app = use_app();
+    let router = use_navigator();
+    let workers = views::workforce_ops::use_workers();
+    let mut q = use_signal(String::new);
+    let mut sel = use_signal(|| 0usize);
+    let mut profile = use_signal(|| None::<Worker>);
+    let ql = q().trim().to_lowercase();
+    let mut hits: Vec<Hit> = vec![];
+    for item in nav_for(app) {
+        if ql.is_empty() || item.label.to_lowercase().contains(&ql) {
+            hits.push(Hit::Page { route: item.route.clone(), page: item.page, tab: "", label: item.label.to_string(), icon: item.icon });
+        }
+        if !item.page.is_empty() {
+            for t in views::page_tabs(app, item.page) {
+                if !ql.is_empty() && (t.to_lowercase().contains(&ql) || item.label.to_lowercase().contains(&ql)) {
+                    hits.push(Hit::Page { route: item.route.clone(), page: item.page, tab: t, label: format!("{} › {}", item.label, t), icon: item.icon });
+                }
+            }
+        }
+    }
+    hits.truncate(if ql.is_empty() { 12 } else { 10 });
+    if !ql.is_empty() {
+        let people = workers.read().clone().unwrap_or_default();
+        hits.extend(
+            people
+                .into_iter()
+                .filter(|w| [&w.name, &w.a_number, &w.trade, &w.project_group].iter().any(|f| f.to_lowercase().contains(&ql)))
+                .take(10)
+                .map(Hit::Person),
+        );
+    }
+    let n = hits.len();
+    let cur = sel().min(n.saturating_sub(1));
+    let can_profile = app.can(Permission::ManageWorkforce);
+    let open = {
+        let hits = hits.clone();
+        Callback::new(move |i: usize| match hits.get(i).cloned() {
+            Some(Hit::Page { route, page, tab, .. }) => {
+                if !tab.is_empty() {
+                    PAGE_TABS.write().insert(page, tab);
+                }
+                router.push(route);
+                on_close.call(());
+            }
+            Some(Hit::Person(w)) => {
+                if can_profile {
+                    profile.set(Some(w));
+                } else {
+                    router.push(Route::Personnel {});
+                    on_close.call(());
+                }
+            }
+            None => {}
+        })
+    };
+    if let Some(w) = profile() {
+        return rsx! { views::profile::ProfileModal { worker: w, on_close: move |_| on_close.call(()) } };
+    }
+    rsx! {
+        div { class: "fixed inset-0 z-50 bg-black/30 flex items-start justify-center pt-[12vh] px-4", "data-testid": "quick-search",
+            onclick: move |_| on_close.call(()),
+            div { class: "card shadow-pop w-full max-w-xl overflow-hidden", role: "dialog", "aria-label": "Quick search",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center gap-2 px-4 border-b border-line",
+                    Icon { name: "search" }
+                    input { class: "flex-1 h-12 bg-transparent outline-none text-[15px]", autofocus: true, "data-testid": "quick-search-input",
+                        placeholder: "Search pages, tabs and people…", "aria-label": "Quick search", value: "{q}",
+                        oninput: move |e| { q.set(e.value()); sel.set(0); },
+                        onkeydown: move |e: KeyboardEvent| match e.key() {
+                                Key::ArrowDown => { e.prevent_default(); sel.set((cur + 1).min(n.saturating_sub(1))); }
+                                Key::ArrowUp => { e.prevent_default(); sel.set(cur.saturating_sub(1)); }
+                                Key::Enter => open.call(cur),
+                                Key::Escape => on_close.call(()),
+                                _ => {}
+                        }
+                    }
+                    kbd { class: "text-xs text-muted border border-line rounded px-1.5", "Esc" }
+                }
+                ul { class: "max-h-[60vh] overflow-y-auto p-1.5", "data-testid": "quick-search-results",
+                    if n == 0 { li { class: "px-3 py-6 text-center text-sm text-muted", "Nothing matches." } }
+                    for (i, h) in hits.into_iter().enumerate() {
+                        li { key: "{i}",
+                            button { class: if i == cur { "w-full flex items-center gap-3 px-3 py-2 rounded text-left text-sm bg-accent-soft" } else { "w-full flex items-center gap-3 px-3 py-2 rounded text-left text-sm hover:bg-hover" },
+                                "data-testid": "quick-search-hit",
+                                onmouseenter: move |_| sel.set(i),
+                                onclick: move |_| open.call(i),
+                                match h {
+                                    Hit::Page { label, icon, .. } => rsx! { Icon { name: icon } span { class: "flex-1", "{label}" } span { class: "text-xs text-muted", "Page" } },
+                                    Hit::Person(w) => rsx! {
+                                        views::workforce_ops::WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo, size: 24 }
+                                        span { class: "flex-1 truncate", "{w.name}" span { class: "text-muted ml-2", "A# {w.a_number} · {w.trade}" } }
+                                        span { class: "text-xs text-muted", "Person" }
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Each menu item has its own colour, so it's recognisable at a glance.
 #[derive(Clone, Copy, PartialEq)]
 enum Hue {
@@ -254,8 +368,11 @@ fn nav_for(app: AppState) -> Vec<NavItem> {
             v.push(item(Route::Archive {}, "History", "archive", ESTATE, Hue::Stone));
             const CREW: &str = "Workforce & crew";
             v.push(item(Route::Crew {}, "Crew", "hard-hat", CREW, Hue::Sky));
-            if app.can(Permission::ManageWorkforce) || app.can(Permission::ManageCrew) {
+            // Assignments sits in Workforce records (after Dashboard); crew-only managers keep a direct link.
+            if app.can(Permission::ManageCrew) && !app.can(Permission::ManageWorkforce) {
                 v.push(item(Route::Assignments {}, "Assignments", "check", CREW, Hue::Emerald));
+            }
+            if app.can(Permission::ManageWorkforce) || app.can(Permission::ManageCrew) {
                 v.push(item(Route::Personnel {}, "Personnel", "users", CREW, Hue::Teal));
             }
             if !views::page_tabs(app, "workforce").is_empty() {
@@ -315,24 +432,19 @@ fn Shell() -> Element {
     let bar: Vec<NavItem> = nav.iter().take(4).cloned().collect();
     let more_active = !bar.iter().any(|i| is_active(&route, &i.route));
 
-    // Ctrl+K (⌘K) anywhere: find a worker (Service 5's worker lookup).
-    let router = use_navigator();
-    let lookup = app.can(Permission::ManageWorkforce) || app.can(Permission::ManageCrew);
+    // Ctrl+K (⌘K) on every page opens quick search; the Service 5 page frames pass it up.
+    let mut quick = use_signal(|| false);
     use_future(move || async move {
-        if !lookup {
-            return;
-        }
         let mut keys = document::eval(
             "document.addEventListener('keydown', e => {
-               if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-                 e.preventDefault();
-                 const box = document.getElementById('worker-search');
-                 if (box) box.focus(); else dioxus.send('open');
-               }
+               if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); dioxus.send('open'); }
+             });
+             window.addEventListener('message', e => {
+               if (e.origin === location.origin && e.data === 's5-quick-search') dioxus.send('open');
              });",
         );
         while keys.recv::<String>().await.is_ok() {
-            router.push(Route::Personnel {});
+            quick.set(true);
         }
     });
 
@@ -353,6 +465,9 @@ fn Shell() -> Element {
             MobileTopBar { menu_open: drawer(), on_menu: move |_| drawer.set(true) }
             if drawer() {
                 MobileDrawer { on_close: move |_| drawer.set(false) }
+            }
+            if quick() {
+                QuickSearch { on_close: move |_| quick.set(false) }
             }
             if more() {
                 MoreSheet { on_close: move |_| more.set(false) }

@@ -362,4 +362,138 @@ window.S5Print = {
     if (frame && frame.contentWindow) { frame.contentWindow.focus(); frame.contentWindow.print(); }
   }
 };
+
+// Service 5 keeps whole lists under storage keys; pages that edit (Overnight Duty)
+// get a storage whose lists are SiteMonitor's records: each changed item is saved
+// with PUT, each removed one deleted, so the server keeps its usual checks and log.
+var STORE_LISTS = {
+  wc_duty_schedules: ['duty_schedules', 'dateStr'], wc_duty_areas: ['duty_areas', 'id'], wc_ot_entries: ['ot_entries', 'id'],
+  wc_signatories_data: ['signatories', 'id']
+};
+var storeSeen = {};
+function storeKeyOf(field) { return function (x) { return String((x && (x[field] || x.id || x.name)) || ''); }; }
+var siteStorage = {
+  get: function (key) {
+    if (key === STORAGE_KEY) return Promise.resolve(workersData);
+    var c = STORE_LISTS[key];
+    if (!c) return Promise.resolve(null);
+    return api('/workforce/records/' + c[0]).then(function (l) {
+      storeSeen[key] = JSON.parse(JSON.stringify(l));
+      return l;
+    });
+  },
+  set: function (key, list) {
+    var c = STORE_LISTS[key];
+    if (!c || !Array.isArray(list)) return Promise.resolve();
+    var keyOf = storeKeyOf(c[1]);
+    var before = storeSeen[key] || [];
+    var send = function (method, id, body) {
+      return fetch('/api/workforce/records/' + c[0] + '/' + encodeURIComponent(id), {
+        method: method, credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined
+      });
+    };
+    var jobs = [];
+    var kept = {};
+    list.forEach(function (x) {
+      var id = keyOf(x);
+      if (!id) return;
+      kept[id] = true;
+      var old = before.find(function (b) { return keyOf(b) === id; });
+      if (!old || JSON.stringify(old) !== JSON.stringify(x)) jobs.push(send('PUT', id, x));
+    });
+    before.forEach(function (b) { var id = keyOf(b); if (id && !kept[id]) jobs.push(send('DELETE', id)); });
+    return Promise.all(jobs).then(function (rs) {
+      var bad = rs.filter(function (r) { return !r.ok; })[0];
+      if (bad) { showToast('Not saved: the server said ' + bad.status + '.'); throw new Error('not saved'); }
+      storeSeen[key] = JSON.parse(JSON.stringify(list));
+    });
+  }
+};
+
+// Service 5 pages shown inside SiteMonitor (frontend/public/print/s5view-*.html):
+// Service 5's markup and render code, fed SiteMonitor's records.
+window.S5View = {
+  // Service 5's shared helpers, where its page scripts expect them. Its local
+  // copies (safeSetItem) are off: no personnel data is kept in the browser.
+  globals: function () {
+    window._storage = siteStorage;
+    window.esc = esc;
+    window.showConfirm = showConfirm;
+    window.showErrorToast = function (m) { showToast(m); };
+    window.trapFocus = S5_modals.trapFocus;
+    window.releaseFocusTrap = S5_modals.releaseFocusTrap;
+    window.SIG_STORAGE_KEY = SIG_STORAGE_KEY;
+    window.defaultSignatories = defaultSignatories;
+    window.safeSetItem = function () {};
+    window.safeGetJSON = function (key, def) { return def; };
+  },
+  // Signatories: Service 5's signatories page script, saving to SiteMonitor's signatory records.
+  signatories: function () {
+    return Promise.all([loadWorkers(), siteStorage.get('wc_signatories_data')]).then(function (r) {
+      signatoriesData = Array.isArray(r[1]) ? r[1] : [];
+      if (typeof window.normalizeSignatoriesData === 'function') window.normalizeSignatoriesData();
+      window.renderSignatories();
+      document.body.setAttribute('data-ready', '1');
+    }).catch(fail);
+  },
+  // OT Calculator / OT Entries: Service 5's OT module, saving to SiteMonitor's OT records.
+  ot: function (entries) {
+    window._storage = siteStorage;
+    window.trapFocus = S5_modals.trapFocus;
+    window.releaseFocusTrap = S5_modals.releaseFocusTrap;
+    var M = S5_ot_calculator.OtCalcModule;
+    window.OtCalcModule = M;
+    // Service 5's sidebar button tells the module which page it is on.
+    var nav = document.createElement('button');
+    nav.id = 'nav-btn-ot-entries';
+    nav.hidden = true;
+    if (entries) nav.className = 'active';
+    document.body.appendChild(nav);
+    S5_ot_calculator.wireOtEvents();
+    return loadWorkers().then(function () { return M.init(); }).then(function () {
+      if (entries) M._renderEntriesPage();
+      document.body.setAttribute('data-ready', '1');
+    }).catch(fail);
+  },
+  // Overnight Duty: Service 5's duty module, saving to SiteMonitor's duty records.
+  duty: function () {
+    window._storage = siteStorage;
+    window.trapFocus = S5_modals.trapFocus;
+    window.releaseFocusTrap = S5_modals.releaseFocusTrap;
+    // Service 5's "Schedule Duty" header button (ui.js) generates the week.
+    var sched = document.getElementById('btn-duty-schedule');
+    if (sched) sched.addEventListener('click', function () { S5_duty_2.DutyModule.requestWeekGeneration(); });
+    return loadWorkers().then(function () { return S5_duty_2.DutyModule.init(); }).then(function () {
+      document.body.setAttribute('data-ready', '1');
+    }).catch(fail);
+  },
+
+  departments: function () {
+    var D = S5_dashboard;
+    // Service 5's buttons call these by name.
+    ['renderDeployabilityBanner', 'renderDepartmentMatrix', 'renderDeptAnalytics', 'renderHousingOverview', 'openDepartmentRosterModal', 'openResidenceRosterModal']
+      .forEach(function (k) { window[k] = D[k]; });
+    window.openAreaRosterModal = S5_distribution_2.openAreaRosterModal;
+    window.switchView = function () {};
+    var modal = document.getElementById('area-roster-modal');
+    var close = function () { if (modal) modal.classList.remove('active'); };
+    var x = document.getElementById('btn-close-roster-modal');
+    if (x) x.addEventListener('click', close);
+    if (modal) modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+    var bar = document.getElementById('dist-tab-bar');
+    if (bar) bar.addEventListener('click', function (e) {
+      var b = e.target.closest('.dist-tab-btn');
+      if (b) S5_ui.switchDistTab(b.getAttribute('data-dist-tab'));
+    });
+    return loadWorkers().then(function () {
+      var aw = workersData.filter(function (w) { return w && !w.isArchived; });
+      D.renderDeployabilityBanner(aw);
+      D.renderDepartmentMatrix(aw);
+      D.renderDeptAnalytics(aw);
+      S5_ui.switchDistTab('departments');
+      document.body.setAttribute('data-ready', '1');
+    }).catch(fail);
+  }
+};
 })();

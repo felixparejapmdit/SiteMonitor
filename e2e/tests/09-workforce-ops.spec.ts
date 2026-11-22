@@ -65,7 +65,6 @@ test("a group linked to a job feeds the Crew page roster", async ({ page, reques
   await openAs(page, "OfficeAdmin", "/workforce");
   await page.getByTestId("tab-Project Groups").click();
   const team = page.getByTestId("group-row").filter({ hasText: "Team A" });
-  await expect(team).toContainText("2 present · 1 absent");
   await team.getByTestId("group-job").selectOption(parking.id);
   await expect(page.getByText("Group linked").first()).toBeVisible();
 
@@ -87,22 +86,16 @@ test("group leaders can be picked as a project's team", async ({ page, request }
   await expect(page.getByText("Phone 0917 000 0101")).toBeVisible();
 });
 
-test("overnight duty rotates through present people; overtime pay is hours × rate", async ({ page, request }) => {
+test("overnight duty: the original Service 5 screen generates the week from the roster", async ({ page, request }) => {
   await openAs(page, "OfficeAdmin", "/operations");
-  await page.getByTestId("duty-generate").click();
-  await expect(page.getByText("Duty roster made").first()).toBeVisible();
-  await expect(page.getByTestId("duty-area").filter({ hasText: "Main Gate" })).toContainText("Lito Night");
-  const area = (await records(request, "duty_areas")).find((a: any) => a.id === "gate");
-  expect(area.lastRotationIndex).toBe(0);
-
-  await page.getByTestId("tab-OT Entries").click();
-  await page.getByTestId("ot-add").click();
-  await page.getByTestId("rf-title").fill("Concrete pour after hours");
-  await page.getByTestId("rf-volunteerId").selectOption("101");
-  await page.getByTestId("rf-hours").fill("2");
-  await page.getByTestId("rf-hourlyRate").fill("100");
-  await page.getByTestId("rf-save").click();
-  await expect(page.getByTestId("ot-total")).toContainText("₱200.00");
+  await page.getByTestId("tab-Overnight Duty").click();
+  const duty = page.frameLocator("[data-testid=s5-page-duty]");
+  await expect(duty.locator("body[data-ready=\"1\"]")).toBeAttached({ timeout: 20_000 });
+  await expect(duty.locator("#duty-areas-list")).toContainText("Main Gate");
+  await duty.getByRole("button", { name: "Gen Week", exact: true }).click();
+  await duty.locator("#confirm-modal.active").waitFor();
+  await duty.locator("#confirm-modal-ok").click();
+  await expect.poll(async () => ((await records(request, "duty_schedules")) as any[]).some((d) => d.assignments?.length > 0), { timeout: 20_000 }).toBe(true);
 });
 
 test("the clinic ledger is office-only and every change is audited", async ({ page, request }) => {

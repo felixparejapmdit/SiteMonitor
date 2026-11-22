@@ -1,0 +1,558 @@
+@layer legacy, reset, tokens, base, themes, components, utilities, overrides;
+
+@layer tokens {
+:root {
+  /* ── Universal Antigravity Semantic Token Schema (theme_engine.md Section 1.1) ── */
+  /* 0. Canonical Notion Design Tokens (awesome-design-md/notion/DESIGN.md) */
+  --notion-primary: #5645d4;
+  --notion-primary-pressed: #4534b3;
+  --notion-primary-deep: #3a2a99;
+  --notion-on-primary: #ffffff;
+  --notion-brand-navy: #0a1530;
+  --notion-brand-navy-deep: #070f24;
+  --notion-brand-navy-mid: #1a2a52;
+  --notion-link-blue: #0075de;
+  --notion-link-blue-pressed: #005bab;
+  --notion-canvas: #ffffff;
+  --notion-surface: #f6f5f4;
+  --notion-surface-soft: #fafaf9;
+  --notion-hairline: #e5e3df;
+  --notion-hairline-soft: #ede9e4;
+  --notion-hairline-strong: #c8c4be;
+  --notion-ink-deep: #000000;
+  --notion-ink: #1a1a1a;
+  --notion-charcoal: #37352f;
+  --notion-slate: #5d5b54;
+  --notion-steel: #787671;
+  --notion-stone: #a4a097;
+  --notion-muted: #bbb8b1;
+
+  /* 1. Surfaces & Canvas */
+  --ag-bg-canvas: #ffffff;
+  --ag-bg-surface: #f6f5f4;
+  --ag-bg-surface-soft: #fafaf9;
+  --ag-bg-elevated: #ffffff;
+  --ag-bg-sidebar: #f6f5f4;
+  --ag-bg-glass: rgba(255, 255, 255, 0.88);
+  --ag-bg-hover: rgba(55, 53, 47, 0.06);
+  --ag-bg-active: rgba(55, 53, 47, 0.12);
+  --ag-bg-selected: rgba(0, 117, 222, 0.14);
+
+  /* 2. Typography & Iconography */
+  --ag-text-primary: #1a1a1a;
+  --ag-text-secondary: #37352f;
+  --ag-text-muted: #787671;
+  --ag-text-faint: #bbb8b1;
+  --ag-text-on-accent: #ffffff;
+
+  /* 3. Accents & Semantic Status (Notion Signature Purple CTA + Link Blue) */
+  --ag-accent-primary: #5645d4;
+  --ag-accent-hover: #4534b3;
+  --ag-accent-deep: #3a2a99;
+  --ag-link-blue: #0075de;
+  --ag-link-hover: #005bab;
+  --ag-status-success: #1aae39;
+  --ag-status-warning: #dd5b00;
+  --ag-status-danger: #e03131;
+  --ag-status-info: #0075de;
+
+  /* 4. Borders, Dividers & Specular Rims */
+  --ag-border-subtle: #e5e3df;
+  --ag-border-strong: #c8c4be;
+  --ag-border-focus: #5645d4;
+  --ag-rim-specular-top: transparent;
+  --ag-rim-outer-edge: #e5e3df;
+
+  /* 5. Geometry & Radii (Notion Sober Editorial: Buttons/Inputs 8px, Cards 12px) */
+  --ag-radius-xs: 4px;
+  --ag-radius-sm: 6px;
+  --ag-radius-md: 8px;
+  --ag-radius-lg: 12px;
+  --ag-radius-xl: 16px;
+  --ag-radius-pill: 9999px;
+
+  /* 6. Typography Scale & Tracking */
+  --ag-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ag-font-display: var(--ag-font-sans);
+  --ag-font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  --ag-tracking-display: -0.035em;
+  --ag-tracking-heading: -0.022em;
+  --ag-tracking-body: -0.003em;
+  --ag-line-height-tight: 1.2;
+  --ag-line-height-body: 1.5;
+
+  /* 7. Optical & Elevation Stack */
+  --ag-blur-surface: 0px;
+  --ag-saturate-surface: 100%;
+  --ag-shadow-xs: 0 1px 2px rgba(15, 15, 15, 0.04);
+  --ag-shadow-card: rgba(15, 15, 15, 0.04) 0px 0px 0px 1px, rgba(15, 15, 15, 0.03) 0px 3px 6px, rgba(15, 15, 15, 0.05) 0px 9px 24px;
+  --ag-shadow-popover: 0px 8px 16px -4px rgba(15, 15, 15, 0.08), 0px 0px 0px 1px rgba(15, 15, 15, 0.05);
+  --ag-shadow-modal: 0 12px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  /* 8. Layout Rhythm & Hardware Density */
+  --ag-control-height-sm: 28px;
+  --ag-control-height-md: 36px;
+  --ag-control-height-lg: 44px;
+  --ag-sidebar-width: 240px;
+  --ag-toolbar-height: 45px;
+  --ag-grid-unit: 4px;
+
+  /* ── Bidirectional Semantic Alias Bridge (theme_engine.md Section 0.3) ── */
+  --primary-color: var(--ag-accent-primary);
+  --color-brand-primary: var(--ag-accent-primary);
+  --color-primary: var(--ag-accent-primary);
+  --color-primary-hover: var(--ag-accent-hover);
+  --primary-hover: var(--ag-accent-hover);
+  --color-link: var(--notion-link-blue);
+  --color-link-hover: var(--notion-link-blue-pressed);
+  --color-bg-default: var(--ag-bg-canvas);
+  --color-bg-secondary: var(--ag-bg-surface);
+  --color-bg-sidebar: var(--ag-bg-sidebar);
+  --color-bg-elevated: var(--ag-bg-elevated);
+  --color-surface: var(--ag-bg-surface);
+  --color-surface-secondary: var(--ag-bg-sidebar);
+  --surface-sidebar: var(--ag-bg-sidebar);
+  --color-bg: var(--ag-bg-canvas);
+  --bg-primary: var(--ag-bg-canvas);
+  --bg-secondary: var(--ag-bg-surface);
+  --bg-color: var(--ag-bg-canvas);
+  --card-bg: var(--ag-bg-elevated);
+  --color-text-default: var(--ag-text-primary);
+  --color-text-gray: var(--ag-text-secondary);
+  --color-fg-subtle: var(--ag-text-muted);
+  --text-primary: var(--ag-text-primary);
+  --text-secondary: var(--ag-text-secondary);
+  --text-muted: var(--ag-text-muted);
+  --text-main: var(--ag-text-primary);
+  --color-border-default: var(--ag-border-subtle);
+  --color-border-strong: var(--ag-border-strong);
+  --color-border: var(--ag-border-subtle);
+  --border-color: var(--ag-border-subtle);
+  --border-subtle: var(--ag-border-subtle);
+  --border-strong: var(--ag-border-strong);
+  --color-row-hover: var(--ag-bg-hover);
+  --bg-hover: var(--ag-bg-hover);
+  --row-hover: var(--ag-bg-hover);
+  --table-border: var(--ag-border-subtle);
+  --radius-xs: var(--ag-radius-xs);
+  --radius-sm: var(--ag-radius-sm);
+  --radius-md: var(--ag-radius-md);
+  --radius-lg: var(--ag-radius-lg);
+  --radius-xl: var(--ag-radius-xl);
+  --radius-modal: var(--ag-radius-lg);
+  --radius-full: var(--ag-radius-pill);
+  --font-sans: var(--ag-font-sans);
+  --font-body: var(--ag-font-sans);
+  --font-heading: var(--ag-font-display);
+  --font-mono: var(--ag-font-mono);
+  --shadow-xs: var(--ag-shadow-xs);
+  --shadow-card: var(--ag-shadow-card);
+  --shadow-popover: var(--ag-shadow-popover);
+  --shadow-modal: var(--ag-shadow-modal);
+  --sidebar-width: var(--ag-sidebar-width);
+  --nav-height: var(--ag-toolbar-height);
+  --topbar-height: var(--ag-toolbar-height);
+
+  /* ── 1. Notion Typography & Font Stacks (Native OS System-Agnostic) ── */
+  --font-serif: Lyon-Text, Georgia, ui-serif, serif;
+  --font-mono: iawriter-mono, Nitti, Menlo, Courier, monospace;
+  --font-body: var(--font-sans);
+  --font-heading: var(--font-sans);
+
+  /* ── Typographic Weights & Line Heights ── */
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+  --font-extrabold: 800;
+
+  --leading-display: 1.1;
+  --leading-heading: 1.2;
+  --leading-tight: 1.3;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.6;
+
+  /* ── Typographic Fluid Scale (pwa_dev.md Section 3.1: CSS clamp() fluid scaling) ── */
+  --text-xs: 11px;                                               /* captions, metadata, badges */
+  --text-sm: 12px;                                               /* column headers, compact metadata */
+  --text-ui: 13px;                                               /* UI text, sidebar items, buttons */
+  --text-base: 14px;                                             /* base body (14px-16px readable) */
+  --text-body: 16px;                                             /* Notion standard readable body */
+  --text-lg: 16px;                                               /* sub-headings */
+  --text-xl: clamp(17px, 1.2vw + 13px, 20px);                   /* H3 section headers */
+  --text-2xl: clamp(19px, 1.8vw + 14px, 24px);                   /* H2 view headers */
+  --text-3xl: clamp(22px, 2.5vw + 15px, 30px);                   /* H1 page headings */
+  --text-4xl: clamp(26px, 3.5vw + 16px, 40px);                   /* Notion Page Title / Display */
+
+  /* ── 2. Notion Brand & Structural Colors (Light Mode) ── */
+  /* ── 2. Secondary & Backward-Compatibility Mappings ── */
+  --color-brand-navy: #0A1530;
+  --color-primary-light: rgba(35, 131, 226, 0.08);
+  --color-primary-ring: rgba(35, 131, 226, 0.35);
+  --primary-light: rgba(35, 131, 226, 0.08);
+  --color-fg: var(--ag-text-primary);
+  --color-fg-muted: var(--ag-text-secondary);
+  --color-fg-subtle: var(--ag-text-muted);
+  --text-tertiary: var(--ag-text-muted);
+
+  /* ── 3. Notion 10-Color Semantic Tint Matrix (notion-design.md § 2.6) ── */
+  /* Gray */
+  --notion-tag-gray-text: #494846;
+  --notion-tag-gray-bg: #F9F8F7;
+  --notion-tag-gray-border: #E6E5E3;
+
+  /* Brown */
+  --notion-tag-brown-text: #584437;
+  --notion-tag-brown-bg: #FAF8F6;
+  --notion-tag-brown-border: #EBDFD7;
+
+  /* Orange */
+  --notion-tag-orange-text: #6A4222;
+  --notion-tag-orange-bg: #FCF7F4;
+  --notion-tag-orange-border: #F3DDCB;
+
+  /* Yellow */
+  --notion-tag-yellow-text: #655121;
+  --notion-tag-yellow-bg: #FCFAEF;
+  --notion-tag-yellow-border: #F2E3B7;
+
+  /* Green */
+  --notion-tag-green-text: #2A533C;
+  --notion-tag-green-bg: #F6F9F7;
+  --notion-tag-green-border: #D7E6DD;
+
+  /* Blue */
+  --notion-tag-blue-text: #264A72;
+  --notion-tag-blue-bg: #F3F9FD;
+  --notion-tag-blue-border: #CEE3F7;
+
+  /* Purple */
+  --notion-tag-purple-text: #553B69;
+  --notion-tag-purple-bg: #FAF7FC;
+  --notion-tag-purple-border: #E8DBF2;
+
+  /* Pink */
+  --notion-tag-pink-text: #68354E;
+  --notion-tag-pink-bg: #FCF7F9;
+  --notion-tag-pink-border: #F4D8E4;
+
+  /* Red */
+  --notion-tag-red-text: #6D3531;
+  --notion-tag-red-bg: #FDF6F6;
+  --notion-tag-red-border: #F7D9D5;
+
+  /* Teal */
+  --notion-tag-teal-text: #18505B;
+  --notion-tag-teal-bg: #F3FAFB;
+  --notion-tag-teal-border: #CAE9F0;
+
+  /* Backward-compatible pastel aliases mapped to 10-Color Matrix */
+  --color-pastel-peach: var(--notion-tag-orange-bg);
+  --color-pastel-rose: var(--notion-tag-red-bg);
+  --color-pastel-mint: var(--notion-tag-green-bg);
+  --color-pastel-lavender: var(--notion-tag-purple-bg);
+  --color-pastel-sky: var(--notion-tag-blue-bg);
+  --color-pastel-yellow: var(--notion-tag-yellow-bg);
+  --color-pastel-yellow-bold: #F9E79F;
+  --color-pastel-cream: #F8F5E8;
+  --color-pastel-gray: var(--notion-tag-gray-bg);
+
+  --color-notion-red: var(--notion-tag-red-text);
+  --color-notion-red-bg: var(--notion-tag-red-bg);
+  --color-notion-orange: var(--notion-tag-orange-text);
+  --color-notion-orange-bg: var(--notion-tag-orange-bg);
+  --color-notion-yellow: var(--notion-tag-yellow-text);
+  --color-notion-yellow-bg: var(--notion-tag-yellow-bg);
+  --color-notion-green: var(--notion-tag-green-text);
+  --color-notion-green-bg: var(--notion-tag-green-bg);
+  --color-notion-blue: var(--notion-tag-blue-text);
+  --color-notion-blue-bg: var(--notion-tag-blue-bg);
+  --color-notion-purple: var(--notion-tag-purple-text);
+  --color-notion-purple-bg: var(--notion-tag-purple-bg);
+  --color-notion-gray: var(--notion-tag-gray-text);
+  --color-notion-gray-bg: var(--notion-tag-gray-bg);
+
+  --color-success: var(--color-notion-green);
+  --color-success-bg: var(--color-notion-green-bg);
+  --color-warning: var(--color-notion-yellow);
+  --color-warning-bg: var(--color-notion-yellow-bg);
+  --color-danger: var(--color-notion-red);
+  --color-danger-bg: var(--color-notion-red-bg);
+  --color-info: var(--color-brand-primary);
+  --color-info-bg: var(--color-notion-blue-bg);
+
+  /* ── 4. Notion 8-Point Base Spacing Scale ── */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ── 5. Sober-Editorial Geometry (notion-design.md § 4.2) ── */
+  --radius-xs: 2px;                                              /* Notion checkboxes and tiny badges */
+  --radius-sm: 4px;                                              /* Notion buttons, inputs, tags, dropdown items */
+  --radius-tag: 9999px;                                          /* Status indicator pills */
+  --radius-md: 6px;                                              /* Dropdown menus, popovers, select boxes */
+  --radius-lg: 8px;                                              /* Modals, panels, prominent cards */
+  --radius-modal: 8px;
+  --radius-xl: 8px;
+  --radius-full: 9999px;                                         /* Status indicator pills, avatars, count badges */
+
+  /* ── 6. Soft Diffused Ambient Elevation (notion-design.md § 4.3) ── */
+  --shadow-xs: 0 1px 2px rgba(15, 15, 15, 0.04);
+  --shadow-sm: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px, rgba(15, 15, 15, 0.06) 0px 1px 3px;
+  --shadow-md: rgba(15, 15, 15, 0.06) 0px 0px 0px 1px, rgba(15, 15, 15, 0.08) 0px 3px 6px;
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  --shadow-modal: 0 12px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  --shadow-popover: 0px 8px 16px -4px rgba(15, 15, 15, 0.08), 0px 0px 0px 1px rgba(15, 15, 15, 0.05);
+  --shadow-notion-low: 0 1px 3px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-notion-menu: 0px 8px 16px -4px rgba(15, 15, 15, 0.08), 0px 0px 0px 1px rgba(15, 15, 15, 0.05);
+  --shadow-notion-modal: 0 12px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  --shadow-ring: inset 0 0 0 1px var(--color-brand-primary);
+  --color-modal-backdrop: rgba(15, 15, 15, 0.6);                 /* Notion dark translucent overlay */
+
+  /* ── 7. Page Widths & Content Density ── */
+  --page-max-width: 900px;                                       /* Optimal line-reading length */
+  --row-height: 34px;                                            /* Uniform 32px-36px table density */
+  --cell-padding-x: 8px;
+  --cell-padding-y: 6px;
+
+  /* ── Notion Mechanical & Snappy Transitions ── */
+  --transition-hover: 30ms ease-in;
+  --transition-popover: 100ms ease-out;
+
+  /* ── Antigravity Spring Physics Engine (theme_engine.md Section 1.2: CSS linear() solvers) ── */
+  --spring-default: linear(
+    0, 0.004, 0.016 1.8%, 0.063 3.8%, 0.323 10.2%, 0.536 14.5%, 0.709 18.9%,
+    0.841 23.5%, 0.932 28.5%, 0.985 34.2%, 1.011 40.5%, 1.018 46.2%, 1.012 53.1%,
+    1.002 62.4%, 1
+  );
+  --spring-snappy: linear(
+    0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 16.7%, 1.017 20.2%,
+    1.042 22.5%, 1.045 25.4%, 1.026 29.1%, 1.004 33.7%, 0.996 38.6%, 1 45.4%
+  );
+  --spring-bounce: linear(
+    0, 0.006, 0.025 2.8%, 0.101 5.9%, 0.518 17.2%, 0.767 22.6%, 0.941 28.3%,
+    1.037 34.2%, 1.074 38.9%, 1.071 44.8%, 1.033 52.8%, 0.994 62.8%, 0.988 71.3%,
+    1.001 83.2%, 1
+  );
+  --spring-fluid: var(--spring-default);
+
+  --transition-press: 40ms ease-out;
+  --transition-fast: 60ms ease;
+  --transition-base: 100ms ease;
+  --transition-slow: 160ms ease;
+  --transition-spring: 120ms ease-out;
+  --transition-spring-snappy: 100ms ease-out;
+  --transition-spring-bounce: 160ms ease-out;
+
+  /* ── Translucent Material & Depth Tokens (Apple Glassmorphism) ── */
+  --material-nav-bg: rgba(247, 246, 243, 0.82);
+  --material-modal-bg: rgba(255, 255, 255, 0.92);
+  --material-glass-bg: rgba(255, 255, 255, 0.72);
+  --material-blur: blur(20px) saturate(180%);
+  --material-blur-modal: blur(16px) saturate(160%);
+  --material-border: rgba(55, 53, 47, 0.08);
+  --material-border-top: rgba(255, 255, 255, 0.6);
+
+  /* ── Safe Area Insets (PWA / Mobile / Notches & Dynamic Island) ── */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --touch-target-min: 44px;
+
+  /* ── Z-Index Scale ── */
+  --z-base: 0;
+  --z-sticky: 100;
+  --z-dropdown: 200;
+  --z-fixed-nav: 500;
+  --z-overlay: 500;
+  --z-modal-backdrop: 1000;
+  --z-modal: 1001;
+  --z-modal-nested: 1100;
+  --z-popover: 1200;
+  --z-toast: 2000;
+  --z-tooltip: 2100;
+  --z-encoder: 2500;
+  --z-modal-encoder: 2500;
+  --z-context-menu: 2900;
+  --z-system: 3000;
+  --z-modal-system: 3000;
+  --z-print-toolbar: 3500;
+  --z-critical: 10000;
+
+  /* ── Layout & Density ── */
+  --nav-height: 42px;
+  --topbar-height: 40px;
+  --sidebar-width: 240px;
+
+  --row-height: 34px;
+  --cell-padding-x: 8px;
+  --cell-padding-y: 6px;
+
+  --focus-ring: inset 0 0 0 1px var(--color-brand-primary);
+
+  color-scheme: light;
+}
+} /* end @layer tokens */
+
+/* ============================================================
+   SECTION 2: Complete 4-Theme Specifications (@layer themes)
+   ============================================================ */
+
+@layer themes {
+
+  /* ────────────────────────────────────────────────────────────
+     Theme 1: Notion System (Canonical Design System - DESIGN.md)
+     Warm paper-soft canvas, near-black Inter type, Notion Purple (#5645d4)
+     ──────────────────────────────────────────────────────────── */
+  :root,
+  [data-ag-theme="notion"],
+  [data-theme-style="notion"],
+  [data-ag-theme="notion"][data-ag-mode="light"] {
+    --ag-bg-canvas: #ffffff;
+    --ag-bg-surface: #f6f5f4;
+    --ag-bg-surface-soft: #fafaf9;
+    --ag-bg-elevated: #ffffff;
+    --ag-bg-sidebar: #f6f5f4;
+    --ag-bg-glass: rgba(255, 255, 255, 0.88);
+    --ag-bg-hover: rgba(55, 53, 47, 0.06);
+    --ag-bg-active: rgba(55, 53, 47, 0.12);
+    --ag-bg-selected: rgba(86, 69, 212, 0.12);
+
+    --ag-text-primary: #1a1a1a;
+    --ag-text-secondary: #37352f;
+    --ag-text-muted: #787671;
+    --ag-text-faint: #bbb8b1;
+    --ag-text-on-accent: #ffffff;
+
+    --ag-accent-primary: #5645d4;
+    --ag-accent-hover: #4534b3;
+    --ag-accent-deep: #3a2a99;
+    --ag-accent-secondary: #213183;
+    --ag-link-blue: #0075de;
+    --ag-link-hover: #005bab;
+    --ag-status-success: #1aae39;
+    --ag-status-warning: #dd5b00;
+    --ag-status-danger: #e03131;
+    --ag-status-info: #0075de;
+
+    --ag-border-subtle: #e5e3df;
+    --ag-border-strong: #c8c4be;
+    --ag-border-focus: #5645d4;
+    --ag-rim-specular-top: transparent;
+    --ag-rim-outer-edge: #e5e3df;
+
+    --ag-radius-xs: 4px;
+    --ag-radius-sm: 6px;
+    --ag-radius-md: 8px;
+    --ag-radius-lg: 12px;
+    --ag-radius-xl: 16px;
+    --ag-radius-pill: 9999px;
+
+    --ag-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --ag-font-display: var(--ag-font-sans);
+    --ag-tracking-display: -0.035em;
+    --ag-tracking-heading: -0.022em;
+    --ag-tracking-body: -0.003em;
+
+    --ag-shadow-card: rgba(15, 15, 15, 0.04) 0px 0px 0px 1px, rgba(15, 15, 15, 0.03) 0px 3px 6px, rgba(15, 15, 15, 0.05) 0px 9px 24px;
+    --ag-shadow-popover: 0px 8px 16px -4px rgba(15, 15, 15, 0.08), 0px 0px 0px 1px rgba(15, 15, 15, 0.05);
+    --ag-shadow-modal: 0 12px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
+
+    --ag-control-height-sm: 28px;
+    --ag-control-height-md: 36px;
+    --ag-control-height-lg: 44px;
+    --ag-sidebar-width: 240px;
+    --ag-toolbar-height: 45px;
+  }
+
+  [data-ag-theme="notion"][data-ag-mode="dark"],
+  [data-ag-theme="notion"][data-theme="dark"],
+  [data-theme-style="notion"][data-theme="dark"],
+  [data-theme="dark"] {
+    --ag-bg-canvas: #191919;
+    --ag-bg-surface: #202020;
+    --ag-bg-surface-soft: #252525;
+    --ag-bg-elevated: #252525;
+    --ag-bg-sidebar: #202020;
+    --ag-bg-glass: rgba(32, 32, 32, 0.88);
+    --ag-bg-hover: rgba(255, 255, 255, 0.055);
+    --ag-bg-active: rgba(255, 255, 255, 0.09);
+    --ag-bg-selected: rgba(123, 63, 242, 0.18);
+
+    --ag-text-primary: rgba(255, 255, 255, 0.90);
+    --ag-text-secondary: rgba(255, 255, 255, 0.60);
+    --ag-text-muted: rgba(255, 255, 255, 0.38);
+    --ag-text-faint: rgba(255, 255, 255, 0.22);
+
+    --ag-accent-primary: #7b3ff2;
+    --ag-accent-hover: #905cf5;
+    --ag-accent-deep: #5645d4;
+    --ag-link-blue: #4da3f0;
+    --ag-link-hover: #72b7f5;
+    --ag-border-subtle: rgba(255, 255, 255, 0.09);
+    --ag-border-strong: rgba(255, 255, 255, 0.16);
+    --ag-shadow-card: rgba(0, 0, 0, 0.4) 0px 0px 0px 1px, rgba(0, 0, 0, 0.25) 0px 4px 12px;
+  }
+
+} /* end @layer themes */
+
+@layer overrides {
+
+/* ── Prevent FOUC & Initial Load Transition Flashes ── */
+body.preload,
+body.preload * {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* ── Smooth Theme Switches ── */
+body, .top-nav, .table-card, .modal-content, .nav-btn, .btn, input, select, textarea {
+  transition: background-color var(--transition-base), border-color var(--transition-base),
+    color var(--transition-base), box-shadow var(--transition-base);
+}
+
+/* ── Apple Accessibility: Respectful Reduced Motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+  .view, .modal-content, .drawer, #zone-details-drawer, .health-drawer, .btn, .nav-btn {
+    transition: opacity 150ms ease, background-color 150ms ease, border-color 150ms ease !important;
+    transform: none !important;
+  }
+}
+
+/* ── Apple Accessibility: Reduced Transparency ── */
+@media (prefers-reduced-transparency: reduce) {
+  .top-nav, .modal-overlay, .modal-content, .zone-drawer-backdrop, .health-drawer-backdrop,
+  .glass-panel, .liquid-glass, .liquid-glass-card, .liquid-glass-pill {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: var(--color-bg) !important;
+  }
+}
+
+/* ── Apple Accessibility: High Contrast ── */
+@media (prefers-contrast: more) {
+  .top-nav, .modal-content, .drawer, #zone-details-drawer, .health-drawer,
+  .btn, .nav-btn, .table-card, .segmented-pill-group {
+    border-width: 2px !important;
+    border-color: currentColor !important;
+  }
+}
+} /* end @layer overrides */
+
+
+
