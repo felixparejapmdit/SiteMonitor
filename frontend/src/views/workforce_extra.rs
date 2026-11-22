@@ -63,6 +63,83 @@ pub fn tier(w: &Worker) -> &'static str {
     }
 }
 
+/// Absences per A# in [from, to] from the attendance log, keeping only more than 2 (Service 5's rule).
+fn frequent_absentees(log: &[Value], from: &str, to: &str) -> BTreeMap<String, usize> {
+    let mut n: BTreeMap<String, usize> = BTreeMap::new();
+    for e in log.iter().filter(|e| s(e, "newStatus") == "Absent") {
+        let d = s(e, "date");
+        if d.as_str() >= from && d.as_str() <= to {
+            *n.entry(s(e, "aNumber")).or_default() += 1;
+        }
+    }
+    n.retain(|_, c| *c > 2);
+    n
+}
+
+/// Service 5's "Frequent Absentees This Week": more than 2 absences this week
+/// (Monday to Sunday), by visitation group, with its leaders and contacts.
+#[component]
+fn FrequentAbsentees() -> Element {
+    let workers = use_workers();
+    let log = use_records("attendance_log");
+    let mut contacts = use_signal(|| false);
+    let mut leaders = use_signal(|| false);
+    let today = Local::now().date_naive();
+    let monday = today - Duration::days(today.weekday().num_days_from_monday() as i64);
+    let sunday = monday + Duration::days(6);
+    let counts = frequent_absentees(&log.read().clone().unwrap_or_default(), &monday.format("%Y-%m-%d").to_string(), &sunday.format("%Y-%m-%d").to_string());
+    let people = active(&workers);
+    let mut groups: BTreeMap<String, Vec<(Worker, usize)>> = BTreeMap::new();
+    for w in people.iter() {
+        if let Some(c) = counts.get(&w.a_number) {
+            groups.entry(if w.visit_group.is_empty() { "No visitation group".into() } else { w.visit_group.clone() }).or_default().push((w.clone(), *c));
+        }
+    }
+    let total: usize = groups.values().map(Vec::len).sum();
+    let officer = |g: &str, role: &str| people.iter().find(|w| w.visit_group == g && w.visit_role.eq_ignore_ascii_case(role)).cloned();
+    rsx! {
+        section { class: "card p-4 space-y-3", "data-testid": "wf-absentees",
+            div { class: "flex flex-wrap items-center gap-2",
+                p { class: "font-semibold", span { class: "text-tag-red-text mr-1", "⚠" } "Frequent Absentees This Week" }
+                span { class: "pill bg-tag-red-text text-white text-[11px]", "data-testid": "wf-absentees-count", {format!("{} (> 2 Absences)", util::plural(total, "Volunteer"))} }
+            }
+            div { class: "flex flex-wrap items-center gap-2",
+                button { class: if contacts() { "btn-primary h-8 text-xs" } else { "btn-secondary h-8 text-xs" }, "data-testid": "wf-absentees-contacts", onclick: move |_| contacts.toggle(), "📞 Show Contacts" }
+                button { class: if leaders() { "btn-primary h-8 text-xs" } else { "btn-secondary h-8 text-xs" }, "data-testid": "wf-absentees-leaders", onclick: move |_| leaders.toggle(), "👥 Show Leaders" }
+                span { class: "text-xs font-semibold uppercase tracking-wide text-muted", {format!("Week: {} to {}", monday.format("%b %-d"), sunday.format("%b %-d"))} }
+            }
+            if total == 0 { p { class: "text-sm text-muted", "Nobody has more than 2 absences this week." } }
+            for (g, list) in groups {
+                div { key: "{g}", class: "rounded-md border border-line p-3 space-y-2", "data-testid": "wf-absentees-group",
+                    p { class: "flex justify-between text-sm font-semibold", span { "{g}" } span { class: "text-xs text-muted font-normal", {util::plural(list.len(), "volunteer")} } }
+                    if leaders() {
+                        div { class: "text-xs text-muted space-y-0.5", "data-testid": "wf-absentees-leadership",
+                            for (label, role) in [("Leader", "Katiwala"), ("Asst Leader", "II Katiwala"), ("Secretary", "Kalihim")] {
+                                p { key: "{role}",
+                                    span { class: "font-semibold", "{label}: " }
+                                    {officer(&g, role).map(|w| format!("{} {}", w.name, w.phone)).unwrap_or_else(|| "Not assigned".into())}
+                                }
+                            }
+                        }
+                    }
+                    for (w, c) in list {
+                        div { key: "{w.id}", class: "flex items-center gap-2 text-sm",
+                            crate::views::workforce_ops::WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo, size: 26 }
+                            div { class: "flex-1 min-w-0",
+                                p { class: "font-medium truncate", "{w.name}" }
+                                if contacts() && !w.phone.is_empty() { p { class: "text-xs text-muted", "{w.phone}" } }
+                            }
+                            span { class: "text-xs text-muted", "{w.trade}" }
+                            span { class: "pill bg-tag-red-bg text-tag-red-text text-[11px]", "{c} Absences" }
+                            span { class: "pill bg-hover text-[11px]", {w.status.label()} }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 pub fn DashboardMore() -> Element {
     let app = use_app();
@@ -76,17 +153,28 @@ pub fn DashboardMore() -> Element {
     let people = active(&workers);
     let map = by_a_number(&people);
     let area_name: HashMap<String, String> = areas.read().clone().unwrap_or_default().iter().map(|a| (s(a, "id"), s(a, "name"))).collect();
-    let tonight: Vec<(String, String)> = schedules
+    // Service 5's "Tonight's Duty Roster": any night (← Today →), grouped by area.
+    let mut night = use_signal(|| 0i64);
+    let mut stale_open = use_signal(|| true);
+    let duty_day = Local::now().date_naive() + Duration::days(night());
+    let duty_label = match night() {
+        0 => format!("Tonight · {}", duty_day.format("%A, %B %-d")),
+        -1 => format!("Last Night · {}", duty_day.format("%A, %B %-d")),
+        _ => duty_day.format("%A, %B %-d").to_string(),
+    };
+    let mut tonight: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for a in schedules
         .read()
         .clone()
         .unwrap_or_default()
         .iter()
-        .find(|d| s(d, "dateStr") == today())
+        .find(|d| s(d, "dateStr") == duty_day.format("%Y-%m-%d").to_string())
         .and_then(|d| d["assignments"].as_array().cloned())
         .unwrap_or_default()
-        .iter()
-        .map(|a| (area_name.get(&s(a, "areaId")).cloned().unwrap_or_default(), name_of(&map, &s(a, "aNumber"))))
-        .collect();
+    {
+        let trade = map.get(&s(&a, "aNumber")).map(|w| w.trade.clone()).unwrap_or_default();
+        tonight.entry(area_name.get(&s(&a, "areaId")).cloned().unwrap_or_else(|| "Area".into())).or_default().push((name_of(&map, &s(&a, "aNumber")), trade));
+    }
     let mut tiers: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut housing: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for w in &people {
@@ -119,29 +207,50 @@ pub fn DashboardMore() -> Element {
         }
     };
     rsx! {
-        div { class: "grid lg:grid-cols-3 gap-4",
-            section { class: "card p-4 space-y-2", "data-testid": "wf-tonight",
-                p { class: "font-semibold", "Tonight's duty" }
-                if tonight.is_empty() { p { class: "text-sm text-muted", "No duty roster for tonight yet." } }
-                for (i, (area, who)) in tonight.iter().enumerate() {
-                    p { key: "{i}", class: "text-sm flex justify-between gap-2", span { class: "text-muted truncate", "{area}" } span { "{who}" } }
+        div { class: "grid lg:grid-cols-2 gap-4",
+            FrequentAbsentees {}
+            section { class: "card p-4 space-y-3", "data-testid": "wf-tonight",
+                p { class: "font-semibold", "Tonight's Duty Roster" }
+                div { class: "flex items-center justify-between gap-2",
+                    p { class: "text-xs font-semibold uppercase tracking-wide text-muted", "data-testid": "wf-tonight-date", "{duty_label}" }
+                    div { class: "flex gap-1",
+                        button { class: "btn-secondary h-8 px-2", "aria-label": "Previous night", "data-testid": "wf-tonight-prev", onclick: move |_| night -= 1, "←" }
+                        button { class: if night() == 0 { "btn-primary h-8 px-3" } else { "btn-secondary h-8 px-3" }, "data-testid": "wf-tonight-today", onclick: move |_| night.set(0), "Today" }
+                        button { class: "btn-secondary h-8 px-2", "aria-label": "Next night", "data-testid": "wf-tonight-next", onclick: move |_| night += 1, "→" }
+                    }
+                }
+                if tonight.is_empty() { p { class: "text-sm text-muted", "No duty roster for this night." } }
+                for (area, list) in tonight.iter() {
+                    div { key: "{area}", class: "space-y-1",
+                        p { class: "flex justify-between text-xs font-semibold uppercase tracking-wide text-muted border-b border-line pb-1",
+                            span { "{area}" } span { class: "tabular", "{list.len()}" }
+                        }
+                        for (i, (who, trade)) in list.iter().enumerate() {
+                            div { key: "{i}", class: "flex items-center gap-2 text-sm",
+                                crate::components::ui::Avatar { name: who.clone(), size: 22 }
+                                span { class: "flex-1 truncate font-medium", "{who}" }
+                                span { class: "text-xs text-muted", "{trade}" }
+                            }
+                        }
+                    }
                 }
             }
-            section { class: "card p-4 space-y-2", "data-testid": "wf-deploy",
-                p { class: "font-semibold", "Deployability today" }
-                for (t, n) in tiers { p { key: "{t}", class: "text-sm flex justify-between", span { "{t}" } span { class: "tabular", "{n}" } } }
-                if clinic {
-                    p { class: "text-sm flex justify-between pt-2 border-t border-line", span { "Open health episodes" } span { class: "tabular", "data-testid": "wf-health", "{open}" } }
-                    for (d, n) in by_diagnosis { p { key: "{d}", class: "text-xs text-muted flex justify-between pl-3", span { "{d}" } span { class: "tabular", "{n}" } } }
+        }
+        // Service 5's "Stale Task Alerts": present people on the same task for 3+ days.
+        section { class: "card p-4 space-y-2", "data-testid": "wf-stale",
+            div { class: "flex flex-wrap items-center gap-2",
+                button { class: "flex items-center gap-2 font-semibold", "aria-expanded": stale_open(), "data-testid": "stale-toggle", onclick: move |_| stale_open.toggle(),
+                    span { class: "text-tag-red-text", "⚠" } "Stale Task Alerts" span { class: "text-muted", {if stale_open() { "⌄" } else { "›" }} }
                 }
+                span { class: "pill bg-tag-red-text text-white text-[11px]", "{stale.len()} Flagged" }
+                span { class: "ml-auto text-xs font-semibold uppercase tracking-wide text-muted", "3+ days on same task" }
             }
-            section { class: "card p-4 space-y-2", "data-testid": "wf-stale",
-                p { class: "font-semibold", "Same task for 3+ days" span { class: "text-muted font-normal", " · {stale.len()} flagged" } }
+            if stale_open() {
                 if !stale.is_empty() {
                     // Service 5: mark everyone flagged at once, or dismiss the whole list.
                     div { class: "flex flex-wrap gap-1",
-                        for (st, label) in [(WorkerStatus::Present, "All present"), (WorkerStatus::Absent, "All absent"), (WorkerStatus::OnPass, "All passes")] {
-                            button { key: "{label}", class: "btn-secondary h-7 px-2 text-xs", "data-testid": "stale-all-{st:?}",
+                        for (st, label, tone) in [(WorkerStatus::Present, "All Present", ""), (WorkerStatus::Absent, "All Absent", "text-tag-red-text"), (WorkerStatus::OnPass, "All Passes", "text-tag-amber-text")] {
+                            button { key: "{label}", class: "btn-secondary h-7 px-2 text-xs {tone}", "data-testid": "stale-all-{st:?}",
                                 onclick: { let list: Vec<Worker> = stale.iter().map(|x| x.0.clone()).collect(); move |_| { let list = list.clone(); async move {
                                     for w in list {
                                         if let Err(e) = api::put::<_, Worker>(&format!("/workers/{}/status", w.id), &shared::api::WorkerStatusRequest { status: st, reason: String::new() }).await { return app.error(e.message()); }
@@ -149,17 +258,28 @@ pub fn DashboardMore() -> Element {
                                     *WORKERS_CHANGED.write() += 1;
                                 } } }, "{label}" }
                         }
-                        button { class: "btn-ghost h-7 px-2 text-xs", "data-testid": "stale-dismiss-all",
-                            onclick: { let list: Vec<Worker> = stale.iter().map(|x| x.0.clone()).collect(); move |_| { let list = list.clone(); async move { for w in list { dismiss(w).await; } } } }, "Dismiss page" }
+                        button { class: "btn-secondary h-7 px-2 text-xs text-tag-blue-text", "data-testid": "stale-dismiss-all",
+                            onclick: { let list: Vec<Worker> = stale.iter().map(|x| x.0.clone()).collect(); move |_| { let list = list.clone(); async move { for w in list { dismiss(w).await; } } } }, "Dismiss Page" }
                     }
                 }
                 if stale.is_empty() { p { class: "text-sm text-muted", "Nobody is stuck on an old task." } }
                 for (w, days) in stale.iter().cloned() {
                     div { key: "{w.id}", class: "text-sm flex items-center gap-2",
+                        crate::views::workforce_ops::WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo, size: 24 }
                         span { class: "flex-1 truncate", "{w.name}" span { class: "text-muted", " · {w.task}" } }
                         span { class: "tabular text-muted", "{days} days" }
                         button { class: "btn-ghost h-7 px-2 text-xs", "aria-label": "Stop alerts for {w.name}", "data-testid": "stale-dismiss", onclick: move |_| dismiss(w.clone()), "Dismiss" }
                     }
+                }
+            }
+        }
+        div { class: "grid lg:grid-cols-2 gap-4",
+            section { class: "card p-4 space-y-2", "data-testid": "wf-deploy",
+                p { class: "font-semibold", "Deployability today" }
+                for (t, n) in tiers { p { key: "{t}", class: "text-sm flex justify-between", span { "{t}" } span { class: "tabular", "{n}" } } }
+                if clinic {
+                    p { class: "text-sm flex justify-between pt-2 border-t border-line", span { "Open health episodes" } span { class: "tabular", "data-testid": "wf-health", "{open}" } }
+                    for (d, n) in by_diagnosis { p { key: "{d}", class: "text-xs text-muted flex justify-between pl-3", span { "{d}" } span { class: "tabular", "{n}" } } }
                 }
             }
             section { class: "card p-4 space-y-2", "data-testid": "wf-housing",
@@ -957,6 +1077,18 @@ pub fn BackupPicker(on_save: EventHandler<String>) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frequent_absentees_need_more_than_two_this_week() {
+        let e = |a: &str, d: &str, st: &str| json!({ "aNumber": a, "date": d, "newStatus": st });
+        let log = vec![
+            e("1", "2026-11-16", "Absent"), e("1", "2026-11-17", "Absent"), e("1", "2026-11-18", "Absent"),
+            e("2", "2026-11-16", "Absent"), e("2", "2026-11-17", "Absent"), e("2", "2026-11-18", "Present"),
+            e("3", "2026-11-09", "Absent"), e("3", "2026-11-10", "Absent"), e("3", "2026-11-16", "Absent"), e("3", "2026-11-17", "Absent"),
+        ];
+        let n = frequent_absentees(&log, "2026-11-16", "2026-11-22");
+        assert_eq!(n.into_iter().collect::<Vec<_>>(), vec![("1".to_string(), 3)]);
+    }
 
     #[test]
     fn timeframes() {
