@@ -112,7 +112,7 @@ pub fn AttendanceGenerator() -> Element {
     let mut group_by = use_signal(|| "none".to_string());
     let mut sort_by = use_signal(|| "name".to_string());
     let mut page_break = use_signal(|| false);
-    let mut photos = use_signal(|| false);
+    let mut photos = use_signal(|| true);
     let mut q = use_signal(String::new);
     let f_pg = use_signal(String::new);
     let f_vg = use_signal(String::new);

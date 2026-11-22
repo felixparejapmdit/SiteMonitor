@@ -18,7 +18,7 @@ use crate::components::ui::{EmptyState, Icon, Modal, Spinner};
 use crate::state::use_app;
 use crate::util;
 use crate::views::personnel::REFRESH as WORKERS_CHANGED;
-use crate::views::workforce_ops::{by_a_number, choice, f, name_of, new_id, s, s5print, save_record, today, use_records, use_workers, Kind, RecordModal, S5Preview, Table};
+use crate::views::workforce_ops::{by_a_number, choice, f, name_of, new_id, s, s5print, save_record, today, use_records, use_workers, Kind, RecordModal, S5Preview, Table, WorkerPhoto};
 
 /// A small switch between views inside a tab.
 #[component]
@@ -564,7 +564,14 @@ pub fn VisitationsHub() -> Element {
                         for v in rows.iter().cloned() {
                             tr { key: "{s(&v, \"id\")}", "data-testid": "visit-row",
                                 td { class: "px-3 py-2 tabular whitespace-nowrap", {s(&v, "date")} }
-                                td { class: "px-3 py-2", {who(&v)} }
+                                td { class: "px-3 py-2",
+                                    span { class: "inline-flex items-center gap-2",
+                                        if let Some(w) = map.get(&s(&v, "aNumber")).or_else(|| map.values().find(|w| w.name == s(&v, "workerName"))) {
+                                            WorkerPhoto { id: w.id, name: w.name.clone(), has_photo: w.has_photo }
+                                        }
+                                        {who(&v)}
+                                    }
+                                }
                                 td { class: "px-3 py-2", {housing_of(&v)} }
                                 td { class: "px-3 py-2", {s(&v, "ministerName")} }
                                 td { class: "px-3 py-2", span { class: match s(&v, "status").as_str() { "completed" => "pill bg-tag-green-bg text-tag-green-text", "scheduled" => "pill bg-tag-blue-bg text-tag-blue-text", _ => "pill bg-tag-gray-bg text-tag-gray-text" }, {s(&v, "status")} } }

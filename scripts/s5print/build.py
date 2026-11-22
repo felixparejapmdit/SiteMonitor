@@ -113,6 +113,16 @@ PATCHES = [
     # ...nor `restrictions`; show the person's own restrictions list.
     ("personnel.js", "${restrictions.length ? escapeHtml(restrictions.join(', ')) : 'None'}",
      "${(Array.isArray(worker.restrictions) && worker.restrictions.length) ? escapeHtml(worker.restrictions.join(', ')) : 'None'}"),
+    # The visit sheets are printed without Service 5's logo (asked for on 2026-11-22).
+    ("visitations.js", """                    <svg width="${logoSize}" height="${logoSize}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style="color: #1b4332;">
+                        <circle cx="50" cy="50" r="46" stroke="currentColor" stroke-width="3" fill="#f0fdf4"/>
+                        <path d="M50 18L72 58H28L50 18Z" fill="currentColor" opacity="0.15"/>
+                        <path d="M50 14L78 64H22L50 14Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+                        <path d="M50 32L68 64H32L50 32Z" fill="currentColor"/>
+                        <rect x="46" y="64" width="8" height="18" fill="currentColor"/>
+                        <path d="M15 82H85" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+                    </svg>
+""", ""),
     # Module objects are kept inside the kit instead of on window.
     ("ot_calculator.js", "window.OtCalcModule = {", "var OtCalcModule = {"),
     ("project_groups.js", "window.ProjectGroupsModule = {", "var ProjectGroupsModule = {"),
