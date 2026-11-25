@@ -1,0 +1,22 @@
+# The build uses the explicit, prepared NAS package rather than the workspace.
+*
+!Cargo.toml
+!Cargo.lock
+!Dockerfile
+!.dockerignore
+!backend/
+!backend/Cargo.toml
+!backend/src/
+!backend/src/**
+!shared/
+!shared/Cargo.toml
+!shared/src/
+!shared/src/**
+!frontend/
+!frontend/Cargo.toml
+!frontend/src/
+!frontend/src/**
+!web/
+!web/**
+!docker/
+!docker/entrypoint.sh

@@ -1,0 +1,94 @@
+name: NAS container
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - "shared/**"
+      - "frontend/**"
+      - "Cargo.*"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - ".env.nas.example"
+      - "docker/**"
+      - "deploy-to-nas*"
+      - "scripts/**"
+      - ".github/workflows/nas-container.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          targets: wasm32-unknown-unknown
+      - name: Install the pinned Dioxus CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10
+          mkdir -p "$RUNNER_TEMP/dioxus"
+          cd "$RUNNER_TEMP/dioxus"
+          curl --fail --location --retry 3 "$base/dx-x86_64-unknown-linux-gnu.tar.gz" -o dx-x86_64-unknown-linux-gnu.tar.gz
+          curl --fail --location --retry 3 "$base/dx-x86_64-unknown-linux-gnu.sha256" -o checksums
+          grep ' dx-x86_64-unknown-linux-gnu.tar.gz$' checksums | sha256sum --check
+          tar -xzf dx-x86_64-unknown-linux-gnu.tar.gz
+          install -m 755 "$(find . -type f -name dx -print -quit)" "$HOME/.cargo/bin/dx"
+      - name: Verify the backend and deployment helper
+        run: |
+          cargo test --locked -p backend --bin backend
+          python3 -m unittest discover -s scripts -p 'test_deploy_nas.py' -v
+      - name: Prepare the NAS release
+        run: python3 deploy-to-nas.py --prepare-only
+      - name: Build the Linux runtime image
+        run: docker build --tag sitemonitor:ci dist/nas
+      - name: Create isolated test credentials
+        shell: bash
+        run: |
+          umask 077
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+            echo "SITEMONITOR_ADMIN_PASSWORD=$(openssl rand -hex 20)"
+            echo "SITEMONITOR_DATA_KEY=$(openssl rand -hex 32)"
+            echo 'SITEMONITOR_IMAGE=sitemonitor:ci'
+            echo 'SITEMONITOR_BIND_IP=127.0.0.1'
+            echo 'SITEMONITOR_PORT=8737'
+            echo 'SITEMONITOR_SECURE_COOKIES=0'
+          } > "$RUNNER_TEMP/sitemonitor.env"
+      - name: Start the isolated deployment
+        run: |
+          docker compose -p sitemonitor-ci --project-directory dist/nas --env-file "$RUNNER_TEMP/sitemonitor.env" -f dist/nas/docker-compose.yml config --quiet
+          docker compose -p sitemonitor-ci --project-directory dist/nas --env-file "$RUNNER_TEMP/sitemonitor.env" -f dist/nas/docker-compose.yml up -d
+      - name: Smoke-test Rust, WebAssembly, production bootstrap, and readiness
+        run: python3 scripts/smoke-nas.py --url http://127.0.0.1:8737 --env-file "$RUNNER_TEMP/sitemonitor.env" --web-dir dist/nas/web
+      - name: Check timezone and unprivileged application process
+        run: |
+          docker compose -p sitemonitor-ci --project-directory dist/nas --env-file "$RUNNER_TEMP/sitemonitor.env" -f dist/nas/docker-compose.yml exec -T app sh -c 'test "$(date +%z)" = "+0800" && grep -q "^Uid:[[:space:]]*10001" /proc/1/status'
+      - name: Verify account persistence across container recreation
+        run: |
+          docker compose -p sitemonitor-ci --project-directory dist/nas --env-file "$RUNNER_TEMP/sitemonitor.env" -f dist/nas/docker-compose.yml up -d --force-recreate app
+          python3 scripts/smoke-nas.py --url http://127.0.0.1:8737 --env-file "$RUNNER_TEMP/sitemonitor.env" --web-dir dist/nas/web --after-restart
+      - name: Verify readiness detects database failure
+        run: |
+          docker compose -p sitemonitor-ci --project-directory dist/nas --env-file "$RUNNER_TEMP/sitemonitor.env" -f dist/nas/docker-compose.yml stop db
+          python3 scripts/smoke-nas.py --url http://127.0.0.1:8737 --expect-database-down
+      - name: Show container status on failure
+        if: failure()
+        run: docker compose -p sitemonitor-ci --project-directory dist/nas --env-file "$RUNNER_TEMP/sitemonitor.env" -f dist/nas/docker-compose.yml ps -a
+      - name: Stop the isolated deployment
+        if: always()
+        run: docker compose -p sitemonitor-ci --project-directory dist/nas --env-file "$RUNNER_TEMP/sitemonitor.env" -f dist/nas/docker-compose.yml down

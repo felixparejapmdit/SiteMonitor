@@ -29,6 +29,7 @@ Everything is Rust: an **Axum + SeaORM + PostgreSQL** backend and a **Dioxus 0.7
 15. [Automations](#automations)
 16. [Troubleshooting](#troubleshooting)
 17. [Project layout](#project-layout)
+18. [NAS deployment](#nas-deployment)
 
 ---
 
@@ -263,7 +264,7 @@ Backups and database files stay on each PC: `data/`, `*.dump`, `*.db`, `*.agwcz`
 
 ## Configuration
 
-Settings are read from environment variables or a `.env` file in the project folder (copy `.env.example`). All have working defaults.
+Settings are read from environment variables or a `.env` file in the project folder (copy `.env.example` for local development). Production mode requires an explicit database connection and administrator bootstrap password; the NAS wizard generates its private configuration separately.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
@@ -274,6 +275,8 @@ Settings are read from environment variables or a `.env` file in the project fol
 | `DATA_KEY_FILE` | `data/keys/personnel.key` | The personnel encryption key (created on first start) |
 | `SITEMONITOR_DATA_KEY` | — | The key itself (64 hex characters); used instead of the key file |
 | `SITEMONITOR_DEMO` | off | `1` lists the accounts on the sign-in page (demo mode; the tests need it) |
+| `SITEMONITOR_PRODUCTION` | off | `1` requires explicit database and administrator configuration, disables sample reset, and safely bootstraps an empty production database |
+| `SITEMONITOR_ADMIN_PASSWORD` | — | In production, the initial `marco` password (at least 16 characters); existing passwords are retained |
 | `SITEMONITOR_SECURE_COOKIES` | off | Secure cookies; turn on behind HTTPS |
 | `RUST_LOG` | `backend=info,tower_http=warn` | Log detail |
 | `SITEMONITOR_PG_BIN`, `SITEMONITOR_PG_DATA` | `%USERPROFILE%\tools\pgsql\bin`, `%USERPROFILE%\tools\sitemonitor-pgdata` | Where the Windows start script finds PostgreSQL |
@@ -409,6 +412,30 @@ backend/          Axum API, SeaORM entities + migrations, seed and sample data,
 frontend/         Dioxus PWA (Tailwind design tokens, IndexedDB offline queue, 16:9 cropper)
 e2e/              Playwright end-to-end tests
 scripts/          build.mjs (build), start-windows.ps1 (start on Windows), icon rendering, s5print/ (builds the Service 5 print kit)
+Dockerfile        Linux Rust runtime image, built from the prepared NAS package
+docker-compose.yml NAS app and PostgreSQL services with persistent storage
+deploy-to-nas.*   NAS deployment wizard and Windows/macOS/Linux launchers
 docs/merge/       how Service 5 DB was merged, page by page
+docs/DEPLOYMENT_GUIDE.md  NAS setup, updates, HTTPS and recovery
 data/             runtime data: uploads, keys, logs, backups (never committed)
+dist/             generated NAS release packages (never committed)
 ```
+
+---
+
+## NAS deployment
+
+SiteMonitor includes a deployment wizard and Docker/Compose setup for the **Synology DS423+ at `10.45.1.3`**, following `01_Rust_WC_DB`'s NAS deployment pattern. It runs as a separate `sitemonitor` project on port **8737**, with its own PostgreSQL database and persistent uploads and encryption key.
+
+From the project folder on your PC:
+
+```powershell
+python -m pip install -r scripts/requirements-nas.txt
+python deploy-to-nas.py
+```
+
+You can also double-click `deploy-to-nas.bat`, or run `bash deploy-to-nas.sh` on macOS/Linux. To prepare a package without connecting to the NAS, run `python deploy-to-nas.py --prepare-only`; the results are `dist/nas/` and `dist/sitemonitor-nas.tar.gz`.
+
+The wizard builds the WebAssembly frontend on the PC and the Linux Rust backend inside Docker on the NAS. It generates private first-deployment credentials, preserves them and the data on updates, and checks database readiness and the homepage. A fresh production database activates only the Office Admin, **`marco`**, using the generated bootstrap password; the other initial accounts are inactive.
+
+See the [NAS deployment guide](docs/DEPLOYMENT_GUIDE.md) for DSM prerequisites, manual upload, HTTPS/WebSocket setup, backups, restores and rollback. Deployment to the actual NAS must still be verified after the containers are started.

@@ -37,6 +37,31 @@ use crate::state::AppState;
 const DEFAULT_DATABASE_URL: &str = "postgres://sitemonitor:sitemonitor_dev@localhost:54329/sitemonitor";
 const DEFAULT_PORT: u16 = 8737;
 
+/// Validate production settings before connecting to or changing the database.
+fn production_admin_password<'a>(
+    production: bool,
+    demo: bool,
+    database_url: Option<&str>,
+    password: Option<&'a str>,
+    command: &str,
+) -> anyhow::Result<Option<&'a str>> {
+    if !production {
+        return Ok(None);
+    }
+    anyhow::ensure!(!demo, "SITEMONITOR_DEMO must be off in production");
+    anyhow::ensure!(command != "reset-sample", "reset-sample is unavailable in production");
+    anyhow::ensure!(database_url.is_some_and(|url| !url.trim().is_empty()), "DATABASE_URL must be set in production");
+    let password = password.ok_or_else(|| anyhow::anyhow!("SITEMONITOR_ADMIN_PASSWORD must be set in production"))?;
+    anyhow::ensure!(
+        password.trim().chars().count() >= 16 && !password.trim().eq_ignore_ascii_case(auth::DEMO_PASSWORD),
+        "SITEMONITOR_ADMIN_PASSWORD must have at least 16 characters and differ from the demo password"
+    );
+    if let Some(problem) = shared::access::password_problem(password, "marco") {
+        anyhow::bail!("SITEMONITOR_ADMIN_PASSWORD: {problem}");
+    }
+    Ok(Some(password))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
@@ -47,7 +72,18 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.into());
+    let command = std::env::args().nth(1).unwrap_or_default();
+    let production = std::env::var("SITEMONITOR_PRODUCTION").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let configured_database_url = std::env::var("DATABASE_URL").ok();
+    let configured_admin_password = std::env::var("SITEMONITOR_ADMIN_PASSWORD").ok();
+    let admin_password = production_admin_password(
+        production,
+        auth::demo_mode(),
+        configured_database_url.as_deref(),
+        configured_admin_password.as_deref(),
+        &command,
+    )?;
+    let database_url = configured_database_url.unwrap_or_else(|| DEFAULT_DATABASE_URL.into());
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
     let static_dir = PathBuf::from(std::env::var("STATIC_DIR").unwrap_or_else(|_| "target/dx/frontend/release/web/public".into()));
     let upload_dir = PathBuf::from(std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "data/uploads".into()));
@@ -57,12 +93,11 @@ async fn main() -> anyhow::Result<()> {
     opts.max_connections(20).sqlx_logging(false);
     let db = Database::connect(opts).await?;
 
-    let command = std::env::args().nth(1).unwrap_or_default();
     match command.as_str() {
         // An empty estate with just the sign-in accounts (the default state).
         "reset" => {
             Migrator::fresh(&db).await?;
-            seed::seed_empty(&db).await?;
+            seed::seed_empty(&db, admin_password).await?;
             tracing::info!("database reset: sign-in accounts and an empty estate");
             return Ok(());
         }
@@ -108,7 +143,7 @@ async fn main() -> anyhow::Result<()> {
     if sealed > 0 {
         tracing::info!(records = sealed, "encrypted personnel data stored before encryption was on");
     }
-    if seed::seed_if_empty(&db).await? {
+    if seed::seed_if_empty(&db, admin_password).await? {
         tracing::info!("seeded a fresh estate");
     }
     // Modules switched off in settings (e.g. the clinic) take their permissions with them.
@@ -152,4 +187,35 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("SiteMonitor is running at http://localhost:{port}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DATABASE: &str = "postgres://app:password@database/sitemonitor";
+    const PASSWORD: &str = "initial-admin-password-9236";
+
+    #[test]
+    fn production_requires_explicit_database_and_admin_credentials() {
+        assert!(production_admin_password(true, false, None, Some(PASSWORD), "serve").is_err());
+        assert!(production_admin_password(true, false, Some("  "), Some(PASSWORD), "serve").is_err());
+        assert!(production_admin_password(true, false, Some(DATABASE), None, "serve").is_err());
+        for password in ["", "short-password", auth::DEMO_PASSWORD, "aaaaaaaaaaaaaaaa", &"a".repeat(129)] {
+            assert!(production_admin_password(true, false, Some(DATABASE), Some(password), "serve").is_err());
+        }
+        assert_eq!(production_admin_password(true, false, Some(DATABASE), Some(PASSWORD), "serve").unwrap(), Some(PASSWORD));
+    }
+
+    #[test]
+    fn production_refuses_demo_mode_and_sample_reset() {
+        assert!(production_admin_password(true, true, Some(DATABASE), Some(PASSWORD), "serve").is_err());
+        assert!(production_admin_password(true, false, Some(DATABASE), Some(PASSWORD), "reset-sample").is_err());
+    }
+
+    #[test]
+    fn local_development_retains_demo_bootstrap() {
+        assert_eq!(production_admin_password(false, true, None, None, "reset-sample").unwrap(), None);
+        assert_eq!(production_admin_password(false, false, Some(DATABASE), Some(PASSWORD), "serve").unwrap(), None);
+    }
 }

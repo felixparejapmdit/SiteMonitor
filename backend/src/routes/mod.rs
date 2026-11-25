@@ -12,11 +12,12 @@ pub mod users;
 pub mod work_items;
 
 use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement};
 use shared::api::*;
 use shared::ws::DataScope;
 use shared::*;
@@ -32,6 +33,7 @@ pub fn api(state: AppState) -> Router<AppState> {
     // Reachable without signing in.
     let public = Router::new()
         .route("/health", get(health))
+        .route("/ready", get(ready))
         .route("/auth/options", get(crate::auth::options))
         .route("/auth/login", post(crate::auth::login))
         .route("/auth/logout", post(crate::auth::logout))
@@ -128,6 +130,14 @@ pub fn api(state: AppState) -> Router<AppState> {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true, version: env!("CARGO_PKG_VERSION").into() })
+}
+
+/// Readiness includes the database, without exposing connection errors publicly.
+async fn ready(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let query = state.db.query_one(Statement::from_string(DatabaseBackend::Postgres, "SELECT 1"));
+    let ok = matches!(tokio::time::timeout(std::time::Duration::from_secs(3), query).await, Ok(Ok(Some(_))));
+    let status = if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (status, Json(HealthResponse { ok, version: env!("CARGO_PKG_VERSION").into() }))
 }
 
 /// `GET /api/users` — everyone on the estate team (for pickers and contact cards).

@@ -1,0 +1,70 @@
+# Synology DS423+: deploy as a separate Container Manager project, sitemonitor.
+# Run from /volume1/docker/sitemonitor with the generated .env file.
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sitemonitor
+      POSTGRES_USER: sitemonitor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate the deployment .env first}
+      TZ: ${TZ:-Asia/Singapore}
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sitemonitor -d sitemonitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  app:
+    image: ${SITEMONITOR_IMAGE:-sitemonitor:local}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${SITEMONITOR_BIND_IP:-0.0.0.0}:${SITEMONITOR_PORT:-8737}:8737"
+    environment:
+      DATABASE_URL: postgres://sitemonitor:${POSTGRES_PASSWORD:?Generate the deployment .env first}@db:5432/sitemonitor
+      SITEMONITOR_PRODUCTION: "1"
+      SITEMONITOR_DEMO: "0"
+      SITEMONITOR_ADMIN_PASSWORD: ${SITEMONITOR_ADMIN_PASSWORD:?Generate an initial administrator password}
+      SITEMONITOR_DATA_KEY: ${SITEMONITOR_DATA_KEY:?Generate a permanent 64-character hexadecimal personnel key}
+      SITEMONITOR_SECURE_COOKIES: ${SITEMONITOR_SECURE_COOKIES:-0}
+      PORT: "8737"
+      STATIC_DIR: /app/public
+      UPLOAD_DIR: /app/data/uploads
+      DATA_KEY_FILE: /app/data/keys/personnel.key
+      TZ: ${TZ:-Asia/Singapore}
+      RUST_LOG: ${RUST_LOG:-backend=info,tower_http=warn,sea_orm=warn,sqlx=warn}
+    volumes:
+      - ./data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8737/api/ready"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

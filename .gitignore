@@ -49,6 +49,11 @@ keys/
 .env
 .env.*
 !.env.example
+!.env.nas.example
+
+# Prepared NAS releases and local deployment credentials
+/dist/
+/.nas-known-hosts
 # Local tooling
 .serena/
 PLAN_MERGE_SERVICE5.md

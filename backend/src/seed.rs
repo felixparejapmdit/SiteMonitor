@@ -55,11 +55,11 @@ fn poly(points: &[(f32, f32)]) -> Vec<Point2D> {
 }
 
 /// Seeds only when the database is empty. Returns `true` if data was added.
-pub async fn seed_if_empty(db: &DatabaseConnection) -> anyhow::Result<bool> {
+pub async fn seed_if_empty(db: &DatabaseConnection, admin_password: Option<&str>) -> anyhow::Result<bool> {
     if user::Entity::find().count(db).await? > 0 {
         return Ok(false);
     }
-    seed_empty(db).await?;
+    seed_empty(db, admin_password).await?;
     Ok(true)
 }
 
@@ -363,12 +363,12 @@ impl Ctx<'_> {
     }
 }
 
-/// An empty database: the sample estate plus its four demo accounts.
 /// A fresh install: the sign-in accounts and an empty estate on a blank map
-/// (sample data is one click away in Settings → Estate data).
-pub async fn seed_empty(db: &DatabaseConnection) -> anyhow::Result<()> {
+/// (sample data is one click away in Settings → Estate data). A production
+/// password enables only the office admin; other base accounts start disabled.
+pub async fn seed_empty(db: &DatabaseConnection, admin_password: Option<&str>) -> anyhow::Result<()> {
     let txn = db.begin().await?;
-    accounts(&txn).await?;
+    accounts(&txn, admin_password).await?;
     blank_map(&txn).await?;
     txn.commit().await?;
     Ok(())
@@ -377,14 +377,13 @@ pub async fn seed_empty(db: &DatabaseConnection) -> anyhow::Result<()> {
 /// The sign-in accounts plus the sample estate (`backend reset-sample`; the test suite uses it).
 pub async fn seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     let txn = db.begin().await?;
-    let [_vip, admin, monitor, monitor2] = accounts(&txn).await?;
+    let [_vip, admin, monitor, monitor2] = accounts(&txn, None).await?;
     sample_estate(db, txn, Team { admin, monitor, monitor2 }).await
 }
 
 /// The base sign-in accounts: owner, office admin and two site monitors.
-async fn accounts(txn: &DatabaseTransaction) -> anyhow::Result<[user::Model; 4]> {
-    // Demo accounts share one password (shown on the sign-in page in demo mode).
-    let demo_hash = crate::auth::hash_password(crate::auth::DEMO_PASSWORD)?;
+async fn accounts(txn: &DatabaseTransaction, admin_password: Option<&str>) -> anyhow::Result<[user::Model; 4]> {
+    let initial_hash = crate::auth::hash_password(admin_password.unwrap_or(crate::auth::DEMO_PASSWORD))?;
     let mut people = Vec::new();
     for (name, role, phone, username) in [
         ("Victoria Ashford", UserRole::VipClient, "+63 917 555 0001", "victoria"),
@@ -392,6 +391,7 @@ async fn accounts(txn: &DatabaseTransaction) -> anyhow::Result<[user::Model; 4]>
         ("Jun Dela Cruz", UserRole::SiteMonitor, "+63 917 555 0202", "jun"),
         ("Ana Santos", UserRole::SiteMonitor, "+63 917 555 0203", "ana"),
     ] {
+        let enabled = admin_password.is_none() || role == UserRole::OfficeAdmin;
         let person = user::ActiveModel {
             id: Set(Uuid::new_v4()),
             name: Set(name.into()),
@@ -399,9 +399,9 @@ async fn accounts(txn: &DatabaseTransaction) -> anyhow::Result<[user::Model; 4]>
             phone: Set(phone.into()),
             username: Set(username.into()),
             assigned_area_ids: Set(to_json(&Vec::<Uuid>::new())),
-            is_active: Set(true),
-            password_hash: Set(Some(demo_hash.clone())),
-            must_change_password: Set(false),
+            is_active: Set(enabled),
+            password_hash: Set(enabled.then(|| initial_hash.clone())),
+            must_change_password: Set(admin_password.is_some() && enabled),
             permission_overrides: Set(serde_json::json!({})),
             last_sign_in_at: Set(None),
         };
