@@ -464,6 +464,13 @@ window.S5View = {
     var sched = document.getElementById('btn-duty-schedule');
     if (sched) sched.addEventListener('click', function () { S5_duty_2.DutyModule.requestWeekGeneration(); });
     return loadWorkers().then(function () { return S5_duty_2.DutyModule.init(); }).then(function () {
+      // Scroll the list inside the bounded card; the card clips the outer sidebar's overflow.
+      var areas = document.getElementById('duty-areas-list');
+      if (areas) {
+        areas.style.flex = '1';
+        areas.style.minHeight = '0';
+        areas.style.overflowY = 'auto';
+      }
       document.body.setAttribute('data-ready', '1');
     }).catch(fail);
   },
